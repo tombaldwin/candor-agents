@@ -12,7 +12,12 @@ Because the envelope conforms, the **unmodified `candor-query` binary** from can
 grammar** gates it. Run it:
 
 ```sh
-bash run.sh        # needs ../candor-rust built (cargo build -p candor-query)
+bash run.sh        # the demo (needs ../candor-rust built: cargo build -p candor-query)
+python3 test.py    # 21 behavioral checks, incl. the unmodified-candor-query integration lane
+python3 fuzz.py    # soundness fuzzer (default 40 seeds): random fleets thread a known effect
+                   # through random delegation forms; any chain agent reported pure = red.
+                   # Teeth verified: neutering the uncurated-MCP Unknown fails exactly the
+                   # mcp_uncurated seeds; removing the CHA fallback fails 34/40.
 ```
 
 What the fixture demo shows (all real mechanics, deliberately seeded):
