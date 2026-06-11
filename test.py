@@ -138,8 +138,9 @@ rep, _ = scan({"rw.md": agent("rw", "Read, Write")})
 check("fs detail carries read+write", entry(rep, "rw").get("fs") == ["read", "write"])
 
 # ── 9. integration: the UNMODIFIED candor-query over the emitted report ──────────────────────────
-Q = os.environ.get("CANDOR_QUERY", os.path.join(HERE, "..", "candor-rust", "target", "debug", "candor-query"))
-if os.path.exists(Q):
+_fq = subprocess.run(["bash", os.path.join(HERE, "find-query.sh")], capture_output=True, text=True)
+Q = _fq.stdout.strip() if _fq.returncode == 0 else ""
+if Q and os.path.exists(Q):
     d = tempfile.mkdtemp()
     adir = os.path.join(d, ".claude", "agents")
     os.makedirs(adir)
@@ -163,7 +164,7 @@ if os.path.exists(Q):
     check("candor-query whatif: gate verdict fires through the fleet graph",
           wi.returncode == 1 and "boss" in wi.stdout, f"rc={wi.returncode} out={wi.stdout[:160]}")
 else:
-    print(f"  SKIP candor-query integration (binary not found at {Q})")
+    print("  SKIP candor-query integration (find-query.sh could not locate or build it)")
 
 # ── 10. --link: the Exec-boundary refinement (fleet inherits the linked code report) ─────────────
 d = tempfile.mkdtemp()

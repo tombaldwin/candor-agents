@@ -3,9 +3,10 @@
 # candor-query binary, evaluate the §6.2 policy (current state + pre-edit whatif).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CANDOR="${CANDOR:-$HERE/../candor-rust}"
-Q="$CANDOR/target/debug/candor-query"
-[ -x "$Q" ] || { echo "need candor-query: (cd $CANDOR && cargo build -p candor-query)"; exit 1; }
+Q="$("$HERE/find-query.sh")" || exit 1
+# The candor-rust checkout the binary came from (target/debug/candor-query → repo root) — the
+# combined-mode demo uses its sample/ crate + candor-scan, built the same stable way.
+CANDOR_DIR="$(cd "$(dirname "$Q")/../.." && pwd)"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 
 echo "== scan (fleet → spec §2 report + §2.2 sidecar)"
@@ -40,9 +41,10 @@ echo; echo "(The fixture is DELIBERATELY already in violation: the orchestrator 
 echo " the coder's unnamed delegation — exactly the finding a fleet owner needs surfaced.)"
 
 echo; echo "== COMBINED MODE: fleet + code under one prefix, linked"
-if [ -d "$CANDOR/sample" ] && [ -x "$CANDOR/target/debug/candor-scan" ]; then
+SCAN="$CANDOR_DIR/target/debug/candor-scan"
+if [ -d "$CANDOR_DIR/sample" ] && { [ -x "$SCAN" ] || cargo build -q --manifest-path "$CANDOR_DIR/Cargo.toml" -p candor-scan 2>/dev/null; }; then
   C="$W/combo"; mkdir -p "$C"
-  "$CANDOR/target/debug/candor-scan" "$CANDOR/sample" --out "$C/r" >/dev/null 2>&1
+  "$SCAN" "$CANDOR_DIR/sample" --out "$C/r" >/dev/null 2>&1
   python3 "$HERE/scan.py" "$HERE/fixture" --out "$C/r" --fleet fixture --link "$C/r" >/dev/null
   echo "-- show coder (fleet agent inheriting the CODE's measured effects):"
   "$Q" show "$C/r" coder 0
@@ -52,5 +54,5 @@ if [ -d "$CANDOR/sample" ] && [ -x "$CANDOR/target/debug/candor-scan" ]; then
   "$Q" whatif "$C/r" now_ms Exec "$HERE/fixture/policy"
   echo "   (exit $? — 1 = the orchestrator's deny Exec rule fires from a code-level edit)"
 else
-  echo "   SKIP (need candor-rust sample/ + candor-scan built)"
+  echo "   SKIP (no candor-rust checkout with sample/ available)"
 fi

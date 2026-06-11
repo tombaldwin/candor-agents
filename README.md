@@ -15,8 +15,11 @@ Because the envelope conforms, the **unmodified `candor-query` binary** from can
 grammar** gates it. Run it:
 
 ```sh
-bash run.sh        # the demo (needs ../candor-rust built: cargo build -p candor-query)
-python3 test.py    # 21 behavioral checks, incl. the unmodified-candor-query integration lane
+bash run.sh        # the demo — STANDALONE: needs only git + stable cargo. find-query.sh locates
+                   # candor-query ($CANDOR_QUERY > PATH > $CANDOR/../candor-rust checkout) or
+                   # fetches + builds it into ~/.cache/candor-agents on first run (stable — the
+                   # repo's nightly pin doesn't apply when building -p candor-query from outside).
+python3 test.py    # 25 behavioral checks, incl. the unmodified-candor-query integration lane
 python3 fuzz.py    # soundness fuzzer (default 40 seeds): random fleets thread a known effect
                    # through random delegation forms; any chain agent reported pure = red.
                    # Teeth verified: neutering the uncurated-MCP Unknown fails exactly the
