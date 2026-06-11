@@ -1,6 +1,9 @@
 # candor-agents — does candor transfer to agent fleets? (exploration)
 
-**Local exploration, 2026-06-11. Answer so far: yes, with zero changes to any candor tool.**
+<p align="center"><img src="https://raw.githubusercontent.com/tombaldwin/candor/main/assets/beaky.svg" alt="Beaky, the candor canary" width="180"></p>
+
+**An exploration, not a product** — the executable answer to "does candor's kernel transfer off
+programming languages?" **Answer so far: yes, with zero changes to any candor tool.**
 
 `scan.py` reads a Claude Code project's *static* fleet declarations — `.claude/agents/*.md`
 (YAML frontmatter: `tools:`) and `.mcp.json` — and emits a candor-spec §2 report + §2.2 callgraph
@@ -47,6 +50,6 @@ spec 0.4 would want s/function/unit/).
 
 ## What this is not (yet)
 
-Not a product, not public, not wired to hooks/cron entry points, no JVM-style runtime validation.
+Not a product: not wired to hooks/cron entry points, no runtime validation, the MCP capability table is tiny.
 The next real steps, if pursued: a `unitKind` note in candor-spec; an MCP capability-declaration
 convention (the `Unknown` killer); scanning a real fleet in the wild.

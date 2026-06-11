@@ -1,6 +1,6 @@
 # candor-agents — effect checking for agent fleets (design exploration)
 
-**Status: local exploration (2026-06-11). Not public, not a product.** The question this answers
+**Status: published exploration (2026-06-11) — not a product.** The question this answers
 executably: *does candor's kernel transfer off programming languages?* The nearest field is agent
 fleets — and the test is whether the existing spec envelope, queries, and policy grammar work on an
 agent capability graph **without modifying any candor tool**.
