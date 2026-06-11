@@ -1,0 +1,3 @@
+deny Net coder
+deny Ipc researcher
+deny Exec orchestrator

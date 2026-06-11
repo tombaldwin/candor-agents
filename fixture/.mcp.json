@@ -1,0 +1,4 @@
+{ "mcpServers": {
+    "gmail":            { "command": "npx", "args": ["@anthropic/mcp-gmail"] },
+    "internal-billing": { "command": "node", "args": ["./billing-mcp.js"] }
+} }
