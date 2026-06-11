@@ -48,7 +48,10 @@ without running anything.
 The curated MCP table is deliberately small (gmail → `Net`+`Ipc`, slack → `Net`+`Ipc`,
 atlassian/github → `Net`, filesystem → `Fs`, …): the same under-report-and-say-so posture as the
 crate classifier. Unknown-by-default is the honesty marker doing its job — today **nothing** in the
-MCP ecosystem forces a server to declare what its tools reach.
+MCP ecosystem forces a server to declare what its tools reach. The way out is
+[DECLARING.md](DECLARING.md): a `candorEffects` declaration on the server's `.mcp.json` entry
+(project-side now, server-published as the proposal) — the `classify_extra`/`CANDOR_DEPS` trust
+tier ported to fleets.
 
 ## Edges (delegation)
 

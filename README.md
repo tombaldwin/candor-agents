@@ -37,6 +37,9 @@ What the fixture demo shows (all real mechanics, deliberately seeded):
 - **The honesty marker**: the un-curated `internal-billing` MCP server marks every agent that can
   reach it `unresolved` with `unknownWhy: ["mcp:internal-billing"]` — nothing in the MCP ecosystem
   declares tool capabilities today, and the report says so instead of guessing.
+  **The fix is [DECLARING.md](DECLARING.md)**: a `candorEffects` array on the server's `.mcp.json`
+  entry classifies it (declared-not-verified, `[]` = pure, a typo'd effect name voids the
+  declaration loudly) — project-side today, server-published as the ecosystem proposal.
 - **Ambient authority is visible**: the legacy `triage` agent (no `tools:` line = inherits
   everything) reads `{Clock Exec Fs Ipc Net Unknown}` — the report makes the un-confined agent the
   obvious outlier.

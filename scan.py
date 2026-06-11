@@ -95,8 +95,10 @@ def tool_list(meta):
     return [x.strip() for x in t.split(",") if x.strip()]
 
 
-def classify(tools, mcp_servers):
+def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
     """(effects, fs_kinds, unknown_why) for a concrete tool list."""
+    declared_mcp = declared_mcp or {}
+    declared_bad = declared_bad or {}
     effs, fs, why = set(), set(), set()
     for t in tools:
         if t in TOOL_EFFECTS:
@@ -107,6 +109,11 @@ def classify(tools, mcp_servers):
             server = t.split("__")[1]
             if server in MCP_TABLE:
                 effs |= MCP_TABLE[server]
+            elif server in declared_mcp:
+                effs |= declared_mcp[server]  # the project's claim — declared, not verified
+            elif server in declared_bad:
+                effs.add("Unknown")
+                why.add(f"mcp-decl-invalid:{server}:{declared_bad[server]}")
             else:
                 effs.add("Unknown")
                 why.add(f"mcp:{server}")
@@ -139,12 +146,32 @@ def main():
         if a == "--link" and i + 1 < len(args):
             link = args[i + 1]
 
-    # MCP servers configured for the project.
+    # MCP servers configured for the project — plus any DECLARED capabilities: a `candorEffects`
+    # array on a server's entry ("candorEffects": ["Net","Ipc"]) classifies that server exactly like
+    # a curated-table entry, killing its Unknown. Two-tier trust, mirroring the code engines:
+    # the curated MCP_TABLE is candor's own claim; a declaration is the PROJECT's claim (the
+    # classify_extra / CANDOR_DEPS analog) — accepted as stated, so the report is only as true as
+    # the declaration (declared, not verified). An effect name outside the vocabulary is NEVER
+    # silently accepted: the server stays Unknown with `mcp-decl-invalid:<server>:<name>` so a typo
+    # ("net") can't silently narrow the surface. `"candorEffects": []` declares a PURE server.
     mcp_servers = []
+    declared_mcp = {}  # server -> declared effect set (validated)
+    declared_bad = {}  # server -> the invalid name that voided its declaration
+    VOCAB = {"Net", "Fs", "Db", "Exec", "Env", "Clock", "Ipc", "Log", "Rand", "Clipboard"}
     mcp_path = os.path.join(root, ".mcp.json")
     if os.path.exists(mcp_path):
         try:
-            mcp_servers = sorted(json.load(open(mcp_path)).get("mcpServers", {}).keys())
+            entries = json.load(open(mcp_path)).get("mcpServers", {})
+            mcp_servers = sorted(entries.keys())
+            for name, cfg in entries.items():
+                decl = cfg.get("candorEffects") if isinstance(cfg, dict) else None
+                if decl is None:
+                    continue
+                bad = [e for e in decl if e not in VOCAB]
+                if bad:
+                    declared_bad[name] = bad[0]
+                else:
+                    declared_mcp[name] = set(decl)  # [] = declared PURE (maximally confined)
         except Exception as e:
             print(f"candor-agents: unreadable .mcp.json ({e}) — servers unknown", file=sys.stderr)
 
@@ -188,13 +215,18 @@ def main():
             for s in mcp_servers:
                 if s in MCP_TABLE:
                     effs |= MCP_TABLE[s]
+                elif s in declared_mcp:
+                    effs |= declared_mcp[s]
+                elif s in declared_bad:
+                    effs.add("Unknown")
+                    why.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
                 else:
                     effs.add("Unknown")
                     why.add(f"mcp:{s}")
             why.add("ambient:tools-unrestricted")
             effs.add("Unknown")
         else:
-            effs, fs, why = classify(tools, mcp_servers)
+            effs, fs, why = classify(tools, mcp_servers, declared_mcp, declared_bad)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
         unresolved_direct[name] = "Unknown" in effs
     ROOT = "session"
@@ -202,6 +234,11 @@ def main():
     for s in mcp_servers:
         if s in MCP_TABLE:
             me |= MCP_TABLE[s]
+        elif s in declared_mcp:
+            me |= declared_mcp[s]
+        elif s in declared_bad:
+            me.add("Unknown")
+            mw.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
         else:
             me.add("Unknown")
             mw.add(f"mcp:{s}")

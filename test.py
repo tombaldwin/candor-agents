@@ -109,6 +109,39 @@ ex = entry(rep, "x")
 check("unknown tool name → Unknown (never silent-pure)",
       ex and ex["unresolved"] and ex.get("unknownWhy") == ["tool:FrobnicateDisk"], f"got {ex}")
 
+# ── 4b. declared MCP capabilities (the Unknown killer) ───────────────────────────────────────────
+def scan_decl(files, mcp_entries):
+    d = tempfile.mkdtemp()
+    adir = os.path.join(d, ".claude", "agents")
+    os.makedirs(adir)
+    for fname, content in files.items():
+        open(os.path.join(adir, fname), "w").write(content)
+    json.dump({"mcpServers": mcp_entries}, open(os.path.join(d, ".mcp.json"), "w"))
+    out = os.path.join(d, "r")
+    r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return (json.load(open(f"{out}.t.Fleet.json")), json.load(open(f"{out}.t.Fleet.callgraph.json")))
+
+rep, _ = scan_decl(
+    {"biller.md": agent("biller", "mcp__billing__charge, Read"),
+     "shadow.md": agent("shadow", "mcp__shadow__op"),
+     "typo.md": agent("typo", "mcp__typoed__op")},
+    {"billing": {"command": "x", "candorEffects": ["Net", "Db"]},
+     "shadow": {"command": "x"},
+     "typoed": {"command": "x", "candorEffects": ["net"]}})
+eb = entry(rep, "biller")
+check("declared MCP classifies (candorEffects kills the Unknown)",
+      eb["inferred"] == ["Db", "Fs", "Net"] and not eb["unresolved"], f"got {eb}")
+check("undeclared server still Unknown", entry(rep, "shadow")["unresolved"])
+et = entry(rep, "typo")
+check("invalid effect name in a declaration NEVER silently accepted",
+      et["unresolved"] and et.get("unknownWhy") == ["mcp-decl-invalid:typoed:net"], f"got {et}")
+rep, _ = scan_decl({"p.md": agent("p", "mcp__quiet__op")},
+                   {"quiet": {"command": "x", "candorEffects": []}})
+check("candorEffects: [] declares a PURE server (agent omitted from report)",
+      entry(rep, "p") is None)
+
 # ── 5. transitive propagation through a named chain ───────────────────────────────────────────────
 rep, cg = scan({
     "a.md": agent("a", "Agent", body="Use `b`."),
