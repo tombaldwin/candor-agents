@@ -35,6 +35,12 @@ What the fixture demo shows (all real mechanics, deliberately seeded):
   everything) reads `{Clock Exec Fs Ipc Net Unknown}` — the report makes the un-confined agent the
   obvious outlier.
 
+**Combined mode** (validated): write the fleet report and a code engine's report under ONE
+prefix and candor-query treats them as one world — `where Fs` lists agents beside Rust functions.
+`--link <code-report-prefix>` goes further: Bash-holding agents edge to the code's entry points
+and inherit their *measured* effects, so `callers <code-fn>` climbs into the fleet and a
+`whatif` on a code function returns fleet-level policy verdicts (exit 1 across the boundary).
+
 See [DESIGN.md](DESIGN.md) for the full mapping, the tool table, and the honest non-transfers
 (the Bash capability cliff; grants are may-use upper bounds; dynamic tool surfacing → `Unknown`;
 spec 0.4 would want s/function/unit/).

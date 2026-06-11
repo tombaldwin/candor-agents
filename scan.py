@@ -134,6 +134,10 @@ def main():
         if a == "--fleet" and i + 1 < len(args):
             fleet = args[i + 1]
     nested = "--nested-spawn" in args
+    link = None
+    for i, a in enumerate(args):
+        if a == "--link" and i + 1 < len(args):
+            link = args[i + 1]
 
     # MCP servers configured for the project.
     mcp_servers = []
@@ -169,9 +173,10 @@ def main():
             mentioned = [n for n in names if n != name and re.search(rf"(?:^|[`'\"\s]){re.escape(n)}[`'\"\s.,]", a["body"] + " " + a["desc"] + " ")]
             edges = mentioned if mentioned else [n for n in names if n != name]  # CHA fallback
         calls[name] = sorted(edges)
-    # The main session: an entry point holding every tool + every configured MCP server, able to
-    # spawn every agent.
-    calls["main"] = names
+    # The session root: an entry point holding every tool + every configured MCP server, able to
+    # spawn every agent. Named `session` (not `main`): in combined mode (fleet + code reports under
+    # ONE prefix) the crate's `fn main` would collide with it.
+    calls["session"] = names
 
     # ── per-agent direct effects ──────────────────────────────────────────────────────────────
     direct, fs_detail, why_map, unresolved_direct = {}, {}, {}, {}
@@ -192,6 +197,7 @@ def main():
             effs, fs, why = classify(tools, mcp_servers)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
         unresolved_direct[name] = "Unknown" in effs
+    ROOT = "session"
     me, mf, mw = classify(AMBIENT, mcp_servers)
     for s in mcp_servers:
         if s in MCP_TABLE:
@@ -199,11 +205,39 @@ def main():
         else:
             me.add("Unknown")
             mw.add(f"mcp:{s}")
-    direct["main"], fs_detail["main"], why_map["main"] = me, mf, mw
-    unresolved_direct["main"] = "Unknown" in me
+    direct[ROOT], fs_detail[ROOT], why_map[ROOT] = me, mf, mw
+    unresolved_direct[ROOT] = "Unknown" in me
+
+    # ── --link: the Exec-boundary refinement ─────────────────────────────────────────────────
+    # Edge every Bash-holding (or ambient) agent to each entryPoint of the linked CODE report, and
+    # seed the entry as a pseudo-node carrying its recorded transitive effects. The pseudo-node is
+    # NOT re-emitted (it lives in the code report); under a merged prefix the cross edge makes
+    # callers/whatif walk from a code function up into the FLEET.
+    linked = {}  # entry fn -> its inferred effects (from the code report)
+    if link:
+        import glob as _glob
+        for rp in sorted(_glob.glob(f"{link}.*.json")):
+            if rp.endswith(".callgraph.json") or ".encountered-" in rp or rp.endswith(".calibrated.json"):
+                continue
+            try:
+                cr = json.load(open(rp))
+            except Exception:
+                continue
+            for f in cr.get("functions", []):
+                if f.get("entryPoint"):
+                    linked[f["fn"]] = set(f.get("inferred", []))
+        if not linked:
+            print(f"candor-agents: --link {link}: no entryPoint functions found — nothing linked", file=sys.stderr)
+        for name, a in agents.items():
+            runs_code = a["tools"] is None or "Bash" in a["tools"]
+            if runs_code:
+                calls[name] = sorted(set(calls[name]) | set(linked))
+        calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
 
     # ── transitive fixpoint (spec §5a) ────────────────────────────────────────────────────────
     inferred = {n: set(direct[n]) for n in calls}
+    for fn_, effs_ in linked.items():
+        inferred.setdefault(fn_, set(effs_))
     changed = True
     while changed:
         changed = False
@@ -227,6 +261,8 @@ def main():
     # ── emit the spec §2 envelope + §2.2 sidecar ─────────────────────────────────────────────
     functions = []
     for n in sorted(calls):
+        if n in linked and n not in agents:
+            continue  # pseudo-node: lives in the linked code report
         effs = inferred[n]
         if not effs:
             continue  # pure units are omitted from the report (present in the sidecar)
@@ -243,7 +279,7 @@ def main():
             entry["fs"] = sorted(fs_tr[n])
         if why_map.get(n):
             entry["unknownWhy"] = sorted(why_map[n])
-        if n == "main":
+        if n == "session":
             entry["entryPoint"] = True
         functions.append(entry)
 

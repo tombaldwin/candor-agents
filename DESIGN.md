@@ -103,6 +103,34 @@ candor-query answers in ~25ms over the result. Three findings:
 3. **The Unknown contract fired on real data**: an uncurated MCP server (`mcp:meigen`) and two
    unrecognized tools (`TeamCreate`/`TeamDelete`) correctly mark their holders unresolved.
 
+## Combined mode: fleet + code in ONE world (validated)
+
+Both engines write the same envelope, and candor-query merges every report/sidecar under one
+prefix (the normal multi-crate case) — so a project that has BOTH agent definitions AND code gets
+one queryable world with no new machinery:
+
+```sh
+candor-scan .                --out .candor/report          # the code
+scan.py .  --fleet myfleet   --out .candor/report \
+           --link .candor/report                           # the fleet, LINKED to the code
+```
+
+`--link` is the Exec-boundary refinement, and it is exactly the cross-crate inheritance move
+(CANDOR_DEPS on the JVM): an agent holding `Bash` can run the project's own binaries, and the code
+report already KNOWS what those binaries do — so the agent edges to each code `entryPoint` and
+inherits its recorded transitive effects. Verified end to end with the unmodified candor-query:
+
+- `show coder` → the fleet agent carries `Clock Env` it could only have inherited from the crate's
+  `main` (the code's *measured* effects, not the Bash cliff's "anything").
+- `callers now_ms` → a CODE function's blast radius climbs through `main` into the FLEET
+  (coder, orchestrator, triage, session).
+- `whatif now_ms Exec` → exit 1: a code-level edit flags the ORCHESTRATOR's `deny Exec` rule —
+  the gate verdict crosses the code/fleet boundary.
+
+One naming rule fell out: the fleet's session root is named `session` (not `main`) so it can't
+collide with a crate's `fn main` under a merged prefix. The general lesson for spec 0.4: combined
+mode needs unit names to be namespace-disjoint across engines (a `unitKind` field is the fix).
+
 ## Verdict criteria
 
 This exploration succeeds if the demo in `run.sh` produces correct, useful answers (the gate

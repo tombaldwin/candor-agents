@@ -129,9 +129,9 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 # ── 7. envelope + main ────────────────────────────────────────────────────────────────────────────
 rep, cg = scan({"a.md": agent("a", "Read")})
 check("spec envelope (candor.spec = 0.3)", rep["candor"]["spec"] == "0.3")
-m = entry(rep, "main")
-check("main is the entry point and edges to every agent",
-      m and m.get("entryPoint") is True and cg["main"] == ["a"])
+m = entry(rep, "session")
+check("the session root is the entry point and edges to every agent",
+      m and m.get("entryPoint") is True and cg["session"] == ["a"])
 
 # ── 8. fs detail aggregates read/write ────────────────────────────────────────────────────────────
 rep, _ = scan({"rw.md": agent("rw", "Read, Write")})
@@ -155,8 +155,8 @@ if os.path.exists(Q):
     c = subprocess.run([Q, "callers", pre, "leaf", "1"], capture_output=True, text=True)
     j = json.loads(c.stdout)
     trans = j.get("transitive", j)
-    check("candor-query callers: boss+main reach leaf",
-          "boss" in str(trans) and "main" in str(trans), f"got {c.stdout[:120]}")
+    check("candor-query callers: boss+session reach leaf",
+          "boss" in str(trans) and "session" in str(trans), f"got {c.stdout[:120]}")
     pol = os.path.join(d, "policy")
     open(pol, "w").write("deny Ipc boss\n")
     wi = subprocess.run([Q, "whatif", pre, "leaf", "Ipc", pol], capture_output=True, text=True)
@@ -164,6 +164,29 @@ if os.path.exists(Q):
           wi.returncode == 1 and "boss" in wi.stdout, f"rc={wi.returncode} out={wi.stdout[:160]}")
 else:
     print(f"  SKIP candor-query integration (binary not found at {Q})")
+
+# ── 10. --link: the Exec-boundary refinement (fleet inherits the linked code report) ─────────────
+d = tempfile.mkdtemp()
+adir = os.path.join(d, ".claude", "agents")
+os.makedirs(adir)
+open(os.path.join(adir, "runner.md"), "w").write(agent("runner", "Bash"))
+open(os.path.join(adir, "watcher.md"), "w").write(agent("watcher", "WebSearch"))
+code = {"candor": {"version": "x", "spec": "0.3"},
+        "functions": [{"fn": "main", "loc": "src/main.rs", "inferred": ["Db", "Exec"],
+                       "direct": ["Db"], "declared": [], "undeclared": [], "overdeclared": [],
+                       "unresolved": False, "calls": [], "entryPoint": True}]}
+json.dump(code, open(os.path.join(d, "c.app.scan.json"), "w"))
+json.dump({"main": []}, open(os.path.join(d, "c.app.scan.callgraph.json"), "w"))
+out = os.path.join(d, "r")
+r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t",
+                    "--link", os.path.join(d, "c")], capture_output=True, text=True)
+rep = json.load(open(f"{out}.t.Fleet.json"))
+cg = json.load(open(f"{out}.t.Fleet.callgraph.json"))
+er = entry(rep, "runner")
+check("--link: Bash agent edges to the code entryPoint", "main" in cg["runner"], f"got {cg['runner']}")
+check("--link: Bash agent inherits the code's recorded effects", "Db" in er["inferred"], f"got {er['inferred']}")
+check("--link: non-Bash agent does NOT inherit", "Db" not in entry(rep, "watcher")["inferred"])
+check("--link: pseudo-node not re-emitted as a fleet row", entry(rep, "main") is None)
 
 print()
 print(f"test: {PASS} passed, {FAIL} failed")

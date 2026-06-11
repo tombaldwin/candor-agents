@@ -79,7 +79,7 @@ def run_seed(seed):
 
     bad = []
     # SOUNDNESS: every chain agent (and main) reaches the sink → effect-or-Unknown, never pure/omitted.
-    for name in names + ["sink", "main"]:
+    for name in names + ["sink", "session"]:
         e = by.get(name)
         if e is None:
             bad.append(f"seed {seed}: {name} OMITTED (silent pure; sink={sink_kind}, form={forms.get(name)})")

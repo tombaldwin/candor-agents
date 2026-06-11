@@ -38,3 +38,19 @@ echo; echo "-- whatif mailer Exec:"; "$Q" whatif "$W/r" mailer Exec "$HERE/fixtu
 
 echo; echo "(The fixture is DELIBERATELY already in violation: the orchestrator reaches Exec through"
 echo " the coder's unnamed delegation — exactly the finding a fleet owner needs surfaced.)"
+
+echo; echo "== COMBINED MODE: fleet + code under one prefix, linked"
+if [ -d "$CANDOR/sample" ] && [ -x "$CANDOR/target/debug/candor-scan" ]; then
+  C="$W/combo"; mkdir -p "$C"
+  "$CANDOR/target/debug/candor-scan" "$CANDOR/sample" --out "$C/r" >/dev/null 2>&1
+  python3 "$HERE/scan.py" "$HERE/fixture" --out "$C/r" --fleet fixture --link "$C/r" >/dev/null
+  echo "-- show coder (fleet agent inheriting the CODE's measured effects):"
+  "$Q" show "$C/r" coder 0
+  echo "-- callers now_ms (a CODE fn's blast radius climbs into the FLEET):"
+  "$Q" callers "$C/r" now_ms 0
+  echo "-- whatif now_ms Exec (the gate verdict crosses the boundary):"
+  "$Q" whatif "$C/r" now_ms Exec "$HERE/fixture/policy"
+  echo "   (exit $? — 1 = the orchestrator's deny Exec rule fires from a code-level edit)"
+else
+  echo "   SKIP (need candor-rust sample/ + candor-scan built)"
+fi
