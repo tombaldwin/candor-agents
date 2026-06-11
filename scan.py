@@ -48,7 +48,11 @@ MCP_TABLE = {
     "atlassian": {"Net"}, "filesystem": {"Fs"}, "postgres": {"Db"}, "sqlite": {"Db"},
 }
 # `tools:` absent => the agent inherits EVERYTHING (Claude Code's default): ambient authority.
-AMBIENT = sorted(set(TOOL_EFFECTS) | {"Agent"})
+# Agent is NOT in the ambient set: stock Claude Code subagents cannot nest-spawn — delegation
+# exists only where `Agent` is explicitly granted. Harnesses that DO allow nested spawning can
+# opt in with --nested-spawn (found on the wshobson/agents real-fleet run: with Agent ambient,
+# 182 ambient agents produced a ~20k-edge all-reaches-all smear; without, the graph is honest).
+AMBIENT = sorted(TOOL_EFFECTS)
 
 
 def parse_frontmatter(text):
@@ -83,6 +87,11 @@ def tool_list(meta):
         return None
     if isinstance(t, list):
         return [x.strip() for x in t if x.strip()]
+    # Inline YAML list: `tools: []` is EXPLICITLY no tools (maximally confined — pure), and
+    # `tools: [a, b]` is a list — not a single tool named "[a, b]". Real-fleet finding.
+    if t.startswith("[") and t.endswith("]"):
+        inner = t[1:-1].strip()
+        return [x.strip() for x in inner.split(",") if x.strip()] if inner else []
     return [x.strip() for x in t.split(",") if x.strip()]
 
 
@@ -95,7 +104,6 @@ def classify(tools, mcp_servers):
             if t in FS_KIND:
                 fs.add(FS_KIND[t])
         elif t.startswith("mcp__"):
-            server = t.split("__")[1] if "__" in t[5:] or t.count("__") >= 2 else t[5:]
             server = t.split("__")[1]
             if server in MCP_TABLE:
                 effs |= MCP_TABLE[server]
@@ -125,6 +133,7 @@ def main():
             out = args[i + 1]
         if a == "--fleet" and i + 1 < len(args):
             fleet = args[i + 1]
+    nested = "--nested-spawn" in args
 
     # MCP servers configured for the project.
     mcp_servers = []
@@ -154,10 +163,10 @@ def main():
     names = sorted(agents)
     calls = {}
     for name, a in agents.items():
-        has_agent_tool = a["tools"] is None or "Agent" in a["tools"]
+        has_agent_tool = "Agent" in (a["tools"] or []) or (nested and a["tools"] is None)
         edges = []
         if has_agent_tool:
-            mentioned = [n for n in names if n != name and re.search(rf"[`'\"\s]{re.escape(n)}[`'\"\s.,]", a["body"] + " " + a["desc"] + " ")]
+            mentioned = [n for n in names if n != name and re.search(rf"(?:^|[`'\"\s]){re.escape(n)}[`'\"\s.,]", a["body"] + " " + a["desc"] + " ")]
             edges = mentioned if mentioned else [n for n in names if n != name]  # CHA fallback
         calls[name] = sorted(edges)
     # The main session: an entry point holding every tool + every configured MCP server, able to

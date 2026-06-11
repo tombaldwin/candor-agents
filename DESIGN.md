@@ -87,6 +87,22 @@ MCP ecosystem forces a server to declare what its tools reach.
 - **The spec says "function".** The envelope carries the mapping fine, but candor-spec 0.4 would
   want s/function/unit/ language and a `unitKind` hint before any of this is real.
 
+## Real-fleet validation (wshobson/agents, 36.6k stars, 2026-06-11)
+
+Scanned the most popular Claude Code agent collection (192 agents across its plugins) — 2.4s scan,
+candor-query answers in ~25ms over the result. Three findings:
+
+1. **The ecosystem default is ambient authority**: 182/192 agents declare no `tools:` line.
+   The report makes the un-confined fleet instantly visible — this is the product insight.
+2. **Real data corrected the model twice.** (a) `tools: []` (inline-YAML empty list) means
+   *maximally confined* — pure — not a tool named `[]`. (b) The ambient set must NOT include
+   `Agent`: stock Claude Code subagents cannot nest-spawn, so delegation exists only where `Agent`
+   is explicitly granted (`--nested-spawn` opts harnesses that allow nesting back in). With the
+   correction the marketplace graph went from a 19,968-edge all-reaches-all smear to 383 honest
+   edges, and exactly one agent (`team-lead`, explicit grant, unnamed → CHA) can delegate.
+3. **The Unknown contract fired on real data**: an uncurated MCP server (`mcp:meigen`) and two
+   unrecognized tools (`TeamCreate`/`TeamDelete`) correctly mark their holders unresolved.
+
 ## Verdict criteria
 
 This exploration succeeds if the demo in `run.sh` produces correct, useful answers (the gate
