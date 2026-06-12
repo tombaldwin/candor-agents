@@ -4,7 +4,7 @@
 
 **Your agent fleet is an effect graph.** Agents are units, delegation is edges, tool grants are the
 classified leaves (`Bash`→`Exec`, `WebFetch`→`Net`, `Edit`→`Fs(write)`, an uncurated MCP server →
-`Unknown` — never silence). candor-agents emits [candor-spec](https://github.com/tombaldwin/candor-spec)
+`Unknown` — never silence). candor-agents ([candor.poly.io](https://candor.poly.io)) emits [candor-spec](https://github.com/tombaldwin/candor-spec)
 0.4 reports over a Claude Code project, in two modes that answer two different questions:
 
 ```sh
