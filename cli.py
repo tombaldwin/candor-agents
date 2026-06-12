@@ -53,8 +53,14 @@ def drift(target, strict, transcripts=None):
                   f"(a built-in agent type, or a declaration the scan didn't see)")
             continue
         if obs is None:
-            print(f"  {unit}: declared {{{', '.join(sorted(dec))}}} but NEVER OBSERVED in these "
-                  f"sessions — if that holds over time, the whole agent is a trim candidate")
+            if unit == "hooks":
+                # hook executions are not tool_use events — the transcript reader cannot see them,
+                # so "never observed" would be a structural artifact, not least-privilege advice
+                print(f"  {unit}: declared {{{', '.join(sorted(dec))}}} — hook runs are not "
+                      f"observable in transcripts; review the hook commands themselves")
+            else:
+                print(f"  {unit}: declared {{{', '.join(sorted(dec))}}} but NEVER OBSERVED in these "
+                      f"sessions — if that holds over time, the whole agent is a trim candidate")
             continue
         unused = dec - obs - {"Unknown"}
         extra = obs - dec - {"Unknown"}
