@@ -462,6 +462,9 @@ def main():
             "direct": sorted(direct.get(n, set())),
             "declared": [], "undeclared": sorted(effs - {"Unknown"}), "overdeclared": [],
             "unresolved": "Unknown" in effs,
+            # spec ⟨0.5⟩ unitKind: a fleet's units are not functions — name what each one is, so a
+            # merged prefix (fleet + code reports) renders sensibly. Informative, never semantic.
+            "unitKind": "session" if n == "session" else "hooks" if n == "hooks" else "agent",
             "calls": calls[n],
         }
         if fs_tr.get(n):
