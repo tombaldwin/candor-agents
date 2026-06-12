@@ -328,6 +328,51 @@ check("drift: observed-outside-declaration is loud, advisory exit 0",
 r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an, "--strict"], capture_output=True, text=True)
 check("drift --strict: an anomaly fails the build (exit 1)", r.returncode == 1)
 
+# ── hooks: settings.json commands are fleet capability surface ────────────────────────────────────
+with tempfile.TemporaryDirectory() as td:
+    adir = os.path.join(td, ".claude", "agents")
+    os.makedirs(adir)
+    open(os.path.join(adir, "worker.md"), "w").write(agent("worker", "Read"))
+    json.dump({"hooks": {
+        "PostToolUse": [{"matcher": "Write|Edit",
+                         "hooks": [{"type": "command", "command": "python3 $CLAUDE_PROJECT_DIR/.claude/check.py"}]}],
+        "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "bash hook.sh && git status"},
+                                            {"type": "telepathy"}]}],
+    }}, open(os.path.join(td, ".claude", "settings.json"), "w"))
+    out = os.path.join(td, "r")
+    r = subprocess.run([sys.executable, SCAN, td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    rep = json.load(open(f"{out}.t.Fleet.json"))
+    hk = entry(rep, "hooks")
+    check("hooks: a `hooks` unit carries the settings.json commands (Exec + cmds surface)",
+          hk is not None and "Exec" in hk["direct"]
+          and set(hk.get("cmds", [])) >= {"python3", "bash", "git"}, json.dumps(hk))
+    check("hooks: an unknown hook type reads Unknown with a named origin",
+          "Unknown" in hk["inferred"] and any(w.startswith("hook-type:") for w in hk.get("unknownWhy", [])))
+    check("hooks: the session root edges to hooks and inherits Exec",
+          "hooks" in entry(rep, "session")["calls"] and "Exec" in entry(rep, "session")["inferred"])
+    check("hooks: the receipt discloses that hooks run automatically",
+          "run AUTOMATICALLY" in r.stderr and "Stop(1)" in r.stderr, r.stderr)
+
+# a project with hooks but NO agents still has a capability surface (the pgman shape)
+with tempfile.TemporaryDirectory() as td:
+    os.makedirs(os.path.join(td, ".claude"))
+    json.dump({"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "./stop-hook.sh"}]}]}},
+              open(os.path.join(td, ".claude", "settings.json"), "w"))
+    r = subprocess.run([sys.executable, SCAN, td, "--out", os.path.join(td, "r"), "--fleet", "t"],
+                       capture_output=True, text=True)
+    rep = json.load(open(os.path.join(td, "r.t.Fleet.json")))
+    check("hooks: an agent-less project with hooks still scans (hooks + session)",
+          r.returncode == 0 and entry(rep, "hooks") is not None
+          and "stop-hook.sh" in entry(rep, "hooks").get("cmds", []), r.stderr)
+with tempfile.TemporaryDirectory() as td:
+    os.makedirs(os.path.join(td, ".claude"))
+    r = subprocess.run([sys.executable, SCAN, td, "--out", os.path.join(td, "r"), "--fleet", "t"],
+                       capture_output=True, text=True)
+    check("hooks: no agents AND no hooks still exits 2 (nothing to analyze)", r.returncode == 2)
+
+print()
+
+
 # ── --agents: the self-describing engine (the contract is an embedded module) ─────────────────────
 import agentsmd
 check("embedded contract matches AGENTS.md (drift gate — regen: python3 gen-agentsmd.py)",

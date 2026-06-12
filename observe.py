@@ -16,10 +16,9 @@ advice, the AS-EFF-002 analog).
 """
 import json
 import os
-import re
 import sys
 
-from scan import TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE  # one classifier, two readers
+from scan import TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, bash_cmds  # one classifier, two readers
 
 SPEC = "0.4"
 VERSION = "agents-0.4.1"
@@ -47,92 +46,6 @@ def classify_tool(name):
             return set(MCP_TABLE[server]), set(), None
         return {"Unknown"}, set(), f"mcp-uncurated:{server}"
     return {"Unknown"}, set(), f"tool-unknown:{name}"
-
-
-# keywords a command FOLLOWS (`then git push`) vs keywords followed by non-commands (`for f in …`)
-_KW_SKIP = {"if", "then", "else", "elif", "do", "while", "until", "time", "exec", "!", "{", "}"}
-_KW_DROP = {"for", "case", "select", "function", "in", "fi", "done", "esac"}
-_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
-_SUBST = re.compile(r"[$<]\(\s*([A-Za-z0-9._+/-]+)")
-
-
-def bash_cmds(command):
-    """Command heads from a shell string — the decidable literal subset, fabrication-averse.
-
-    Every pipeline/sequence segment contributes its head (so `cd x && cargo build` reads BOTH),
-    split quote-aware so an awk program or python -c body is never read as commands; everything
-    from the first heredoc on is data, not commands (conservatively dropping what follows);
-    leading VAR=… assignments are skipped; a head that isn't a plain word (comments, redirects,
-    expansions) drops its segment rather than guessing. Command/process substitutions ($(git …),
-    <(sort …)) contribute their own heads — those run — except inside single quotes.
-    """
-    s = command.split("<<", 1)[0]
-    segs, cur, unsq, q = [], [], [], None
-    i, n = 0, len(s)
-    while i < n:
-        ch = s[i]
-        if q == "'":
-            cur.append(ch)
-            unsq.append(ch if ch == "'" else " ")
-            q = None if ch == "'" else q
-        elif q == '"':
-            if ch == "\\" and i + 1 < n:
-                cur.append(s[i:i + 2])
-                unsq.append("  ")
-                i += 2
-                continue
-            cur.append(ch)
-            unsq.append(ch)
-            q = None if ch == '"' else q
-        elif ch == "\\" and i + 1 < n:
-            cur.append(s[i:i + 2])
-            unsq.append("  ")
-            i += 2
-            continue
-        elif ch in "'\"":
-            q = ch
-            cur.append(ch)
-            unsq.append(ch)
-        elif ch == "#" and (not cur or cur[-1] in " \t"):
-            while i < n and s[i] != "\n":  # a comment's `;`/`|`/apostrophes are prose, not shell
-                i += 1
-            continue
-        elif ch == "&" and ((i > 0 and s[i - 1] == ">") or (i + 1 < n and s[i + 1] == ">")):
-            cur.append(ch)  # `2>&1` / `&>` are redirects, not separators
-            unsq.append(ch)
-        elif ch in ";|&\n":
-            segs.append("".join(cur))
-            cur = []
-            unsq.append(ch)
-        else:
-            cur.append(ch)
-            unsq.append(ch)
-        i += 1
-    segs.append("".join(cur))
-
-    heads = set()
-    for seg in segs:
-        for tok in seg.split():
-            if _ASSIGN.match(tok):
-                if "$(" in tok or "`" in tok:
-                    break  # the value opens a substitution — the _SUBST pass owns its head
-                continue
-            if tok.endswith(")") and not tok.startswith("("):
-                continue  # a case arm (`audit)`) — the command, if any, follows it
-            if tok[0] in "'\"" and not (len(tok) > 1 and tok.endswith(tok[0])):
-                break  # a quoted path with spaces ("/Applications/Google Chrome…") — unsplittable
-            name = tok.strip("'\"()").rsplit("/", 1)[-1]
-            if name in _KW_SKIP:
-                continue
-            if name not in _KW_DROP and _CMD_NAME.match(name):
-                heads.add(name)
-            break
-    for m in _SUBST.finditer("".join(unsq)):
-        name = m.group(1).rsplit("/", 1)[-1]
-        if name not in _KW_SKIP and name not in _KW_DROP and _CMD_NAME.match(name):
-            heads.add(name)
-    return heads
 
 
 def surfaces_from(name, inp):

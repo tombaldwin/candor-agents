@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.1"
+VERSION = "agents-0.4.2"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -56,6 +56,92 @@ MCP_TABLE = {
 # opt in with --nested-spawn (found on the wshobson/agents real-fleet run: with Agent ambient,
 # 182 ambient agents produced a ~20k-edge all-reaches-all smear; without, the graph is honest).
 AMBIENT = sorted(TOOL_EFFECTS)
+
+
+# keywords a command FOLLOWS (`then git push`) vs keywords followed by non-commands (`for f in …`)
+_KW_SKIP = {"if", "then", "else", "elif", "do", "while", "until", "time", "exec", "!", "{", "}"}
+_KW_DROP = {"for", "case", "select", "function", "in", "fi", "done", "esac"}
+_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+_SUBST = re.compile(r"[$<]\(\s*([A-Za-z0-9._+/-]+)")
+
+
+def bash_cmds(command):
+    """Command heads from a shell string — the decidable literal subset, fabrication-averse.
+
+    Every pipeline/sequence segment contributes its head (so `cd x && cargo build` reads BOTH),
+    split quote-aware so an awk program or python -c body is never read as commands; everything
+    from the first heredoc on is data, not commands (conservatively dropping what follows);
+    leading VAR=… assignments are skipped; a head that isn't a plain word (comments, redirects,
+    expansions) drops its segment rather than guessing. Command/process substitutions ($(git …),
+    <(sort …)) contribute their own heads — those run — except inside single quotes.
+    """
+    s = command.split("<<", 1)[0]
+    segs, cur, unsq, q = [], [], [], None
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if q == "'":
+            cur.append(ch)
+            unsq.append(ch if ch == "'" else " ")
+            q = None if ch == "'" else q
+        elif q == '"':
+            if ch == "\\" and i + 1 < n:
+                cur.append(s[i:i + 2])
+                unsq.append("  ")
+                i += 2
+                continue
+            cur.append(ch)
+            unsq.append(ch)
+            q = None if ch == '"' else q
+        elif ch == "\\" and i + 1 < n:
+            cur.append(s[i:i + 2])
+            unsq.append("  ")
+            i += 2
+            continue
+        elif ch in "'\"":
+            q = ch
+            cur.append(ch)
+            unsq.append(ch)
+        elif ch == "#" and (not cur or cur[-1] in " \t"):
+            while i < n and s[i] != "\n":  # a comment's `;`/`|`/apostrophes are prose, not shell
+                i += 1
+            continue
+        elif ch == "&" and ((i > 0 and s[i - 1] == ">") or (i + 1 < n and s[i + 1] == ">")):
+            cur.append(ch)  # `2>&1` / `&>` are redirects, not separators
+            unsq.append(ch)
+        elif ch in ";|&\n":
+            segs.append("".join(cur))
+            cur = []
+            unsq.append(ch)
+        else:
+            cur.append(ch)
+            unsq.append(ch)
+        i += 1
+    segs.append("".join(cur))
+
+    heads = set()
+    for seg in segs:
+        for tok in seg.split():
+            if _ASSIGN.match(tok):
+                if "$(" in tok or "`" in tok:
+                    break  # the value opens a substitution — the _SUBST pass owns its head
+                continue
+            if tok.endswith(")") and not tok.startswith("("):
+                continue  # a case arm (`audit)`) — the command, if any, follows it
+            if tok[0] in "'\"" and not (len(tok) > 1 and tok.endswith(tok[0])):
+                break  # a quoted path with spaces ("/Applications/Google Chrome…") — unsplittable
+            name = tok.strip("'\"()").rsplit("/", 1)[-1]
+            if name in _KW_SKIP:
+                continue
+            if name not in _KW_DROP and _CMD_NAME.match(name):
+                heads.add(name)
+            break
+    for m in _SUBST.finditer("".join(unsq)):
+        name = m.group(1).rsplit("/", 1)[-1]
+        if name not in _KW_SKIP and name not in _KW_DROP and _CMD_NAME.match(name):
+            heads.add(name)
+    return heads
 
 
 def parse_frontmatter(text):
@@ -198,8 +284,44 @@ def main():
             print(f"candor-agents: skipped {len(skipped)} .md file(s) with no frontmatter "
                   f"(not agent definitions): {', '.join(skipped[:5])}{'…' if len(skipped) > 5 else ''}",
                   file=sys.stderr)
-    if not agents:
-        print(f"candor-agents: no agent definitions under {adir} — nothing to analyze.", file=sys.stderr)
+    # ── hooks: commands the harness runs AUTOMATICALLY on tool events ─────────────────────────
+    # `.claude/settings.json` / `settings.local.json` hook entries are fleet capability surface:
+    # a PreToolUse/PostToolUse/Stop hook executes a shell command on every matching event with no
+    # agent deciding anything. One `hooks` unit carries them — Exec (the Bash cliff applies) plus
+    # the command heads as the literal surface; the session root edges to it. A hook type this
+    # scanner doesn't know reads Unknown, never silence. User-level (~/.claude) hooks are out of
+    # scope: the scan describes the PROJECT.
+    hook_cmds, hook_events, hook_why = set(), [], set()
+    for sf in ("settings.json", "settings.local.json"):
+        sp = os.path.join(root, ".claude", sf)
+        if not os.path.exists(sp):
+            continue
+        try:
+            hooks_cfg = json.load(open(sp)).get("hooks") or {}
+        except Exception as e:
+            print(f"candor-agents: unreadable .claude/{sf} ({e}) — its hooks are UNKNOWN", file=sys.stderr)
+            hook_why.add(f"hooks-unreadable:{sf}")
+            continue
+        for event in sorted(hooks_cfg):
+            entries = hooks_cfg[event]
+            if not isinstance(entries, list):
+                continue
+            n_cmds = 0
+            for ent in entries:
+                for h in (ent.get("hooks") or []) if isinstance(ent, dict) else []:
+                    if not isinstance(h, dict):
+                        continue
+                    if h.get("type") == "command" and isinstance(h.get("command"), str):
+                        hook_cmds |= bash_cmds(h["command"])
+                        n_cmds += 1
+                    else:
+                        hook_why.add(f"hook-type:{h.get('type', '?')}")
+            if n_cmds:
+                hook_events.append(f"{event}({n_cmds})")
+    has_hooks = bool(hook_events or hook_why)
+
+    if not agents and not has_hooks:
+        print(f"candor-agents: no agent definitions under {adir} and no hooks — nothing to analyze.", file=sys.stderr)
         return 2
 
     # ── edges (delegation) ────────────────────────────────────────────────────────────────────
@@ -216,7 +338,9 @@ def main():
     # The session root: an entry point holding every tool + every configured MCP server, able to
     # spawn every agent. Named `session` (not `main`): in combined mode (fleet + code reports under
     # ONE prefix) the crate's `fn main` would collide with it.
-    calls["session"] = names
+    calls["session"] = sorted(names + (["hooks"] if has_hooks else []))
+    if has_hooks:
+        calls["hooks"] = []
 
     # ── per-agent direct effects ──────────────────────────────────────────────────────────────
     direct, fs_detail, why_map, unresolved_direct = {}, {}, {}, {}
@@ -257,6 +381,10 @@ def main():
             mw.add(f"mcp:{s}")
     direct[ROOT], fs_detail[ROOT], why_map[ROOT] = me, mf, mw
     unresolved_direct[ROOT] = "Unknown" in me
+    if has_hooks:
+        direct["hooks"] = {"Exec"} | ({"Unknown"} if hook_why else set())
+        fs_detail["hooks"], why_map["hooks"] = set(), set(hook_why)
+        unresolved_direct["hooks"] = bool(hook_why)
 
     # ── --link: the Exec-boundary refinement ─────────────────────────────────────────────────
     # Edge every Bash-holding (or ambient) agent to each entryPoint of the linked CODE report, and
@@ -318,7 +446,9 @@ def main():
             continue  # pure units are omitted from the report (present in the sidecar)
         entry = {
             "fn": n,
-            "loc": agents[n]["file"] if n in agents else "(session root)",
+            "loc": agents[n]["file"] if n in agents
+                   else f".claude/settings*.json hooks: {', '.join(hook_events) or '(unreadable)'}" if n == "hooks"
+                   else "(session root)",
             "inferred": sorted(effs),
             "direct": sorted(direct.get(n, set())),
             "declared": [], "undeclared": sorted(effs - {"Unknown"}), "overdeclared": [],
@@ -329,6 +459,8 @@ def main():
             entry["fs"] = sorted(fs_tr[n])
         if why_map.get(n):
             entry["unknownWhy"] = sorted(why_map[n])
+        if n == "hooks" and hook_cmds:
+            entry["cmds"] = sorted(hook_cmds)
         if n == "session":
             entry["entryPoint"] = True
         # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is
@@ -345,6 +477,9 @@ def main():
     json.dump(report, open(rp, "w"), indent=1)
     json.dump({n: calls[n] for n in sorted(calls)}, open(cp, "w"), indent=1)
     print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → {rp} (+ callgraph sidecar)")
+    if has_hooks:
+        print(f"candor-agents: hooks run AUTOMATICALLY on tool events — {', '.join(hook_events) or 'unreadable settings'}"
+              f"{'; cmds: ' + ', '.join(sorted(hook_cmds)) if hook_cmds else ''}", file=sys.stderr)
     return 0
 
 

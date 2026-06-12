@@ -48,6 +48,11 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 - A missing `tools:` line is **ambient authority** (everything + Unknown); `tools: []` is
   maximally confined. A frontmatter-less `.md` in `.claude/agents/` is not an agent and is
   skipped with disclosure.
+- **Hooks are capability surface**: `.claude/settings.json` / `settings.local.json` hook commands
+  run *automatically* on tool events — they appear as a `hooks` unit (Exec + the command heads as
+  `cmds`), edged from the session root. A project with hooks but no agents still scans. A hook
+  type the scanner doesn't know reads Unknown. User-level (`~/.claude`) hooks are out of scope:
+  the report describes the project.
 - `observe` is **best-effort over an internal format**: the receipt discloses unparseable
   lines/files; literal surfaces (`cmds`/`paths`/`hosts`) are the decidable subset of observed tool
   inputs — absence is never a claim of absence.
