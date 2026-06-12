@@ -1,2 +1,0 @@
-[console_scripts]
-candor-agents = cli:main

@@ -1,3 +1,0 @@
-cli
-observe
-scan
