@@ -328,5 +328,16 @@ check("drift: observed-outside-declaration is loud, advisory exit 0",
 r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an, "--strict"], capture_output=True, text=True)
 check("drift --strict: an anomaly fails the build (exit 1)", r.returncode == 1)
 
+# ── --agents: the self-describing engine (the contract is an embedded module) ─────────────────────
+import agentsmd
+check("embedded contract matches AGENTS.md (drift gate — regen: python3 gen-agentsmd.py)",
+      agentsmd.AGENTS_MD == open(os.path.join(HERE, "AGENTS.md")).read())
+check("agentsmd ships in the wheel (py-modules list)",
+      '"agentsmd"' in open(os.path.join(HERE, "pyproject.toml")).read())
+r = subprocess.run([sys.executable, os.path.join(HERE, "cli.py"), "--agents"], capture_output=True, text=True)
+check("--agents prints the version header + the exact installed contract",
+      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents-")
+      and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
+
 print(f"test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

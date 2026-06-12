@@ -19,4 +19,4 @@ Repository = "https://github.com/tombaldwin/candor-agents"
 candor-agents = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "scan", "observe"]
+py-modules = ["cli", "scan", "observe", "agentsmd"]

@@ -82,6 +82,15 @@ def main():
         print(__doc__.strip(), file=sys.stderr)
         return 0 if args else 2
     cmd, rest = args[0], args[1:]
+    if cmd in ("--agents", "agents"):
+        # The agent contract for THE INSTALLED VERSION, embedded as a module (the wheel ships
+        # py-modules only) — doc and engine cannot drift (the §2.1 version-trust rule applied
+        # to documentation).
+        import agentsmd
+        from scan import VERSION
+        print(f"<!-- candor-{VERSION} · the agent contract for this installed version -->")
+        sys.stdout.write(agentsmd.AGENTS_MD)
+        return 0
     if cmd == "scan":
         return _run("scan.py", rest)
     if cmd == "observe":
