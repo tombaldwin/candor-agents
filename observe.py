@@ -233,8 +233,12 @@ def main(argv=None):
         sys.stderr.write(f"candor-agents: no transcripts found for {target} "
                          f"(expected *.jsonl there, or ~/.claude/projects/<slug>/ to exist)\n")
         return 2
-    fleet = os.path.basename(os.path.abspath(target)).lstrip("-") or "fleet"
-    observe(tdir, out, fleet)
+    # the fleet name: the project dir when it's real, else the transcript dir's slug — the
+    # cross-project sweep produced reports named after /dev/null otherwise
+    base = os.path.basename(os.path.abspath(target)).lstrip("-")
+    if (not os.path.isdir(target)) or base in ("", "null", "dev"):
+        base = os.path.basename(os.path.abspath(tdir)).lstrip("-") or "fleet"
+    observe(tdir, out, base)
     return 0
 
 
