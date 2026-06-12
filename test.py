@@ -161,7 +161,8 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 
 # ── 7. envelope + main ────────────────────────────────────────────────────────────────────────────
 rep, cg = scan({"a.md": agent("a", "Read")})
-check("spec envelope (candor.spec = 0.3)", rep["candor"]["spec"] == "0.3")
+check("spec envelope (candor.spec = 0.4)", rep["candor"]["spec"] == "0.4")
+check("hash join keys emitted (0.4 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
 m = entry(rep, "session")
 check("the session root is the entry point and edges to every agent",
       m and m.get("entryPoint") is True and cg["session"] == ["a"])
@@ -205,7 +206,7 @@ adir = os.path.join(d, ".claude", "agents")
 os.makedirs(adir)
 open(os.path.join(adir, "runner.md"), "w").write(agent("runner", "Bash"))
 open(os.path.join(adir, "watcher.md"), "w").write(agent("watcher", "WebSearch"))
-code = {"candor": {"version": "x", "spec": "0.3"},
+code = {"candor": {"version": "x", "spec": "0.4"},
         "functions": [{"fn": "main", "loc": "src/main.rs", "inferred": ["Db", "Exec"],
                        "direct": ["Db"], "declared": [], "undeclared": [], "overdeclared": [],
                        "unresolved": False, "calls": [], "entryPoint": True}]}

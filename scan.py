@@ -318,9 +318,13 @@ def main():
             entry["unknownWhy"] = sorted(why_map[n])
         if n == "session":
             entry["entryPoint"] = True
+        # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is
+        # chainable like any sibling (`<fleet>#<agent>`, the pkg#LocalName shape).
+        entry["hash"] = f"{fleet}#{n}"
         functions.append(entry)
 
-    report = {"candor": {"version": "agents-poc", "toolchain": "claude-code", "spec": "0.3"},
+    report = {"candor": {"version": "agents-poc", "toolchain": "claude-code", "spec": "0.4"},
+              "package": fleet,
               "functions": functions}
     rp = f"{out}.{fleet}.Fleet.json"
     cp = f"{out}.{fleet}.Fleet.callgraph.json"
