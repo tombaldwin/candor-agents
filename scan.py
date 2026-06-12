@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.2"
+VERSION = "agents-0.4.3"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -34,16 +34,20 @@ TOOL_EFFECTS = {
     "WebFetch": {"Net"}, "WebSearch": {"Net"},
     "SendUserFile": {"Ipc"}, "PushNotification": {"Ipc"},
     "ScheduleWakeup": {"Clock"}, "CronCreate": {"Clock"}, "CronDelete": {"Clock"}, "CronList": {"Clock"},
+    # legacy/alias builtin names still declared by REAL fleets (the wp-calypso/MRC/Updog_restore
+    # public-fleet sweep found LS and MultiEdit reading as Unknown — a curation gap, not honesty)
+    "LS": {"Fs"}, "MultiEdit": {"Fs"}, "NotebookRead": {"Fs"},
 }
-FS_KIND = {"Edit": "write", "Write": "write", "NotebookEdit": "write",
-           "Read": "read", "Glob": "read", "Grep": "read"}
+FS_KIND = {"Edit": "write", "Write": "write", "NotebookEdit": "write", "MultiEdit": "write",
+           "Read": "read", "Glob": "read", "Grep": "read", "LS": "read", "NotebookRead": "read"}
 # Pure routing / internal state: granted everywhere, effects come from the tools they route TO
 # (already counted) — flooding them as effects would be the over-approximation candor avoids.
+# `Task` is the LEGACY name of the Agent tool — it also counts for delegation (see has_agent_tool).
 PURE_TOOLS = {
-    "Agent", "Skill", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskOutput",
-    "TaskStop", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ExitWorktree",
-    "ToolSearch", "Monitor", "LSP", "SendMessage", "Workflow", "RemoteTrigger",
-    "ListMcpResourcesTool", "ReadMcpResourceTool",
+    "Agent", "Task", "Skill", "TodoWrite", "TodoRead", "TaskCreate", "TaskUpdate", "TaskList",
+    "TaskGet", "TaskOutput", "TaskStop", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+    "EnterWorktree", "ExitWorktree", "ToolSearch", "Monitor", "LSP", "SendMessage", "Workflow",
+    "RemoteTrigger", "ListMcpResourcesTool", "ReadMcpResourceTool",
 }
 # Curated MCP capability table (under-report-and-say-so; everything else -> Unknown).
 MCP_TABLE = {
@@ -173,6 +177,10 @@ def tool_list(meta):
     """The declared tools, or None for 'inherit everything'."""
     t = meta.get("tools")
     if t is None or t == "" or t == "*":
+        return None
+    # `tools: All tools` (and bare `all`) — the human "everything" convention, found ×12 on a real
+    # public fleet reading as an unknown tool named "All tools". It MEANS ambient authority.
+    if isinstance(t, str) and t.strip().lower() in ("all", "all tools"):
         return None
     if isinstance(t, list):
         return [x.strip() for x in t if x.strip()]
@@ -329,7 +337,8 @@ def main():
     names = sorted(agents)
     calls = {}
     for name, a in agents.items():
-        has_agent_tool = "Agent" in (a["tools"] or []) or (nested and a["tools"] is None)
+        has_agent_tool = ("Agent" in (a["tools"] or []) or "Task" in (a["tools"] or [])
+                          or (nested and a["tools"] is None))
         edges = []
         if has_agent_tool:
             mentioned = [n for n in names if n != name and re.search(rf"(?:^|[`'\"\s]){re.escape(n)}[`'\"\s.,]", a["body"] + " " + a["desc"] + " ")]
