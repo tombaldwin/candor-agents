@@ -248,6 +248,44 @@ with tempfile.TemporaryDirectory() as td:
           obs["candor"]["spec"] == "0.4" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
           set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
+# bash_cmds: the observed-cmds extractor (first non-fixture run found it fabricating heads)
+from observe import bash_cmds
+check("bash_cmds: every segment head, not just the first",
+      bash_cmds("cd /x && cargo build | tee log; git push") == {"cd", "cargo", "tee", "git"})
+check("bash_cmds: env-assignment prefixes are not commands",
+      bash_cmds("BLESS=1 FOO=bar cargo test") == {"cargo"})
+check("bash_cmds: comments and option/junk heads fabricate nothing",
+      bash_cmds("# a note") == set() and bash_cmds("--flag thing") == set())
+check("bash_cmds: command substitution contributes its head",
+      bash_cmds("W=$(mktemp -d)") == {"mktemp"} and "rustc" in bash_cmds("SRC=$(rustc --print sysroot)"))
+check("bash_cmds: shell keywords skip to the real command",
+      bash_cmds("if true; then git push; fi") == {"true", "git"} and bash_cmds("time cargo bench") == {"cargo"})
+check("bash_cmds: paths basename; quotes stripped",
+      bash_cmds("/usr/bin/env python3 x.py") == {"env"} and bash_cmds("'jq' .") == {"jq"})
+check("bash_cmds: a heredoc body is data, not commands",
+      bash_cmds("cat <<'EOF'\nString x = apply_tax();\nEOF") == {"cat"})
+check("bash_cmds: quoted programs are opaque (awk/python -c bodies never read as commands)",
+      bash_cmds("awk '{print; exit}' f") == {"awk"}
+      and bash_cmds("python3 -c 'import os; os.getcwd()'") == {"python3"})
+check("bash_cmds: substitution in double quotes runs; in single quotes it does not",
+      bash_cmds('echo "$(date)"') == {"echo", "date"} and bash_cmds("grep -n '$(foo' x") == {"grep"})
+check("bash_cmds: a for-loop variable is not a command",
+      bash_cmds("for f in a b; do cargo t; done") == {"cargo"})
+check("bash_cmds: case arms are patterns, not commands",
+      bash_cmds("case $1 in\n  audit) cargo audit;;\n  *) echo no;;\nesac") == {"cargo", "echo"})
+check("bash_cmds: escaped quotes inside double quotes do not end the string",
+      bash_cmds('git commit -m "say \\"hi\\"; but nicely" && make') == {"git", "make"})
+check("bash_cmds: substitution heads are filtered like segment heads",
+      bash_cmds("N=$(for i in 1 2; do echo $i; done)") == {"echo"} and bash_cmds("echo '$(...' ") == {"echo"})
+check("bash_cmds: 2>&1 / &> are redirects, not separators",
+      bash_cmds("cargo build 2>&1 | tail -40") == {"cargo", "tail"}
+      and bash_cmds("make &>log && ls") == {"make", "ls"})
+check("bash_cmds: comments are prose — their `;`/apostrophes never corrupt the parse",
+      bash_cmds("# strip artifacts; keep src\nrm -rf x") == {"rm"}
+      and bash_cmds("# don't split here\ngrep 'a|b' f") == {"grep"})
+check("bash_cmds: a quoted path with spaces is one (unsplittable) head, not fabricated words",
+      bash_cmds('"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless x') == set())
+
 r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", "fixture/transcripts"],
                    capture_output=True, text=True)
 check("drift: granted-but-unused named per agent (researcher Net)",

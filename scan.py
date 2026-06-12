@@ -20,6 +20,9 @@ import os
 import re
 import sys
 
+SPEC = "0.4"
+VERSION = "agents-0.4.1"
+
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
 # `Exec` (the subprocess boundary — same trade as `Command::new`). An MCP server outside MCP_TABLE
@@ -323,7 +326,7 @@ def main():
         entry["hash"] = f"{fleet}#{n}"
         functions.append(entry)
 
-    report = {"candor": {"version": "agents-poc", "toolchain": "claude-code", "spec": "0.4"},
+    report = {"candor": {"version": VERSION, "toolchain": "claude-code", "spec": SPEC},
               "package": fleet,
               "functions": functions}
     rp = f"{out}.{fleet}.Fleet.json"
