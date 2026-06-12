@@ -103,6 +103,23 @@ eu = entry(rep, "u")
 check("uncurated MCP → Unknown + unknownWhy", eu["unresolved"] and eu.get("unknownWhy") == ["mcp:billing"],
       f"got {eu}")
 
+# legacy/alias builtin names declared by real fleets (the public-fleet sweep curation gaps)
+rep, cg = scan({
+    "old.md": agent("old", "LS, MultiEdit, NotebookRead, TodoRead"),
+    "boss.md": agent("boss", "Task, Read", body="Spawn `old` when needed."),
+    "amb.md": agent("amb", "All tools"),
+})
+eo = entry(rep, "old")
+check("legacy tools classify (LS/MultiEdit/NotebookRead -> Fs, no Unknown)",
+      eo["inferred"] == ["Fs"] and not eo["unresolved"] and set(eo.get("fs", [])) == {"read", "write"},
+      f"got {eo}")
+check("legacy Task tool counts for delegation (named narrowing)",
+      cg["boss"] == ["old"] and "Fs" in entry(rep, "boss")["inferred"], f"got {cg['boss']}")
+ea = entry(rep, "amb")
+check("'tools: All tools' is ambient authority, not a tool named 'All tools'",
+      ea["unresolved"] and "ambient:tools-unrestricted" in ea.get("unknownWhy", [])
+      and not any(w == "tool:All tools" for w in ea.get("unknownWhy", [])), f"got {ea}")
+
 # an unheard-of builtin tool is Unknown, never silently pure
 rep, _ = scan({"x.md": agent("x", "FrobnicateDisk")})
 ex = entry(rep, "x")
