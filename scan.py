@@ -230,6 +230,16 @@ def main():
         print(__doc__.strip(), file=sys.stderr)
         return 2
     root = args[0]
+    # An unknown flag must FAIL, not be silently ignored or read as the project dir (a typo'd
+    # flag near a gate deserves exit 2, not a confusing scan).
+    known = {"--out", "--fleet", "--nested-spawn", "--link"}
+    skip = set()
+    for i, a in enumerate(args):
+        if a in ("--out", "--fleet", "--link"):
+            skip.add(i + 1)
+        elif a.startswith("--") and a not in known and i not in skip:
+            print(f"candor-agents: unknown flag {a} (usage: scan <dir> [--out <prefix>] [--fleet <name>] [--link <prefix>] [--nested-spawn])", file=sys.stderr)
+            return 2
     out = "report"
     fleet = os.path.basename(os.path.abspath(root)) or "fleet"
     for i, a in enumerate(args):

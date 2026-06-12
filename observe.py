@@ -18,10 +18,7 @@ import json
 import os
 import sys
 
-from scan import TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, bash_cmds  # one classifier, two readers
-
-SPEC = "0.4"
-VERSION = "agents-0.4.1"
+from scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds  # one source
 
 
 def transcript_dir_for(path):
@@ -224,6 +221,9 @@ def main(argv=None):
         elif args[i] == "--transcripts" and i + 1 < len(args):
             tdir_override = args[i + 1]
             i += 2
+        elif args[i].startswith("--"):
+            sys.stderr.write(f"candor-agents: unknown flag {args[i]} (usage: observe <dir> [--out <prefix>] [--transcripts <dir>])\n")
+            return 2
         else:
             target = args[i]
             i += 1

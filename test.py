@@ -282,6 +282,8 @@ with tempfile.TemporaryDirectory() as td:
           "Unknown" in by["coder"]["inferred"] and any("mcp-uncurated:mystery" in w for w in by["coder"].get("unknownWhy", [])))
     check("observe: literal surfaces from tool inputs (Bash cmds, file paths)",
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
+    check("observe version is single-sourced from scan (no drift)",
+          obs["candor"]["version"].endswith("0.4.3"), obs["candor"]["version"])
     check("observe: spec 0.4 envelope + hash + package",
           obs["candor"]["spec"] == "0.4" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
