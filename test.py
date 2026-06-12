@@ -180,6 +180,9 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 rep, cg = scan({"a.md": agent("a", "Read")})
 check("spec envelope (candor.spec = 0.4)", rep["candor"]["spec"] == "0.4")
 check("hash join keys emitted (0.4 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
+check("unitKind names every fleet unit (spec 0.5 draft: agent/session/hooks)",
+      all(f.get("unitKind") in ("agent", "session", "hooks") for f in rep["functions"])
+      and entry(rep, "session")["unitKind"] == "session")
 m = entry(rep, "session")
 check("the session root is the entry point and edges to every agent",
       m and m.get("entryPoint") is True and cg["session"] == ["a"])

@@ -176,6 +176,7 @@ def observe(tdir, out_prefix, fleet):
             "direct": sorted(direct.get(n) or []),
             "declared": [], "undeclared": [], "overdeclared": [],
             "unresolved": "Unknown" in inf,
+            "unitKind": "session" if n == "session" else "agent",  # spec ⟨0.5⟩, informative
             "hash": f"{fleet}#{n}",
             "calls": sorted(edges.get(n) or []),
         }
