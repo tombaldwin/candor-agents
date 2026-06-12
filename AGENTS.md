@@ -33,6 +33,9 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 ## How to read the report
 
 - Units are agent types plus the `session` root (`entryPoint: true`); `hash` is `<fleet>#<agent>`.
+  Every unit carries `unitKind` (spec 0.5 draft, informative): `agent`, `session`, or `hooks` —
+  a fleet's units are not functions, and the field keeps a merged prefix (fleet + code reports)
+  readable.
 - `inferred` is the transitive effect set (delegation propagates a delegate's effects to its
   delegator); `direct` is the agent's own grants/actions.
 - **Grants are MAY-use upper bounds**: a declared effect says the agent *can* reach it, never that
