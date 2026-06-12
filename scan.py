@@ -182,12 +182,22 @@ def main():
     agents = {}  # name -> {tools: list|None, body, desc}
     adir = os.path.join(root, ".claude", "agents")
     if os.path.isdir(adir):
+        skipped = []
         for f in sorted(os.listdir(adir)):
             if not f.endswith(".md"):
                 continue
             meta, body = parse_frontmatter(open(os.path.join(adir, f)).read())
+            if not meta:
+                # no frontmatter at all (a README, notes…): Claude Code won't load it — counting
+                # it would FABRICATE an ambient-authority unit the runtime doesn't have
+                skipped.append(f)
+                continue
             name = meta.get("name") or f[:-3]
             agents[name] = {"tools": tool_list(meta), "body": body, "desc": str(meta.get("description", "")), "file": f}
+        if skipped:
+            print(f"candor-agents: skipped {len(skipped)} .md file(s) with no frontmatter "
+                  f"(not agent definitions): {', '.join(skipped[:5])}{'…' if len(skipped) > 5 else ''}",
+                  file=sys.stderr)
     if not agents:
         print(f"candor-agents: no agent definitions under {adir} — nothing to analyze.", file=sys.stderr)
         return 2
@@ -331,6 +341,7 @@ def main():
               "functions": functions}
     rp = f"{out}.{fleet}.Fleet.json"
     cp = f"{out}.{fleet}.Fleet.callgraph.json"
+    os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
     json.dump(report, open(rp, "w"), indent=1)
     json.dump({n: calls[n] for n in sorted(calls)}, open(cp, "w"), indent=1)
     print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → {rp} (+ callgraph sidecar)")

@@ -226,6 +226,24 @@ check("--link: pseudo-node not re-emitted as a fleet row", entry(rep, "main") is
 print()
 
 
+# ── real-fleet probe regressions (the VoltAgent 155-agent scan) ──────────────────────────────────
+with tempfile.TemporaryDirectory() as td:
+    adir = os.path.join(td, ".claude", "agents")
+    os.makedirs(adir)
+    open(os.path.join(adir, "README.md"), "w").write("# A catalog readme\nNot an agent; no frontmatter.\n")
+    open(os.path.join(adir, "real.md"), "w").write(agent("real", "Read"))
+    out = os.path.join(td, "deep", "dir", "r")  # --out into a directory that does not exist yet
+    r = subprocess.run([sys.executable, SCAN, td, "--out", out, "--fleet", "t"],
+                       capture_output=True, text=True)
+    check("scan: --out creates missing directories (install-probe find)", r.returncode == 0, r.stderr)
+    rep = json.load(open(f"{out}.t.Fleet.json"))
+    check("scan: a frontmatter-less .md is skipped with disclosure, never an ambient unit",
+          entry(rep, "README") is None and "skipped 1 .md" in r.stderr and "README.md" in r.stderr)
+    check("scan: the real agent beside the readme still scans", entry(rep, "real") is not None)
+
+print()
+
+
 # ── observe + drift (the product surface: declared vs observed) ───────────────────────────────────
 import subprocess, tempfile
 with tempfile.TemporaryDirectory() as td:
