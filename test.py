@@ -370,6 +370,20 @@ with tempfile.TemporaryDirectory() as td:
                        capture_output=True, text=True)
     check("hooks: no agents AND no hooks still exits 2 (nothing to analyze)", r.returncode == 2)
 
+# drift must NOT call an unobserved hooks unit a trim candidate (hook runs aren't tool_use events)
+with tempfile.TemporaryDirectory() as td:
+    os.makedirs(os.path.join(td, ".claude"))
+    json.dump({"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "./h.sh"}]}]}},
+              open(os.path.join(td, ".claude", "settings.json"), "w"))
+    tdir = os.path.join(td, "tr"); os.makedirs(tdir)
+    open(os.path.join(tdir, "s.jsonl"), "w").write(json.dumps({"message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/x"}}]}}) + "\n")
+    r = subprocess.run([sys.executable, "cli.py", "drift", td, "--transcripts", tdir],
+                       capture_output=True, text=True)
+    check("drift: hooks are 'not observable', never a trim candidate",
+          "hook runs are not observable" in r.stdout and "hooks: declared {Exec} but NEVER" not in r.stdout,
+          r.stdout)
+
 print()
 
 
