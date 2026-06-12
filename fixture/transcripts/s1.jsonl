@@ -1,0 +1,3 @@
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_s1", "name": "Bash", "input": {"command": "git status"}}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_s2", "name": "Agent", "input": {"subagent_type": "researcher", "prompt": "look things up"}}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_s3", "name": "Agent", "input": {"subagent_type": "coder", "prompt": "make the change"}}]}}

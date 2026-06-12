@@ -1,0 +1,12 @@
+LICENSE-APACHE
+LICENSE-MIT
+README.md
+cli.py
+observe.py
+pyproject.toml
+scan.py
+candor_agents.egg-info/PKG-INFO
+candor_agents.egg-info/SOURCES.txt
+candor_agents.egg-info/dependency_links.txt
+candor_agents.egg-info/entry_points.txt
+candor_agents.egg-info/top_level.txt

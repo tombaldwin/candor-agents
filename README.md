@@ -1,30 +1,46 @@
-# candor-agents — does candor transfer to agent fleets? (exploration)
+# candor-agents — effect analysis for agent fleets
 
 <p align="center"><img src="https://raw.githubusercontent.com/tombaldwin/candor/main/assets/beaky.svg" alt="Beaky, the candor canary" width="180"></p>
 
-**An exploration, not a product** — the executable answer to "does candor's kernel transfer off
-programming languages?" **Answer so far: yes, with zero changes to any candor tool.**
-
-`scan.py` reads a Claude Code project's *static* fleet declarations — `.claude/agents/*.md`
-(YAML frontmatter: `tools:`) and `.mcp.json` — and emits a candor-spec §2 report + §2.2 callgraph
-sidecar where **units are agents, edges are delegation, and the classifier is a tool table**
-(`Bash`→`Exec`, `WebFetch`→`Net`, `Edit`→`Fs(write)`, uncurated MCP server → `Unknown`).
-
-Because the envelope conforms, the **unmodified `candor-query` binary** from candor-rust answers
-`show` / `where` / `callers` / `map` / `whatif` over the fleet, and the **unmodified §6.2 policy
-grammar** gates it. Run it:
+**Your agent fleet is an effect graph.** Agents are units, delegation is edges, tool grants are the
+classified leaves (`Bash`→`Exec`, `WebFetch`→`Net`, `Edit`→`Fs(write)`, an uncurated MCP server →
+`Unknown` — never silence). candor-agents emits [candor-spec](https://github.com/tombaldwin/candor-spec)
+0.4 reports over a Claude Code project, in two modes that answer two different questions:
 
 ```sh
-bash run.sh        # the demo — STANDALONE: needs only git + stable cargo. find-query.sh locates
-                   # candor-query ($CANDOR_QUERY > PATH > $CANDOR/../candor-rust checkout) or
-                   # fetches + builds it into ~/.cache/candor-agents on first run (stable — the
-                   # repo's nightly pin doesn't apply when building -p candor-query from outside).
-python3 test.py    # 25 behavioral checks, incl. the unmodified-candor-query integration lane
-python3 fuzz.py    # soundness fuzzer (default 40 seeds): random fleets thread a known effect
-                   # through random delegation forms; any chain agent reported pure = red.
-                   # Teeth verified: neutering the uncurated-MCP Unknown fails exactly the
-                   # mcp_uncurated seeds; removing the CHA fallback fails 34/40.
+pip install git+https://github.com/tombaldwin/candor-agents   # or: pipx install …
+
+candor-agents scan    <project>    # DECLARED: what the fleet MAY do (.claude/agents/*.md + .mcp.json)
+candor-agents observe <project>    # OBSERVED: what it actually DID (the session transcripts)
+candor-agents drift   <project>    # the gap: least-privilege advice + anomalies
 ```
+
+- **scan** is the capability surface — the static fleet declarations as a report.
+- **observe** reads the project's session transcripts (`~/.claude/projects/<slug>/`): per agent
+  TYPE, the effects actually exercised, the delegation edges actually taken, and the literal
+  surfaces from real tool inputs (`Bash` commands → `cmds`, file paths → `paths`, fetched URLs →
+  `hosts`).
+- **drift** joins them: an effect **granted but never observed** is a least-privilege trim
+  candidate (the AS-EFF-002 analog, per agent); an agent **never spawned** is a bigger one; an
+  **uncurated MCP tool observed running** is named (`mcp-uncurated:<server>`) so you curate it or
+  read the transcript.
+
+Because both modes emit conformant envelopes, the **unmodified `candor-query` binary** from
+candor-rust answers `show` / `where` / `callers` / `map` / `whatif` over either report, and the
+**unmodified §6.2 policy grammar** gates the fleet — `deny Exec orchestrator` means exactly what
+`deny Net api` means in code, enforced by the same machinery:
+
+```sh
+bash run.sh        # the declared-mode demo — STANDALONE: needs only git + stable cargo
+python3 test.py    # 42 behavioral checks, incl. the unmodified-candor-query integration lane
+python3 fuzz.py    # soundness fuzzer (default 40 seeds), teeth verified per mechanism
+```
+
+**Honest bounds:** `observe` reads Claude Code's *internal* transcript JSONL — the reader is
+best-effort, discloses what it could not parse in the receipt, and may break when the format moves.
+Observation covers the sessions you have, not the sessions you'll run: granted-but-unused is
+evidence, not proof, and the advice sharpens with more transcripts. The declared scan remains the
+sound capability ceiling.
 
 What the fixture demo shows (all real mechanics, deliberately seeded):
 

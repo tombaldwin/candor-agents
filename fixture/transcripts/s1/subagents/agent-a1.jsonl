@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_r1", "name": "Read", "input": {"file_path": "/repo/a.ts"}}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_r2", "name": "Grep", "input": {"pattern": "x"}}]}}

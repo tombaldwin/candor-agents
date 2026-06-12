@@ -1,0 +1,75 @@
+Metadata-Version: 2.4
+Name: candor-agents
+Version: 0.4.0
+Summary: candor for agent fleets — declared vs observed effects, transitively, with a policy gate (candor-spec 0.4)
+License-Expression: MIT OR Apache-2.0
+Project-URL: Homepage, https://candor.poly.io
+Project-URL: Repository, https://github.com/tombaldwin/candor-agents
+Keywords: agents,effects,static-analysis,claude-code,policy,candor
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE-APACHE
+License-File: LICENSE-MIT
+Dynamic: license-file
+
+# candor-agents — does candor transfer to agent fleets? (exploration)
+
+<p align="center"><img src="https://raw.githubusercontent.com/tombaldwin/candor/main/assets/beaky.svg" alt="Beaky, the candor canary" width="180"></p>
+
+**An exploration, not a product** — the executable answer to "does candor's kernel transfer off
+programming languages?" **Answer so far: yes, with zero changes to any candor tool.**
+
+`scan.py` reads a Claude Code project's *static* fleet declarations — `.claude/agents/*.md`
+(YAML frontmatter: `tools:`) and `.mcp.json` — and emits a candor-spec §2 report + §2.2 callgraph
+sidecar where **units are agents, edges are delegation, and the classifier is a tool table**
+(`Bash`→`Exec`, `WebFetch`→`Net`, `Edit`→`Fs(write)`, uncurated MCP server → `Unknown`).
+
+Because the envelope conforms, the **unmodified `candor-query` binary** from candor-rust answers
+`show` / `where` / `callers` / `map` / `whatif` over the fleet, and the **unmodified §6.2 policy
+grammar** gates it. Run it:
+
+```sh
+bash run.sh        # the demo — STANDALONE: needs only git + stable cargo. find-query.sh locates
+                   # candor-query ($CANDOR_QUERY > PATH > $CANDOR/../candor-rust checkout) or
+                   # fetches + builds it into ~/.cache/candor-agents on first run (stable — the
+                   # repo's nightly pin doesn't apply when building -p candor-query from outside).
+python3 test.py    # 25 behavioral checks, incl. the unmodified-candor-query integration lane
+python3 fuzz.py    # soundness fuzzer (default 40 seeds): random fleets thread a known effect
+                   # through random delegation forms; any chain agent reported pure = red.
+                   # Teeth verified: neutering the uncurated-MCP Unknown fails exactly the
+                   # mcp_uncurated seeds; removing the CHA fallback fails 34/40.
+```
+
+What the fixture demo shows (all real mechanics, deliberately seeded):
+
+- **CHA for unnamed delegation**: the `coder` holds the `Agent` tool without naming its subagents →
+  it edges to *every* agent and inherits the `mailer`'s `Net`/`Ipc` and the legacy `triage` agent's
+  everything — so `deny Net coder` fails **today**, and the fix is exactly devirtualization:
+  name the delegation.
+- **The non-local consequence**: `whatif mailer Exec` → the **orchestrator**, three hops up,
+  violates *its* `deny Exec` rule. candor's whole thesis, on a fleet.
+- **The honesty marker**: the un-curated `internal-billing` MCP server marks every agent that can
+  reach it `unresolved` with `unknownWhy: ["mcp:internal-billing"]` — nothing in the MCP ecosystem
+  declares tool capabilities today, and the report says so instead of guessing.
+  **The fix is [DECLARING.md](DECLARING.md)**: a `candorEffects` array on the server's `.mcp.json`
+  entry classifies it (declared-not-verified, `[]` = pure, a typo'd effect name voids the
+  declaration loudly) — project-side today, server-published as the ecosystem proposal.
+- **Ambient authority is visible**: the legacy `triage` agent (no `tools:` line = inherits
+  everything) reads `{Clock Exec Fs Ipc Net Unknown}` — the report makes the un-confined agent the
+  obvious outlier.
+
+**Combined mode** (validated): write the fleet report and a code engine's report under ONE
+prefix and candor-query treats them as one world — `where Fs` lists agents beside Rust functions.
+`--link <code-report-prefix>` goes further: Bash-holding agents edge to the code's entry points
+and inherit their *measured* effects, so `callers <code-fn>` climbs into the fleet and a
+`whatif` on a code function returns fleet-level policy verdicts (exit 1 across the boundary).
+
+See [DESIGN.md](DESIGN.md) for the full mapping, the tool table, and the honest non-transfers
+(the Bash capability cliff; grants are may-use upper bounds; dynamic tool surfacing → `Unknown`;
+spec 0.4 would want s/function/unit/).
+
+## What this is not (yet)
+
+Not a product: not wired to hooks/cron entry points, no runtime validation, the MCP capability table is tiny.
+The next real steps, if pursued: a `unitKind` note in candor-spec; an MCP capability-declaration
+convention (the `Unknown` killer); scanning a real fleet in the wild.

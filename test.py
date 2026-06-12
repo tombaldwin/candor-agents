@@ -224,5 +224,37 @@ check("--link: non-Bash agent does NOT inherit", "Db" not in entry(rep, "watcher
 check("--link: pseudo-node not re-emitted as a fleet row", entry(rep, "main") is None)
 
 print()
+
+
+# ── observe + drift (the product surface: declared vs observed) ───────────────────────────────────
+import subprocess, tempfile
+with tempfile.TemporaryDirectory() as td:
+    r = subprocess.run([sys.executable, "observe.py", "fixture", "--transcripts", "fixture/transcripts",
+                        "--out", os.path.join(td, "o")], capture_output=True, text=True)
+    obs = json.load(open(os.path.join(td, "o.fixture.Observed.json")))
+    by = {e["fn"]: e for e in obs["functions"]}
+    check("observe: session is the entry point", by.get("session", {}).get("entryPoint") is True)
+    check("observe: subagent transcripts aggregate by agentType",
+          "researcher" in by and "coder" in by)
+    check("observe: delegation edges resolve via toolUseId",
+          set(by["session"]["calls"]) >= {"researcher", "coder"})
+    check("observe: effects classify from observed tool_use (researcher Read/Grep -> Fs, no Net)",
+          by["researcher"]["direct"] == ["Fs"])
+    check("observe: an uncurated MCP tool reads Unknown with a named origin",
+          "Unknown" in by["coder"]["inferred"] and any("mcp-uncurated:mystery" in w for w in by["coder"].get("unknownWhy", [])))
+    check("observe: literal surfaces from tool inputs (Bash cmds, file paths)",
+          "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
+    check("observe: spec 0.4 envelope + hash + package",
+          obs["candor"]["spec"] == "0.4" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
+    check("observe: session effects include the transitive delegate surface",
+          set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
+r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", "fixture/transcripts"],
+                   capture_output=True, text=True)
+check("drift: granted-but-unused named per agent (researcher Net)",
+      "researcher: granted-but-unused {Net}" in r.stdout)
+check("drift: never-observed agents flagged", "mailer: declared" in r.stdout and "NEVER OBSERVED" in r.stdout)
+check("drift: uncurated-MCP observation surfaced", "mcp-uncurated:mystery" in r.stdout)
+check("drift: advisory by default (exit 0)", r.returncode == 0)
+
 print(f"test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
