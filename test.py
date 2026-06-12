@@ -256,5 +256,21 @@ check("drift: never-observed agents flagged", "mailer: declared" in r.stdout and
 check("drift: uncurated-MCP observation surfaced", "mcp-uncurated:mystery" in r.stdout)
 check("drift: advisory by default (exit 0)", r.returncode == 0)
 
+
+# anomaly fixture: an agent observed using an effect OUTSIDE its declared grants
+import json as _j
+_an = os.path.join(tempfile.mkdtemp(), "t")
+os.makedirs(os.path.join(_an, "s1", "subagents"))
+def _tu(i, name, inp): return {"type": "assistant", "message": {"role": "assistant",
+    "content": [{"type": "tool_use", "id": f"toolu_{i}", "name": name, "input": inp}]}}
+open(os.path.join(_an, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "researcher"})) + "\n")
+open(os.path.join(_an, "s1", "subagents", "agent-x.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "x"})) + "\n")
+_j.dump({"agentType": "researcher", "toolUseId": "toolu_s1"}, open(os.path.join(_an, "s1", "subagents", "agent-x.meta.json"), "w"))
+r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an], capture_output=True, text=True)
+check("drift: observed-outside-declaration is loud, advisory exit 0",
+      "OBSERVED-OUTSIDE-DECLARATION {Exec}" in r.stdout and r.returncode == 0)
+r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an, "--strict"], capture_output=True, text=True)
+check("drift --strict: an anomaly fails the build (exit 1)", r.returncode == 1)
+
 print(f"test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
