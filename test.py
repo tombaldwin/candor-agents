@@ -89,7 +89,7 @@ check("ambient agent is unresolved", e["unresolved"] is True)
 check("ambient agent carries Unknown + the big set",
       {"Exec", "Fs", "Net", "Clock", "Ipc", "Unknown"} <= set(e["inferred"]), f"got {e['inferred']}")
 check("ambient why names the cause", "ambient:tools-unrestricted" in e.get("unknownWhy", []))
-check("ambient reaches the uncurated MCP server", "mcp:billing" in e.get("unknownWhy", []))
+check("ambient reaches the uncurated MCP server", "mcp-uncurated:billing" in e.get("unknownWhy", []))
 
 # ── 4. MCP: curated vs Unknown ────────────────────────────────────────────────────────────────────
 rep, _ = scan({
@@ -100,7 +100,7 @@ check("curated MCP classifies (gmail → Net+Ipc), no Unknown",
       entry(rep, "m")["inferred"] == ["Fs", "Ipc", "Net"] and not entry(rep, "m")["unresolved"],
       f"got {entry(rep, 'm')}")
 eu = entry(rep, "u")
-check("uncurated MCP → Unknown + unknownWhy", eu["unresolved"] and eu.get("unknownWhy") == ["mcp:billing"],
+check("uncurated MCP → Unknown + unknownWhy", eu["unresolved"] and eu.get("unknownWhy") == ["mcp-uncurated:billing"],
       f"got {eu}")
 
 # legacy/alias builtin names declared by real fleets (the public-fleet sweep curation gaps)
@@ -118,13 +118,13 @@ check("legacy Task tool counts for delegation (named narrowing)",
 ea = entry(rep, "amb")
 check("'tools: All tools' is ambient authority, not a tool named 'All tools'",
       ea["unresolved"] and "ambient:tools-unrestricted" in ea.get("unknownWhy", [])
-      and not any(w == "tool:All tools" for w in ea.get("unknownWhy", [])), f"got {ea}")
+      and not any(w == "tool-unknown:All tools" for w in ea.get("unknownWhy", [])), f"got {ea}")
 
 # an unheard-of builtin tool is Unknown, never silently pure
 rep, _ = scan({"x.md": agent("x", "FrobnicateDisk")})
 ex = entry(rep, "x")
 check("unknown tool name → Unknown (never silent-pure)",
-      ex and ex["unresolved"] and ex.get("unknownWhy") == ["tool:FrobnicateDisk"], f"got {ex}")
+      ex and ex["unresolved"] and ex.get("unknownWhy") == ["tool-unknown:FrobnicateDisk"], f"got {ex}")
 
 # ── 4b. declared MCP capabilities (the Unknown killer) ───────────────────────────────────────────
 def scan_decl(files, mcp_entries):
