@@ -67,6 +67,14 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   disclosed on the receipt but **not** subtracted (the tool stays usable; Exec survives the cliff).
   `allow`/`ask` don't expand capability and are ignored. Hooks bypass permissions, so a `deny Bash`
   never strips the `hooks` unit's Exec.
+- **Scope: the PROJECT `.claude/` only.** The surface is read from the project's
+  `.claude/settings.json` + `.claude/settings.local.json`, `.claude/agents|commands|skills`, and
+  `.mcp.json` — *not* the analyzing user's global `~/.claude/settings.json` (nor enterprise managed
+  settings), which vary per machine and would make the report non-reproducible. So a hook or
+  `permissions.deny` declared **user-globally** is out of scope: a global `PostToolUse` hook that runs
+  `Exec` won't appear in the `hooks` unit (a blind spot in the under-report direction — the report is
+  the fleet *as committed*, not as it runs on one machine). If you need the effective runtime surface,
+  scan a tree with the global settings merged into its `.claude/`.
 - **`guard` is the dual — may → ENFORCED** (spec §6.2 ⟨0.5⟩): `candor-agents guard <policy>` compiles
   a `deny <Effect>` rule into the `permissions.deny` the harness enforces *natively*, so the boundary
   holds at runtime, not just in CI. scan READS `permissions.deny` to subtract; guard WRITES it. It is
@@ -84,8 +92,8 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   each agent whose granted tools match the hook's `matcher` **edges to `hooks`** and inherits its
   Exec — `forbid reviewer -> Exec` catches a hook that execs on the reviewer's edits. Lifecycle
   hooks (`Stop`/`SessionStart`/…) edge from the session root only. A project with hooks but no
-  agents still scans. A hook type the scanner doesn't know reads Unknown. User-level (`~/.claude`)
-  hooks are out of scope: the report describes the project.
+  agents still scans. A hook type the scanner doesn't know reads Unknown. (User-global hooks are out
+  of scope — see the scope note above.)
 - **Scheduled tasks are autonomous entry points**: a *durable* cron job (`CronCreate durable:true`)
   persists to `.claude/scheduled_tasks.json` and fires on its own schedule with no human or caller.
   Each is a `cron:<id>` unit (`entryPoint: true`, `loc` carries the cron expression) that drives a
