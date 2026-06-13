@@ -589,6 +589,11 @@ rep, r = build(skills={"fetcher": "---\nname: fetcher\nallowed-tools: WebFetch\n
 e = entry(rep, "skill:fetcher")
 check("a skill becomes a unit carrying its allowed-tools effects",
       e is not None and e["unitKind"] == "skill" and e["inferred"] == ["Net"], json.dumps(e))
+# a skill's Bash specifier head refines the Exec cliff too — SAME as a command (was a gap)
+rep, r = build(skills={"runner": "---\nname: runner\nallowed-tools: Bash(curl:*)\n---\nRun.\n"})
+e = entry(rep, "skill:runner")
+check("a skill's Bash(curl:*) head refines the cliff: Exec + Net (consistent with commands)",
+      e is not None and set(e["inferred"]) == {"Exec", "Net"} and "curl" in e.get("cmds", []), json.dumps(e))
 
 # permissions.deny applies to commands too
 rep, r = build(commands={"f.md": "---\nallowed-tools: WebFetch\n---\nFetch.\n"},
