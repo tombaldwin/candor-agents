@@ -72,6 +72,30 @@ rep, cg = scan({
 })
 check("start-of-body name still narrows", cg["boss"] == ["worker"], f"got {cg['boss']}")
 
+# PUNCTUATION-adjacent names: a delegate referenced as `name:`, `(name)`, or `name/x` must still be
+# narrowed-to. The earlier delimiter class ([`'"\s.,]) missed these, and since narrowing keeps only
+# matched names, the punctuation-adjacent delegate was silently DROPPED — its effects didn't propagate.
+rep, cg = scan({
+    "boss.md": agent("boss", "Agent", body="Order: security-auditor: audits, then (reviewer) reviews, finally helper."),
+    "security-auditor.md": agent("security-auditor", "WebFetch"),  # Net — followed by ':'
+    "reviewer.md": agent("reviewer", "Bash"),                       # Exec — wrapped in '()'
+    "helper.md": agent("helper", "Read"),                           # Fs — trailing '.'
+    "ignored.md": agent("ignored", "WebSearch"),                    # not mentioned → excluded
+})
+check("punctuation-adjacent names all narrow (`name:`, `(name)`, `name.`)",
+      cg["boss"] == ["helper", "reviewer", "security-auditor"], f"got {cg['boss']}")
+check("boss inherits ALL three punctuation-adjacent delegates' effects",
+      entry(rep, "boss")["inferred"] == ["Exec", "Fs", "Net"], f"got {entry(rep, 'boss')['inferred']}")
+
+# a name embedded in a LONGER name is NOT a mention (boundary holds the precise direction too)
+rep, cg = scan({
+    "boss.md": agent("boss", "Agent", body="Only ever use code-reviewer."),
+    "code-reviewer.md": agent("code-reviewer", "Bash"),
+    "reviewer.md": agent("reviewer", "WebFetch"),  # substring of code-reviewer — must NOT be edged
+})
+check("a name embedded in a longer agent name is not a false mention",
+      cg["boss"] == ["code-reviewer"], f"got {cg['boss']}")
+
 # ── 2. CHA fallback for unnamed delegation ────────────────────────────────────────────────────────
 rep, cg = scan({
     "boss.md": agent("boss", "Agent, Read", body="Delegate as needed."),
