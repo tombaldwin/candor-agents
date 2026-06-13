@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """candor-agents — effect analysis for agent fleets (candor-spec 0.4).
 
-  candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: .claude/agents/*.md + .mcp.json
-  candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: the session transcripts
+  candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: what the fleet MAY do
+  candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: what it DID (transcripts)
   candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege advice)
+  candor-agents guard   <policy-file> [<project-dir>]    # ENFORCED: compile a deny-policy to runtime
 
 scan answers "what MAY this fleet do"; observe answers "what DID it do"; drift is the gap between
 them: a grant no session ever used is a least-privilege trim candidate (the AS-EFF-002 analog), an
 observed effect outside the declarations is an anomaly worth reading (a scan gap, an undeclared
-agent type, or transcript noise — --strict exits 1 on it). Reports are candor-spec §2 envelopes,
-so the unmodified candor-query binary and the §6.2 policy grammar work over both modes.
+agent type, or transcript noise — --strict exits 1 on it). guard closes the loop from may to
+ENFORCED: it compiles a `deny <Effect>` policy into the settings.json permissions.deny the harness
+enforces natively — the dual of scan, which READS permissions.deny to subtract effects. Reports are
+candor-spec §2 envelopes, so the unmodified candor-query binary and the §6.2 policy grammar work over both modes.
 """
 import json
 import os
@@ -105,6 +108,11 @@ def main():
         return _run("scan.py", rest)
     if cmd == "observe":
         return _run("observe.py", rest)
+    if cmd == "guard":
+        # may -> ENFORCED: compile a fleet deny-policy into the settings.json permissions.deny the
+        # harness enforces natively (the dual of scan, which READS permissions.deny to subtract).
+        import guard
+        return guard.main(rest)
     if cmd == "drift":
         # Parse flag/value pairs explicitly so an unknown flag FAILS (never silently runs non-strict
         # or against the wrong transcripts), a trailing value-less flag errors instead of IndexError,
