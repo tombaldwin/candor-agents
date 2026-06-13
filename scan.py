@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.9"
+VERSION = "agents-0.4.10"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -565,9 +565,34 @@ def main():
             skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in _raw_tools(meta)],
                                     "file": os.path.relpath(sm, root)}
 
-    if not agents and not has_hooks and not commands and not skills:
-        print(f"candor-agents: no agent definitions under {adir}, no commands/skills, and no hooks "
-              f"— nothing to analyze.", file=sys.stderr)
+    # ── scheduled tasks: autonomous entry points ──────────────────────────────────────────────────
+    # A DURABLE cron job (CronCreate `durable: true`) persists to .claude/scheduled_tasks.json and
+    # fires on its own wall-clock schedule — no human, no caller. Each enqueues a prompt into a fresh
+    # session, so its reach is the WHOLE session's capability (it can drive any agent/command/skill):
+    # a `cron:<id>` entry-point unit that edges to the session root. Non-durable cron is in-memory only
+    # (never on disk) and correctly invisible to a static scan — the report describes what's DECLARED
+    # to persist. This is the fleet's autonomous-trigger surface: `deny Net cron:x` gates it.
+    crons = {}  # unit name -> {cron, prompt}
+    spath = os.path.join(root, ".claude", "scheduled_tasks.json")
+    if os.path.exists(spath):
+        try:
+            sdata = json.load(open(spath))
+        except Exception as e:
+            print(f"candor-agents: unreadable .claude/scheduled_tasks.json ({e}) — scheduled tasks UNKNOWN", file=sys.stderr)
+            sdata = None
+        # Tolerate a top-level list OR an object wrapping the list under a conventional key.
+        tasks = (sdata if isinstance(sdata, list)
+                 else next((v for v in sdata.values() if isinstance(v, list)), []) if isinstance(sdata, dict)
+                 else [])
+        for i, t in enumerate(tasks):
+            if not isinstance(t, dict):
+                continue
+            tid = str(t.get("id") or t.get("name") or i)
+            crons[f"cron:{tid}"] = {"cron": str(t.get("cron", "")), "prompt": str(t.get("prompt", ""))}
+
+    if not agents and not has_hooks and not commands and not skills and not crons:
+        print(f"candor-agents: no agent definitions under {adir}, no commands/skills, no hooks, and no "
+              f"scheduled tasks — nothing to analyze.", file=sys.stderr)
         return 2
     if denied_tools or denied_servers or scoped_denies:
         sub = sorted(denied_tools | {f"mcp:{s}" for s in denied_servers})
@@ -609,6 +634,9 @@ def main():
     # spawn every agent and invoke every command/skill. Named `session` (not `main`): in combined
     # mode (fleet + code reports under ONE prefix) the crate's `fn main` would collide with it.
     calls[ROOT] = sorted(names + list(commands) + list(skills) + ([HOOKS] if has_hooks else []))
+    # A scheduled task drives a full session — it edges to the root and inherits the whole fleet's reach.
+    for u in crons:
+        calls[u] = [ROOT]
     if has_hooks:
         calls[HOOKS] = []
         # A TOOL-event hook (PreToolUse/PostToolUse) runs its command on the matching tool use of
@@ -680,6 +708,10 @@ def main():
         direct[HOOKS] = {"Exec"} | head_effs | ({"Unknown"} if hook_why else set())
         fs_detail[HOOKS], why_map[HOOKS] = set(), set(hook_why)
         unresolved_direct[HOOKS] = bool(hook_why)
+    # A scheduled task has no DIRECT effect of its own — it just triggers; its reach is the session's,
+    # inherited via the cron→root edge in the fixpoint below.
+    for u in crons:
+        direct[u], fs_detail[u], why_map[u], unresolved_direct[u] = set(), set(), set(), False
 
     # ── --link: the Exec-boundary refinement ─────────────────────────────────────────────────
     # Edge every Bash-holding (or ambient) agent to each entryPoint of the linked CODE report, and
@@ -737,6 +769,8 @@ def main():
             kind, loc = "command", commands[n]["file"]
         elif n in skills:
             kind, loc = "skill", skills[n]["file"]
+        elif n in crons:
+            kind, loc = "cron", f".claude/scheduled_tasks.json: {crons[n]['cron'] or '(no schedule)'}"
         elif n == HOOKS:
             kind, loc = "hooks", f".claude/settings*.json hooks: {', '.join(hook_events) or '(unreadable)'}"
         else:
@@ -759,8 +793,8 @@ def main():
             entry["cmds"] = sorted(hook_cmds)
         elif kind == "command" and commands[n]["heads"] and "Bash" not in denied_tools:
             entry["cmds"] = sorted(commands[n]["heads"])
-        if kind == "session":
-            entry["entryPoint"] = True
+        if kind in ("session", "cron"):
+            entry["entryPoint"] = True  # autonomous roots: the session, and each scheduled task
         # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is
         # chainable like any sibling (`<fleet>#<agent>`, the pkg#LocalName shape).
         entry["hash"] = f"{fleet}#{n}"

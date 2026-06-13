@@ -13,7 +13,7 @@ pipx install git+https://github.com/tombaldwin/candor-agents   # recommended —
 #  venv or pipx, not a shared environment where those generic names could clash with other packages)
 
 candor-agents scan    <project>    # DECLARED: what the fleet MAY do (agents, .mcp.json, settings,
-                                   #           permissions, slash-commands, skills)
+                                   #           permissions, slash-commands, skills, cron)
 candor-agents observe <project>    # OBSERVED: what it actually DID (the session transcripts)
 candor-agents drift   <project>    # the gap: least-privilege advice + anomalies
 ```
@@ -35,7 +35,7 @@ candor-rust answers `show` / `where` / `callers` / `map` / `whatif` over either 
 
 ```sh
 bash run.sh        # the declared-mode demo — STANDALONE: needs only git + stable cargo
-python3 test.py    # 108 behavioral checks, incl. the unmodified-candor-query integration lane
+python3 test.py    # 114 behavioral checks, incl. the unmodified-candor-query integration lane
 python3 fuzz.py    # soundness fuzzer (default 40 seeds), teeth verified per mechanism
 ```
 
@@ -84,6 +84,6 @@ spec 0.4 would want s/function/unit/).
 
 ## What this is not (yet)
 
-Not a product: no runtime validation, the MCP capability table is small, and cron entry points
-aren't modelled yet. The next real steps, if pursued: a `unitKind` note in candor-spec; an MCP
-capability-declaration convention (the `Unknown` killer); scanning a real fleet in the wild.
+Not a product: no runtime validation, and the MCP capability table is small. The next real steps,
+if pursued: an MCP capability-declaration convention (the `Unknown` killer); scanning more real
+fleets in the wild.
