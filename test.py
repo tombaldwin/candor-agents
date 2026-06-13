@@ -72,24 +72,44 @@ rep, cg = scan({
 })
 check("start-of-body name still narrows", cg["boss"] == ["worker"], f"got {cg['boss']}")
 
-# PUNCTUATION-adjacent names: a delegate referenced as `name:`, `(name)`, or `name/x` must still be
-# narrowed-to. The earlier delimiter class ([`'"\s.,]) missed these, and since narrowing keeps only
-# matched names, the punctuation-adjacent delegate was silently DROPPED — its effects didn't propagate.
+# PUNCTUATION-adjacent names: a delegate referenced as `name:` or `(name)` must still be narrowed-to
+# (the earlier delimiter class missed these). But `.` and `/` are NAME-CONTINUATION chars — a name in a
+# PATH/identifier is NOT a mention (else `src/build.rs` fabricates a `build` delegation edge — review find).
 rep, cg = scan({
-    "boss.md": agent("boss", "Agent", body="Order: security-auditor: audits, then (reviewer) reviews, finally helper."),
+    "boss.md": agent("boss", "Agent", body="First security-auditor: audits, then (reviewer) reviews. Use helper here."),
     "security-auditor.md": agent("security-auditor", "WebFetch"),  # Net — followed by ':'
     "reviewer.md": agent("reviewer", "Bash"),                       # Exec — wrapped in '()'
-    "helper.md": agent("helper", "Read"),                           # Fs — trailing '.'
+    "helper.md": agent("helper", "Read"),                           # Fs — space-delimited
     "ignored.md": agent("ignored", "WebSearch"),                    # not mentioned → excluded
 })
-check("punctuation-adjacent names all narrow (`name:`, `(name)`, `name.`)",
+check("punctuation-adjacent names narrow (`name:`, `(name)`, space)",
       cg["boss"] == ["helper", "reviewer", "security-auditor"], f"got {cg['boss']}")
 check("boss inherits ALL three punctuation-adjacent delegates' effects",
       entry(rep, "boss")["inferred"] == ["Exec", "Fs", "Net"], f"got {entry(rep, 'boss')['inferred']}")
 
+# FABRICATION guard: a common-word agent name appearing in a PATH or identifier in prose is NOT a
+# delegation mention (`.`/`/` are name-continuation chars) — else a false edge fabricates inherited effects.
+rep, cg = scan({
+    "boss.md": agent("boss", "Agent, Read", body="Edit src/build.rs and build.gradle, then read data.json in data/."),
+    "build.md": agent("build", "Bash"),       # Exec — appears only as src/build.rs and build.gradle
+    "data.md": agent("data", "WebFetch"),     # Net — appears only as data.json and data/
+})
+check("a name in a path/identifier (src/build.rs, data.json) is NOT a false delegation mention",
+      cg["boss"] == ["build", "data"],  # no NAMED mention → falls to CHA (all), not a fabricated narrow
+      f"got {cg['boss']}")
+# the decisive check: with a REAL named mention of one but only path-fragments of the other, only the
+# real one narrows (the path fragment must not fabricate an edge).
+rep, cg = scan({
+    "boss.md": agent("boss", "Agent", body="Always delegate to reviewer for review work; the file lives at src/build.rs there."),
+    "reviewer.md": agent("reviewer", "WebFetch"),  # Net — real (space-delimited) mention
+    "build.md": agent("build", "Bash"),            # Exec — only as src/build.rs → must NOT be edged
+})
+check("path-fragment name does not fabricate an edge when another name really narrows",
+      cg["boss"] == ["reviewer"] and "Exec" not in entry(rep, "boss")["inferred"], f"got {cg['boss']}")
+
 # a name embedded in a LONGER name is NOT a mention (boundary holds the precise direction too)
 rep, cg = scan({
-    "boss.md": agent("boss", "Agent", body="Only ever use code-reviewer."),
+    "boss.md": agent("boss", "Agent", body="Only ever use code-reviewer here."),
     "code-reviewer.md": agent("code-reviewer", "Bash"),
     "reviewer.md": agent("reviewer", "WebFetch"),  # substring of code-reviewer — must NOT be edged
 })
