@@ -135,7 +135,10 @@ def tools_match_matcher(tools, matcher):
 # (`timeout 5 cmd`) and `nice`/`xargs` (flag/duration before the command) are deliberately ABSENT —
 # skipping them would mint a bogus head from the duration or drop nothing useful.
 _KW_SKIP = {"if", "then", "else", "elif", "do", "while", "until", "time", "exec", "!", "{", "}",
-            "sudo", "doas", "command", "builtin", "env", "nohup", "setsid"}
+            "sudo", "doas", "command", "env", "nohup", "setsid"}
+            # NOTE: `builtin` is NOT a transparent wrapper — it runs ONLY shell builtins, so `builtin curl`
+            # never reaches the network; skipping it would FABRICATE curl's Net (review find). `command`
+            # IS correct (it runs external binaries, bypassing functions/aliases).
 _KW_DROP = {"for", "case", "select", "function", "in", "fi", "done", "esac"}
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
@@ -275,6 +278,19 @@ def bash_cmds(command):
         if name not in _KW_SKIP and name not in _KW_DROP and _CMD_NAME.match(name):
             heads.add(name)
     return heads
+
+
+def read_md(path, unreadable):
+    """Read a fleet `.md` file, returning its text or None on a permission/encoding error — the error
+    is COLLECTED in `unreadable` and disclosed, never raised. A bare `open().read()` let one poison
+    file (chmod 000, non-UTF-8) crash the whole scan with a traceback → no report written → the gate
+    silently does not run. The JSON readers (.mcp.json/settings.json) already degrade-and-warn; the
+    markdown readers must too (found by adversarial review)."""
+    try:
+        return open(path, encoding="utf-8").read()
+    except (OSError, UnicodeDecodeError) as e:
+        unreadable.append(f"{os.path.basename(path)} ({type(e).__name__})")
+        return None
 
 
 def parse_frontmatter(text):
@@ -437,13 +453,17 @@ def main():
 
     # Agent definitions.
     agents = {}  # name -> {tools: list|None, body, desc}
+    unreadable = []  # .md files that couldn't be read (permission/encoding) — disclosed, never fatal
     adir = os.path.join(root, ".claude", "agents")
     if os.path.isdir(adir):
         skipped = []
         for f in sorted(os.listdir(adir)):
             if not f.endswith(".md"):
                 continue
-            meta, body = parse_frontmatter(open(os.path.join(adir, f)).read())
+            text = read_md(os.path.join(adir, f), unreadable)
+            if text is None:  # permission/encoding error — DISCLOSED, not a crash (it would kill the gate)
+                continue
+            meta, body = parse_frontmatter(text)
             if not meta:
                 # no frontmatter at all (a README, notes…): Claude Code won't load it — counting
                 # it would FABRICATE an ambient-authority unit the runtime doesn't have
@@ -610,7 +630,10 @@ def main():
                 if not f.endswith(".md"):
                     continue
                 rel = os.path.relpath(os.path.join(dp, f), cdir)[:-3].replace(os.sep, ":")
-                meta, body = parse_frontmatter(open(os.path.join(dp, f)).read())
+                text = read_md(os.path.join(dp, f), unreadable)
+                if text is None:
+                    continue
+                meta, body = parse_frontmatter(text)
                 raw = _raw_tools(meta)
                 commands[f"command:{rel}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
                                               "file": os.path.relpath(os.path.join(dp, f), root),
@@ -621,7 +644,10 @@ def main():
             sm = os.path.join(sdir, d, "SKILL.md")
             if not os.path.isfile(sm):
                 continue
-            meta, body = parse_frontmatter(open(sm).read())
+            text = read_md(sm, unreadable)
+            if text is None:
+                continue
+            meta, body = parse_frontmatter(text)
             raw = _raw_tools(meta)
             skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
                                     "file": os.path.relpath(sm, root), "heads": _heads(raw, body)}
@@ -680,14 +706,16 @@ def main():
     calls = {}
     # Precompile ONE name-boundary regex per agent name (was a fresh compile per agent×name pair — a
     # quadratic-with-compile blow-up: 600 agents took 11s; precompiled, the compile cost is O(n) and
-    # the per-pair search is cheap). The boundary is "not flanked by a name-CONTINUATION char": agent
-    # names are `[A-Za-z0-9._+-]`, so a mention is a real one when the chars around it can't be part of
-    # the same name. An earlier explicit-delimiter class ([`'"\s.,]) MISSED a name followed by `:`,
-    # wrapped in `()`, or split by `/` — and since narrowing keeps only matched names, a punctuation-
-    # adjacent delegate was silently DROPPED (an unsound under-report of a real edge). `.` is treated
-    # as a delimiter (a trailing period is prose punctuation), so the only residual ambiguity — a name
-    # literally containing `.` — over-reports a harmless extra edge rather than dropping a real one.
-    _NC = r"[A-Za-z0-9_+-]"  # name-continuation chars (dot excluded: prose punctuation, not a boundary break)
+    # the per-pair search is cheap). The boundary is "not flanked by a name-CONTINUATION char". An
+    # earlier explicit-delimiter class ([`'"\s.,]) MISSED a name followed by `:`, wrapped in `()` — a
+    # real delegate silently DROPPED. But excluding `.`/`/` from the continuation set then FABRICATED
+    # edges: a common-word agent name in a PATH or identifier (`src/build.rs`, `build.gradle`) matched
+    # agent `build` → a false delegation edge → fabricated inherited effects (adversarial review find).
+    # So `.` and `/` ARE name-continuation chars: a name flanked by them is a path/identifier fragment,
+    # not a mention. Cost: a name at a SENTENCE END (`use helper.`) no longer matches — an UNDER-report
+    # (the safe direction: it falls to CHA or is dropped, never fabricates a path edge). `:`/`(`/`)` etc.
+    # still delimit, so the punctuation-adjacent delegates the earlier fix recovered still match.
+    _NC = r"[A-Za-z0-9_./+-]"  # name-continuation chars (incl. . and / — path/identifier fragments aren't mentions)
     name_re = {n: re.compile(rf"(?<!{_NC}){re.escape(n)}(?!{_NC})") for n in names}
     for name, a in agents.items():
         lt = a["lt"]  # deny-filtered: a denied `Agent`/`Task` grant can no longer delegate
@@ -885,6 +913,9 @@ def main():
     json.dump(report, open(rp, "w"), indent=1)
     json.dump({n: calls[n] for n in sorted(calls)}, open(cp, "w"), indent=1)
     print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → {rp} (+ callgraph sidecar)")
+    if unreadable:
+        print(f"candor-agents: {len(unreadable)} .md file(s) could not be read — NOT analyzed (permission/"
+              f"encoding): {', '.join(unreadable[:5])}{'…' if len(unreadable) > 5 else ''}", file=sys.stderr)
     if has_hooks:
         print(f"candor-agents: hooks run AUTOMATICALLY on tool events — {', '.join(hook_events) or 'unreadable settings'}"
               f"{'; cmds: ' + ', '.join(sorted(hook_cmds)) if hook_cmds else ''}", file=sys.stderr)
