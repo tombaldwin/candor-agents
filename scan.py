@@ -65,10 +65,12 @@ MCP_TABLE = {
 # are deliberately ABSENT — they stay the cliff and keep their --link edge.
 CANDOR_HEADS = ("candor", "candor-run.sh", "candor-scan", "candor-query", "candor-java",
                 "candor-classify", "candor-report", "cargo-candor")
+# Only UNAMBIGUOUS single-effect tools belong here. A multi-modal head (`git status` is local vs
+# `git push` Net; `rsync` local vs remote) would FABRICATE the effect for its common case — the
+# under-report rule forbids it, so those heads keep the bare cliff.
 COMMAND_HEAD = {
-    "curl": {"Net"}, "wget": {"Net"}, "http": {"Net"}, "ssh": {"Net"}, "scp": {"Net"}, "rsync": {"Net"},
+    "curl": {"Net"}, "wget": {"Net"}, "http": {"Net"}, "ssh": {"Net"}, "scp": {"Net"},
     "psql": {"Db"}, "mysql": {"Db"}, "sqlite3": {"Db"}, "mongosh": {"Db"}, "redis-cli": {"Db"},
-    "git": {"Net", "Fs"},  # fetch/push reach the network; it also writes the worktree
 }
 COMMAND_HEAD.update({h: {"Fs", "Env"} for h in CANDOR_HEADS})  # §7-item-12: analyzers do Fs/Env only
 # `tools:` absent => the agent inherits EVERYTHING (Claude Code's default): ambient authority.
