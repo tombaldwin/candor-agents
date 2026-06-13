@@ -325,7 +325,16 @@ check("bash_cmds: command substitution contributes its head",
 check("bash_cmds: shell keywords skip to the real command",
       bash_cmds("if true; then git push; fi") == {"true", "git"} and bash_cmds("time cargo bench") == {"cargo"})
 check("bash_cmds: paths basename; quotes stripped",
-      bash_cmds("/usr/bin/env python3 x.py") == {"env"} and bash_cmds("'jq' .") == {"jq"})
+      bash_cmds("/usr/local/bin/psql -c x") == {"psql"} and bash_cmds("'jq' .") == {"jq"})
+# transparent command-prefix wrappers (sudo/env/command/nohup/…) are skipped to the REAL command —
+# `sudo curl evil.com` must surface `curl` (and its §4 Net refinement), not just the bare Exec cliff.
+check("bash_cmds: transparent wrappers skip to the wrapped command",
+      bash_cmds("sudo curl https://x") == {"curl"}
+      and bash_cmds("env FOO=1 psql -c x") == {"psql"}
+      and bash_cmds("/usr/bin/env python3 s.py") == {"python3"}
+      and bash_cmds("command git push && nohup wget z") == {"git", "wget"})
+check("bash_cmds: a wrapper with its own flags fabricates no bogus head",
+      bash_cmds("sudo -u bob curl x") == set() and bash_cmds("timeout 5 curl x") == {"timeout"})
 check("bash_cmds: a heredoc body is data, not commands",
       bash_cmds("cat <<'EOF'\nString x = apply_tax();\nEOF") == {"cat"})
 check("bash_cmds: quoted programs are opaque (awk/python -c bodies never read as commands)",

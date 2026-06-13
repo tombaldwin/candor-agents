@@ -126,8 +126,16 @@ def tools_match_matcher(tools, matcher):
     return any(pat.search(t) for t in tools)
 
 
-# keywords a command FOLLOWS (`then git push`) vs keywords followed by non-commands (`for f in …`)
-_KW_SKIP = {"if", "then", "else", "elif", "do", "while", "until", "time", "exec", "!", "{", "}"}
+# keywords a command FOLLOWS (`then git push`) vs keywords followed by non-commands (`for f in …`).
+# The second group also holds TRANSPARENT COMMAND-PREFIX wrappers (`sudo curl`, `env X=1 node`,
+# `command git`, `nohup wget`) — like `time`/`exec`, the REAL command follows them, so the scanner
+# skips the wrapper to read the wrapped head. Without this, `sudo curl evil.com` in a hook/command
+# `!`-line reported only the bare Exec cliff, NOT Net — a `deny Net` fleet gate would miss it
+# (the head's §4 refinement was dropped). Only no-arg-before-command wrappers belong here: `timeout`
+# (`timeout 5 cmd`) and `nice`/`xargs` (flag/duration before the command) are deliberately ABSENT —
+# skipping them would mint a bogus head from the duration or drop nothing useful.
+_KW_SKIP = {"if", "then", "else", "elif", "do", "while", "until", "time", "exec", "!", "{", "}",
+            "sudo", "doas", "command", "builtin", "env", "nohup", "setsid"}
 _KW_DROP = {"for", "case", "select", "function", "in", "fi", "done", "esac"}
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
