@@ -317,6 +317,20 @@ with tempfile.TemporaryDirectory() as td:
           entry(rep, "README") is None and "skipped 1 .md" in r.stderr and "README.md" in r.stderr)
     check("scan: the real agent beside the readme still scans", entry(rep, "real") is not None)
 
+# a MALFORMED-YAML frontmatter (a present-but-broken block) is DISCLOSED + not analyzed — distinct
+# from a frontmatter-less file, and never SILENTLY dropped (that would under-report a real agent).
+with tempfile.TemporaryDirectory() as td:
+    adir = os.path.join(td, ".claude", "agents")
+    os.makedirs(adir)
+    open(os.path.join(adir, "broken.md"), "w").write('---\nname: broken\ntools: [Read, Bash\ndesc: "unterminated\n---\nbody\n')
+    open(os.path.join(adir, "ok.md"), "w").write(agent("ok", "Read"))
+    out = os.path.join(td, "r")
+    r = subprocess.run([sys.executable, SCAN, td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    rep = json.load(open(f"{out}.t.Fleet.json"))
+    check("scan: a MALFORMED-YAML agent is disclosed loudly and not analyzed (not silently dropped)",
+          entry(rep, "broken") is None and "MALFORMED YAML" in r.stderr and "broken.md" in r.stderr, r.stderr)
+    check("scan: a valid agent beside a malformed one still scans", entry(rep, "ok") is not None)
+
 print()
 
 
