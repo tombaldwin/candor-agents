@@ -580,6 +580,59 @@ rep, r = build(commands={"f.md": "---\nallowed-tools: WebFetch\n---\nFetch.\n"},
 check("permissions.deny applies to a command (WebFetch-only command → pure → omitted)",
       entry(rep, "command:f") is None, json.dumps(rep["functions"]))
 
+# ══ Exec-cliff refinement: known sub-command heads classify (spec §4 ⟨0.5⟩) ═══════════════════════
+# a known head ADDS its effect and keeps Exec (a subprocess was still spawned)
+rep, r = build(commands={"net.md": "---\nallowed-tools: Bash(curl:*)\n---\nFetch:\n!`curl https://x`\n"})
+e = entry(rep, "command:net")
+check("a curl head refines the cliff: Exec + Net (Exec not dropped)",
+      e is not None and set(e["inferred"]) == {"Exec", "Net"}, json.dumps(e))
+
+# the candor self-case is spec-SUPPLIED (§7 item 12: analyzers do Fs/Env only); head from the Bash specifier
+rep, r = build(commands={"c.md": "---\nallowed-tools: Bash(*candor-run.sh*)\n---\nRun candor over the code.\n"})
+e = entry(rep, "command:c")
+check("a candor-engine head classifies to Fs/Env (§7.12-supplied), head read from the Bash specifier",
+      e is not None and set(e["inferred"]) == {"Exec", "Fs", "Env"} and "candor-run.sh" in e.get("cmds", []),
+      json.dumps(e))
+
+# an UNKNOWN head keeps the bare cliff — never fabricate an effect
+rep, r = build(commands={"u.md": "---\nallowed-tools: Bash(mystery-tool:*)\n---\nRun it.\n"})
+e = entry(rep, "command:u")
+check("an unknown head keeps the bare Exec cliff (no fabricated effect)",
+      e is not None and e["inferred"] == ["Exec"], json.dumps(e))
+
+# a hook command's head refines the hooks unit too
+rep, r = build({"a.md": agent("a", "Read")},
+               settings={"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "curl https://x"}]}]}})
+hk = entry(rep, "hooks")
+check("a hook running curl refines the hooks unit: Exec + Net",
+      hk is not None and "Net" in hk["inferred"] and "Exec" in hk["inferred"], json.dumps(hk))
+
+# --link transitive bound: a command that only runs candor doesn't perform the analysed code's effects
+def build_linked(cmds, code_effects):
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, ".claude", "agents"))
+    for rel, c in cmds.items():
+        p = os.path.join(d, ".claude", "commands", rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").write(c)
+    json.dump({"candor": {"version": "x", "toolchain": "t", "spec": "0.4"}, "package": "code",
+               "functions": [{"fn": "main", "inferred": code_effects, "direct": code_effects,
+                              "entryPoint": True, "calls": [], "hash": "code#main"}]},
+              open(os.path.join(d, "code.code.Main.json"), "w"))
+    out = os.path.join(d, "r")
+    rr = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t", "--link", os.path.join(d, "code")],
+                        capture_output=True, text=True)
+    return (json.load(open(f"{out}.t.Fleet.json")) if rr.returncode == 0 else None), rr
+
+rep, r = build_linked({"ca.md": "---\nallowed-tools: Bash(*candor-run.sh*)\n---\nRun candor.\n",   # only candor
+                       "app.md": "---\nallowed-tools: Bash(myapp:*)\n---\nRun the app.\n"},        # unknown head
+                      ["Net", "Db"])
+ca, app = entry(rep, "command:ca"), entry(rep, "command:app")
+check("--link: a command that only runs candor does NOT inherit the code's Net/Db (§4 transitive bound)",
+      ca is not None and "Net" not in ca["inferred"] and "Db" not in ca["inferred"], json.dumps(ca))
+check("--link: a command with an unknown head DOES inherit the code's effects (sound cliff kept)",
+      app is not None and "Net" in app["inferred"], json.dumps(app))
+
 print()
 
 

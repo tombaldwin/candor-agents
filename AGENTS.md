@@ -43,9 +43,14 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 - **Grants are MAY-use upper bounds**: a declared effect says the agent *can* reach it, never that
   it did — that is `observe`'s job.
 - **The Bash cliff**: `Bash` classifies as `Exec`, but a shell can do anything — treat any
-  Bash-holding agent as having the capability floor, not a tight bound. Combined mode
-  (`scan --link <code-report-prefix>`) refines this: Bash-holding agents edge into the linked code
-  report's entry points and inherit their *measured* effects.
+  Bash-holding agent as having the capability floor, not a tight bound. Two refinements (spec §4
+  ⟨0.5⟩): (1) when a **literal sub-command head** is known — a `Bash(curl:*)` specifier or a `!`curl``
+  line — its effect is added (`curl`→`Net`, `candor*`→`Fs`/`Env`, the latter guaranteed by the
+  analyzer self-boundary); `Exec` stays (a subprocess still spawned) and an unknown head keeps the
+  bare cliff. (2) Combined mode (`scan --link <code-report-prefix>`) edges Bash-holding agents into
+  the linked code report's entry points to inherit their *measured* effects — but a command whose
+  heads are all known external tools is exempt (running candor *over* the code reads `Fs`, it doesn't
+  perform the code's `Net`/`Db`).
 - An **uncurated MCP server** or unknown tool reads `Unknown` with a named origin in `unknownWhy`
   (`mcp-uncurated:<server>`, `tool-unknown:<name>`) — never silence. A `.mcp.json` server can
   declare its effects via the `candorEffects` convention (see DECLARING.md); declared-not-verified

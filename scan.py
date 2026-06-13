@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.7"
+VERSION = "agents-0.4.8"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -54,6 +54,23 @@ MCP_TABLE = {
     "gmail": {"Net", "Ipc"}, "slack": {"Net", "Ipc"}, "github": {"Net"},
     "atlassian": {"Net"}, "filesystem": {"Fs"}, "postgres": {"Db"}, "sqlite": {"Db"},
 }
+# Refining the Exec cliff (spec §4 ⟨0.5⟩): a literal, statically-known sub-command head MAY be
+# classified — its effects are ADDED to the caller (a subprocess still spawned, so `Exec` stays),
+# and an unrecognised head keeps the bare cliff. A **candor engine** reads Fs/Env only — spec §7
+# item 12 (the analyzer self-boundary) GUARANTEES that, so that case is spec-supplied, not curation.
+# The rest is a small curated table under §1's under-report rule. INVARIANT: every head here is an
+# external tool that does NOT execute the analysed project's own code — so a unit whose shell heads
+# are all in this table can't, via the cliff, reach the project's binaries' effects (the §4
+# transitive bound; --link relies on it). Heads that orchestrate project code (make/npm/cargo/bash)
+# are deliberately ABSENT — they stay the cliff and keep their --link edge.
+CANDOR_HEADS = ("candor", "candor-run.sh", "candor-scan", "candor-query", "candor-java",
+                "candor-classify", "candor-report", "cargo-candor")
+COMMAND_HEAD = {
+    "curl": {"Net"}, "wget": {"Net"}, "http": {"Net"}, "ssh": {"Net"}, "scp": {"Net"}, "rsync": {"Net"},
+    "psql": {"Db"}, "mysql": {"Db"}, "sqlite3": {"Db"}, "mongosh": {"Db"}, "redis-cli": {"Db"},
+    "git": {"Net", "Fs"},  # fetch/push reach the network; it also writes the worktree
+}
+COMMAND_HEAD.update({h: {"Fs", "Env"} for h in CANDOR_HEADS})  # §7-item-12: analyzers do Fs/Env only
 # `tools:` absent => the agent inherits EVERYTHING (Claude Code's default): ambient authority.
 # Agent is NOT in the ambient set: stock Claude Code subagents cannot nest-spawn — delegation
 # exists only where `Agent` is explicitly granted. Harnesses that DO allow nested spawning can
@@ -491,19 +508,37 @@ def main():
         out.append(buf)
         return [x.strip() for x in out if x.strip()]
 
-    def _allowed(meta):
-        """Base tool names from an `allowed-tools` frontmatter value (string/list/inline-list); [] if absent."""
+    def _raw_tools(meta):
+        """The raw `allowed-tools` items (specifiers intact), or [] if absent."""
         v = meta.get("allowed-tools")
         if v is None:
             return []
         if isinstance(v, list):
-            items = [str(x) for x in v]
-        else:
-            s = str(v).strip()
-            if s.startswith("[") and s.endswith("]"):
-                s = s[1:-1]
-            items = _split_tools(s)
-        return [t.split("(", 1)[0].strip() for t in items if t.strip()]
+            return [str(x).strip() for x in v if str(x).strip()]
+        s = str(v).strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        return _split_tools(s)
+
+    def _bash_spec_head(spec):
+        """The command word a `Bash(...)` specifier scopes to (`git diff:*`→git, `*candor-run.sh*`
+        →candor-run.sh) — a literal subprocess surface like a `!`-shell line. '' if not a plain word."""
+        s = spec.split(":", 1)[0].strip().strip("*")  # drop the :args tail, surrounding globs
+        s = (s.split() or [""])[0].rsplit("/", 1)[-1]  # the command word, basenamed
+        return s if _CMD_NAME.match(s) else ""
+
+    def _heads(raw, body):
+        """Literal subprocess heads of a command: `!`-shell lines + `Bash(...)` allowed-tools specifiers."""
+        heads = set()
+        for line in body.splitlines():
+            if line.lstrip().startswith("!"):
+                heads |= bash_cmds(line.lstrip()[1:])
+        for item in raw:
+            if item.split("(", 1)[0].strip() == "Bash" and "(" in item and item.endswith(")"):
+                h = _bash_spec_head(item[item.index("(") + 1:-1])
+                if h:
+                    heads.add(h)
+        return heads
 
     commands, skills = {}, {}
     cdir = os.path.join(root, ".claude", "commands")
@@ -514,12 +549,10 @@ def main():
                     continue
                 rel = os.path.relpath(os.path.join(dp, f), cdir)[:-3].replace(os.sep, ":")
                 meta, body = parse_frontmatter(open(os.path.join(dp, f)).read())
-                heads = set()
-                for line in body.splitlines():
-                    if line.lstrip().startswith("!"):
-                        heads |= bash_cmds(line.lstrip()[1:])
-                commands[f"command:{rel}"] = {"tools": _allowed(meta),
-                                              "file": os.path.relpath(os.path.join(dp, f), root), "heads": heads}
+                raw = _raw_tools(meta)
+                commands[f"command:{rel}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
+                                              "file": os.path.relpath(os.path.join(dp, f), root),
+                                              "heads": _heads(raw, body)}
     sdir = os.path.join(root, ".claude", "skills")
     if os.path.isdir(sdir):
         for d in sorted(os.listdir(sdir)):
@@ -527,7 +560,8 @@ def main():
             if not os.path.isfile(sm):
                 continue
             meta, _b = parse_frontmatter(open(sm).read())
-            skills[f"skill:{d}"] = {"tools": _allowed(meta), "file": os.path.relpath(sm, root)}
+            skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in _raw_tools(meta)],
+                                    "file": os.path.relpath(sm, root)}
 
     if not agents and not has_hooks and not commands and not skills:
         print(f"candor-agents: no agent definitions under {adir}, no commands/skills, and no hooks "
@@ -617,12 +651,16 @@ def main():
             effs, fs, why = classify(a["lt"], live_servers, declared_mcp, declared_bad)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
         unresolved_direct[name] = "Unknown" in effs
-    # Commands / skills: effects from their (deny-filtered) allowed-tools; a command's `!`-shell adds
-    # Exec + its heads, unless Bash itself is denied (then the shell line could not run).
+    # Commands / skills: effects from their (deny-filtered) allowed-tools; a command's shell heads add
+    # Exec + the heads' REFINED effects (spec §4 ⟨0.5⟩: a known head classifies — `curl`→Net,
+    # `candor*`→Fs/Env; an unknown head keeps the bare Exec cliff), unless Bash is denied (the shell
+    # line could not run). Exec is never dropped — a subprocess was still spawned.
     for u, c in commands.items():
         effs, fs, why = classify(live(c["tools"]), live_servers, declared_mcp, declared_bad)
         if c["heads"] and "Bash" not in denied_tools:
             effs.add("Exec")
+            for h in c["heads"]:
+                effs |= COMMAND_HEAD.get(h, set())
         direct[u], fs_detail[u], why_map[u] = effs, fs, why
         unresolved_direct[u] = "Unknown" in effs
     for u, sk in skills.items():
@@ -635,7 +673,9 @@ def main():
     direct[ROOT], fs_detail[ROOT], why_map[ROOT] = me, mf, mw
     unresolved_direct[ROOT] = "Unknown" in me
     if has_hooks:
-        direct[HOOKS] = {"Exec"} | ({"Unknown"} if hook_why else set())
+        # The hook commands' heads refine the Exec the same way (a Stop hook running `curl` reaches Net).
+        head_effs = set().union(*(COMMAND_HEAD.get(h, set()) for h in hook_cmds)) if hook_cmds else set()
+        direct[HOOKS] = {"Exec"} | head_effs | ({"Unknown"} if hook_why else set())
         fs_detail[HOOKS], why_map[HOOKS] = set(), set(hook_why)
         unresolved_direct[HOOKS] = bool(hook_why)
 
@@ -664,7 +704,11 @@ def main():
             if runs_code:
                 calls[name] = sorted(set(calls[name]) | set(linked))
         for u, c in commands.items():
-            if "Bash" in live(c["tools"]):  # a command that shells out runs the project's own binaries
+            # A command that shells out may run the project's own binaries — UNLESS its heads are all
+            # known external tools (spec §4 transitive bound: e.g. a command that only runs candor
+            # *over* the code reads Fs, it doesn't perform the code's Net/Db). Bare-Bash or any
+            # unknown head keeps the cliff and the link.
+            if "Bash" in live(c["tools"]) and not (c["heads"] and all(h in COMMAND_HEAD for h in c["heads"])):
                 calls[u] = sorted(set(calls[u]) | set(linked))
         calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
 
