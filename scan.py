@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.4"
+VERSION = "agents-0.4.5"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -223,13 +223,13 @@ def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
                 why.add(f"mcp-decl-invalid:{server}:{declared_bad[server]}")
             else:
                 effs.add("Unknown")
-                why.add(f"mcp:{server}")
+                why.add(f"mcp-uncurated:{server}")
         elif t in PURE_TOOLS:
             pass
         else:
             # A tool we've never heard of is an unresolvable call, not silently pure.
             effs.add("Unknown")
-            why.add(f"tool:{t}")
+            why.add(f"tool-unknown:{t}")
     # Ambient MCP reach: an agent that inherits everything reaches every configured server too.
     return effs, fs, why
 
@@ -422,7 +422,7 @@ def main():
                     why.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
                 else:
                     effs.add("Unknown")
-                    why.add(f"mcp:{s}")
+                    why.add(f"mcp-uncurated:{s}")
             why.add("ambient:tools-unrestricted")
             effs.add("Unknown")
         else:
@@ -440,7 +440,7 @@ def main():
             mw.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
         else:
             me.add("Unknown")
-            mw.add(f"mcp:{s}")
+            mw.add(f"mcp-uncurated:{s}")
     direct[ROOT], fs_detail[ROOT], why_map[ROOT] = me, mf, mw
     unresolved_direct[ROOT] = "Unknown" in me
     if has_hooks:
