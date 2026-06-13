@@ -100,25 +100,30 @@ TOOL_HOOK_EVENTS = {"PreToolUse", "PostToolUse"}
 
 def tools_match_matcher(tools, matcher):
     """Whether an agent holding `tools` (None = ambient = every tool) can trigger a tool-event hook
-    with this Claude Code `matcher`. Empty/`*` matches all tools; otherwise the matcher is a regex,
-    commonly a `|`-alternation of tool names (`Write|Edit|MultiEdit`). Under-report on an unparseable
-    alternative rather than fabricate an edge (the family posture)."""
+    with this Claude Code `matcher`. Mirrors Claude Code's THREE-TIER matcher semantics (per the hooks
+    reference) so candor's edge model matches what the harness actually fires:
+      - empty / `*`           → all tools
+      - `[A-Za-z0-9_|]+`      → an EXACT tool-name list (`Edit|Write` fires ONLY on Edit and Write,
+                                never on `MultiEdit` — that's why the docs list variants explicitly)
+      - anything else         → a full regex with SEARCH (partial) semantics, JS `.test()`-style
+                                (the docs' own `^Notebook` example is a prefix match → `NotebookEdit`).
+    The earlier form force-wrapped every matcher in `^(?:alt)$` (fullmatch) and split on `|`
+    unconditionally, so a tier-2 partial regex (`^Notebook`, `Edit$`) UNDER-matched — it failed to
+    edge an agent whose tool the hook really fires on, silently dropping that hook's Exec reach.
+    Under-report on an unparseable regex rather than fabricate an edge (the family posture)."""
     m = (matcher or "").strip()
     if m in ("", "*"):
         return True
     if tools is None:  # ambient authority holds every tool — matches any non-empty matcher
         return True
-    for alt in m.split("|"):
-        alt = alt.strip()
-        if not alt:
-            continue
-        try:
-            pat = re.compile(f"^(?:{alt})$")
-        except re.error:
-            continue  # unparseable — don't fabricate an edge
-        if any(pat.match(t) for t in tools):
-            return True
-    return False
+    if re.fullmatch(r"[A-Za-z0-9_|]+", m):  # tier 1: exact `|`-separated tool-name list
+        names = {a for a in m.split("|") if a}
+        return any(t in names for t in tools)
+    try:
+        pat = re.compile(m)  # tier 2: a full regex, matched by SEARCH (Claude's JS `.test()`)
+    except re.error:
+        return False  # unparseable — don't fabricate an edge
+    return any(pat.search(t) for t in tools)
 
 
 # keywords a command FOLLOWS (`then git push`) vs keywords followed by non-commands (`for f in …`)

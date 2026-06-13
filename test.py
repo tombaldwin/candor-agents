@@ -424,6 +424,25 @@ with tempfile.TemporaryDirectory() as td:
     check("hooks: a non-matching agent (Read/Grep) does NOT edge to a Write|Edit hook",
           rd is not None and "hooks" not in rd["calls"] and "Exec" not in rd["inferred"], json.dumps(rd))
 
+# tools_match_matcher mirrors Claude Code's THREE-TIER matcher semantics (hooks reference). The
+# tier-2 PARTIAL regex was the bug: force-anchoring `^(?:m)$` made `^Notebook` / `Edit$` UNDER-match,
+# silently dropping a hook's Exec reach from an agent the harness really fires the hook on.
+from scan import tools_match_matcher as tmm
+check("matcher tier-1: exact `|`-list fires only on listed tools",
+      tmm(["Edit"], "Edit|Write") and not tmm(["MultiEdit"], "Edit|Write"))
+check("matcher tier-1: `Edit` does NOT fire on `MultiEdit` (exact, not substring)",
+      tmm(["Edit"], "Edit") and not tmm(["MultiEdit"], "Edit"))
+check("matcher tier-2: `^Notebook` (prefix regex, search) DOES fire on NotebookEdit",
+      tmm(["NotebookEdit"], "^Notebook") and tmm(["NotebookRead"], "^Notebook"))
+check("matcher tier-2: `Edit$` (suffix regex) fires on MultiEdit",
+      tmm(["MultiEdit"], "Edit$") and tmm(["NotebookEdit"], "Edit$"))
+check("matcher tier-2: `mcp__.*` fires on a namespaced MCP tool",
+      tmm(["mcp__github__create_issue"], "mcp__.*"))
+check("matcher tier-3: empty and `*` match all; ambient (None tools) matches any matcher",
+      tmm(["X"], "") and tmm(["X"], "*") and tmm(None, "Bash"))
+check("matcher: an unparseable regex does NOT fabricate an edge (under-report posture)",
+      not tmm(["Edit"], "Edit("))
+
 # a project with hooks but NO agents still has a capability surface (the pgman shape)
 with tempfile.TemporaryDirectory() as td:
     os.makedirs(os.path.join(td, ".claude"))
