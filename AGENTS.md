@@ -14,7 +14,8 @@ is the fleet-specific surface.
 ## Produce a report
 
 ```sh
-pipx install git+https://github.com/tombaldwin/candor-agents   # or: pip install git+…
+pipx install git+https://github.com/tombaldwin/candor-agents   # recommended — isolated (plain pip
+                                                               # works too, but only into a venv)
 
 candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: .claude/agents/*.md + .mcp.json
 candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: the session transcripts
