@@ -8,7 +8,9 @@ classified leaves (`Bash`→`Exec`, `WebFetch`→`Net`, `Edit`→`Fs(write)`, an
 0.4 reports over a Claude Code project, in two modes that answer two different questions:
 
 ```sh
-pip install git+https://github.com/tombaldwin/candor-agents   # or: pipx install …
+pipx install git+https://github.com/tombaldwin/candor-agents   # recommended — isolated venv
+# (plain `pip install …` works but ships top-level modules `cli`/`scan`/`observe`; install into a
+#  venv or pipx, not a shared environment where those generic names could clash with other packages)
 
 candor-agents scan    <project>    # DECLARED: what the fleet MAY do (.claude/agents/*.md + .mcp.json)
 candor-agents observe <project>    # OBSERVED: what it actually DID (the session transcripts)
