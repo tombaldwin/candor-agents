@@ -33,17 +33,27 @@ def effect_tools():
 
 def parse_denies(text):
     """The `deny <Effect...> [scope]` lines of a CANDOR_POLICY (§6.2). Other rules (allow/pure/forbid/
-    layer) aren't runtime-enforceable this way and are ignored. Returns [(effects, scope_or_None)]."""
+    layer) aren't runtime-enforceable this way and are ignored. Returns [(effects, scope_or_None)].
+
+    Parsed POSITIONALLY to mirror the canonical engine parser (candor-classify policy.rs): leading
+    effect tokens are collected, and the FIRST non-effect token is the scope and ENDS the rule — a
+    later effect-looking token (`deny Net foo Db`) is NOT collected. A set-membership partition would
+    diverge here (it would treat the trailing `Db` as a scoped deny the engine never gates), so guard
+    would no longer be the faithful dual of the engine's §6.2 enforcement."""
     out = []
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line.lower().startswith("deny "):
             continue
-        toks = line.split()[1:]
-        effs = [t for t in toks if t in VOCAB]
-        rest = [t for t in toks if t not in VOCAB]
+        effs, scope = [], None
+        for t in line.split()[1:]:
+            if t in VOCAB:
+                effs.append(t)
+            else:
+                scope = t  # first non-effect token is the scope and ends the rule
+                break
         if effs:
-            out.append((effs, rest[0] if rest else None))
+            out.append((effs, scope))
     return out
 
 

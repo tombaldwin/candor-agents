@@ -720,6 +720,18 @@ check("guard: deny Net + deny Exec closes the cliff → no misleading 'add deny 
 g3 = guard.compile_guard("deny Net researcher")
 check("guard: a scoped deny isn't project-wide-enforceable → a grant-tightening note, no deny emitted",
       not g3["deny"] and any("researcher" in n for n in g3["notes"]), json.dumps(g3))
+# POSITIONAL parse, faithful to the engine (candor-classify policy.rs): the first non-effect token is
+# the scope and ENDS the rule — `deny Net foo Db` is `deny Net in foo`, the trailing Db is NOT a rule.
+# A set-membership partition would diverge here (treating Db as a second scoped deny the engine never
+# gates), making guard an UNFAITHFUL dual.
+g3p = guard.compile_guard("deny Net foo Db")
+check("guard: positional parse — `deny Net foo Db` scopes Net to foo and drops the post-scope Db (engine-faithful)",
+      not g3p["deny"] and len(g3p["notes"]) == 1 and "Net" in g3p["notes"][0]
+      and not any("Db" in n for n in g3p["notes"]), json.dumps(g3p))
+# and the unscoped multi-effect form is unaffected: every token an effect → all denied fleet-wide.
+g3m = guard.compile_guard("deny Net Db")
+check("guard: `deny Net Db` (all-effect, no scope) denies the producers of BOTH effects fleet-wide",
+      "WebFetch" in g3m["deny"] and not g3m["notes"], json.dumps(g3m))
 # deny Db: no built-in tool PRODUCES Db (only Bash/MCP) → a clear message, not "denies []"
 gdb = guard.compile_guard("deny Db")
 check("guard: deny Db (no built-in Db tool) explains it's reached via Bash/MCP, not 'denies []'",
