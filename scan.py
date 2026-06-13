@@ -631,13 +631,18 @@ def main():
         print(f"candor-agents: an agent is named `hooks` — the settings-hooks unit is `{HOOKS}` "
               f"to avoid clobbering it", file=sys.stderr)
     calls = {}
+    # Precompile ONE word-boundary regex per agent name (was a fresh compile per agent×name pair — a
+    # quadratic-with-compile blow-up: 600 agents took 11s; precompiled, the compile cost is O(n) and
+    # the per-pair search is cheap).
+    name_re = {n: re.compile(rf"(?:^|[`'\"\s]){re.escape(n)}[`'\"\s.,]") for n in names}
     for name, a in agents.items():
         lt = a["lt"]  # deny-filtered: a denied `Agent`/`Task` grant can no longer delegate
         has_agent_tool = ("Agent" in (lt or []) or "Task" in (lt or [])
                           or (nested and a["tools"] is None and "Agent" not in denied_tools))
         edges = []
         if has_agent_tool:
-            mentioned = [n for n in names if n != name and re.search(rf"(?:^|[`'\"\s]){re.escape(n)}[`'\"\s.,]", a["body"] + " " + a["desc"] + " ")]
+            hay = a["body"] + " " + a["desc"] + " "
+            mentioned = [n for n in names if n != name and name_re[n].search(hay)]
             edges = mentioned if mentioned else [n for n in names if n != name]  # CHA fallback
         calls[name] = sorted(edges)
     # Commands and skills are leaf units (they hold tools but don't spawn subagents) — init their
