@@ -664,6 +664,26 @@ check("--link: a command that only runs candor does NOT inherit the code's Net/D
 check("--link: a command with an unknown head DOES inherit the code's effects (sound cliff kept)",
       app is not None and "Net" in app["inferred"], json.dumps(app))
 
+# ══ curated-table growth: MCP servers + command heads ═════════════════════════════════════════════
+rep, r = build(agents_files={"a.md": agent("a", "mcp__notion__search")}, mcp=["notion"])
+check("a newly-curated MCP server (notion) classifies to Net, not Unknown",
+      entry(rep, "a") is not None and entry(rep, "a")["inferred"] == ["Net"], json.dumps(entry(rep, "a")))
+rep, r = build(agents_files={"a.md": agent("a", "mcp__mongodb__find")}, mcp=["mongodb"])
+check("a newly-curated MCP server (mongodb) classifies to Db",
+      entry(rep, "a") is not None and entry(rep, "a")["inferred"] == ["Db"], json.dumps(entry(rep, "a")))
+# the posture HOLDS: an uncurated server still reads Unknown with a named origin
+rep, r = build(agents_files={"a.md": agent("a", "mcp__weirdcustom__op")}, mcp=["weirdcustom"])
+check("an uncurated MCP server still reads Unknown (the under-report posture holds)",
+      entry(rep, "a") is not None and "Unknown" in entry(rep, "a")["inferred"]
+      and any("weirdcustom" in w for w in entry(rep, "a").get("unknownWhy", [])), json.dumps(entry(rep, "a")))
+# new command heads (the shared 5-engine table)
+rep, r = build(commands={"t.md": "---\nallowed-tools: Bash(telnet:*)\n---\nx\n"})
+check("new command head telnet refines to Net",
+      "Net" in entry(rep, "command:t")["inferred"], json.dumps(entry(rep, "command:t")))
+rep, r = build(commands={"m.md": "---\nallowed-tools: Bash(mongo:*)\n---\nx\n"})
+check("new command head mongo refines to Db",
+      "Db" in entry(rep, "command:m")["inferred"], json.dumps(entry(rep, "command:m")))
+
 print()
 
 
