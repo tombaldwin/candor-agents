@@ -52,13 +52,25 @@ def compile_guard(policy_text, project_dir=None):
     the harness enforces; warnings flag the Exec cliff; notes flag scoped denies it can't enforce."""
     inv = effect_tools()
     mcp_eff = {}  # configured server -> its classified effect set (for mcp__server denies)
+    warnings = []
     if project_dir:
         mp = os.path.join(project_dir, ".mcp.json")
         if os.path.exists(mp):
             try:
                 for name, cfg in (json.load(open(mp)).get("mcpServers") or {}).items():
                     decl = cfg.get("candorEffects") if isinstance(cfg, dict) else None
-                    eff = set(decl) if isinstance(decl, list) else MCP_TABLE.get(name, set())
+                    if isinstance(decl, list):
+                        # Validate like scan (SPEC §5.1): an invalid effect VOIDS the declaration loudly
+                        # — otherwise a typo'd candorEffects (`["Database"]`) silently leaves the server
+                        # un-denied (under-protect), inconsistent with scan, which voids it.
+                        bad = [e for e in decl if e not in VOCAB]
+                        if bad:
+                            warnings.append(f"mcp server {name}: candorEffects has an invalid effect '{bad[0]}' — "
+                                            f"declaration voided (SPEC §1); the server can't be matched by a deny rule until fixed.")
+                            continue
+                        eff = set(decl)
+                    else:
+                        eff = MCP_TABLE.get(name, set())
                     if eff:
                         mcp_eff[name] = eff
             except Exception:
@@ -78,7 +90,6 @@ def compile_guard(policy_text, project_dir=None):
     # The §4 Exec-cliff warning fires per non-Exec effect ONLY when Bash itself isn't denied — if the
     # policy ALSO denies Exec, Bash is in the deny set and the cliff is closed, so no warning (the
     # real-world bug: a `deny Net` + `deny Exec` policy was still told to add `deny Exec`).
-    warnings = []
     if "Bash" not in deny:
         for e in sorted(cliff):
             tools = sorted(inv.get(e, set()))
