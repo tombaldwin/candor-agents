@@ -144,6 +144,30 @@ check("'tools: All tools' is ambient authority, not a tool named 'All tools'",
       ea["unresolved"] and "ambient:tools-unrestricted" in ea.get("unknownWhy", [])
       and not any(w == "tool-unknown:All tools" for w in ea.get("unknownWhy", [])), f"got {ea}")
 
+# QUOTED tool tokens must keep their meaning — YAML quoting (to protect a specifier's `()`/`:`/`*`)
+# must not turn a definite tool into an `Unknown` that slips an effect-specific deny gate.
+from scan import parse_frontmatter, tool_list
+def _tl(fm): m, _ = parse_frontmatter(fm); return tool_list(m)
+check("tool_list: a quoted bare tool keeps its identity (not Unknown)",
+      _tl('---\ntools: "Bash"\n---\nx') == ["Bash"]
+      and _tl("---\ntools: [Read, 'Bash']\n---\nx") == ["Read", "Bash"]
+      and _tl('---\ntools: "Read, Bash"\n---\nx') == ["Read", "Bash"])
+check("tool_list: quoting does not disturb `tools: []` (still explicitly confined, not ambient)",
+      _tl("---\ntools: []\n---\nx") == [])
+# agent end-to-end: a quoted Bash still classifies as Exec
+req, _ = scan({"q.md": agent("q", '"Bash"')})
+check("a quoted `tools: \"Bash\"` agent classifies as Exec (not Unknown)",
+      entry(req, "q")["inferred"] == ["Exec"], f"got {entry(req, 'q')}")
+# command end-to-end: a quoted Bash(curl:*) specifier keeps Exec+Net and the curl head
+with tempfile.TemporaryDirectory() as _qd:
+    os.makedirs(os.path.join(_qd, ".claude", "commands"))
+    open(os.path.join(_qd, ".claude", "commands", "q.md"), "w").write('---\nallowed-tools: "Bash(curl:*)"\n---\nx\n')
+    _qo = os.path.join(_qd, "r")
+    subprocess.run([sys.executable, SCAN, _qd, "--out", _qo, "--fleet", "t"], capture_output=True, text=True, check=True)
+    _qc = entry(json.load(open(f"{_qo}.t.Fleet.json")), "command:q")
+    check("a quoted command `allowed-tools: \"Bash(curl:*)\"` keeps Exec+Net + the curl head",
+          _qc and set(_qc["inferred"]) == {"Exec", "Net"} and "curl" in _qc.get("cmds", []), f"got {_qc}")
+
 # an unheard-of builtin tool is Unknown, never silently pure
 rep, _ = scan({"x.md": agent("x", "FrobnicateDisk")})
 ex = entry(rep, "x")

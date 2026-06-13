@@ -142,6 +142,18 @@ _CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _SUBST = re.compile(r"[$<]\(\s*([A-Za-z0-9._+/-]+)")
 
 
+def _unquote(s):
+    """Strip ONE layer of matching surrounding quotes from a YAML scalar tool token. A user who quotes
+    a tool entry to protect its specifier's special chars — `"Bash(git:*)"`, `'mcp__x__y'` (the parens,
+    colon, and star invite YAML quoting) — must NOT have it become an unrecognized tool that classifies
+    as `Unknown` (its base `"Bash` no longer matches), which would silently turn a definite Exec/Net into
+    Unknown and evade an effect-specific `deny Exec`/`deny Net` gate. Quoting is presentation, not meaning."""
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        return s[1:-1].strip()
+    return s
+
+
 def propagate(seed, edges):
     """Transitive fixpoint over a delegation graph: each unit accumulates its callees' values to a
     least fixpoint (spec §5a). One implementation, used by scan.py (effects, fs kinds) and observe.py
@@ -278,18 +290,20 @@ def tool_list(meta):
     t = meta.get("tools")
     if t is None or t == "" or t == "*":
         return None
+    if isinstance(t, str):
+        t = _unquote(t)  # a whole-value quote (`tools: "Read, Bash"`) — strip before splitting
     # `tools: All tools` (and bare `all`) — the human "everything" convention, found ×12 on a real
     # public fleet reading as an unknown tool named "All tools". It MEANS ambient authority.
     if isinstance(t, str) and t.strip().lower() in ("all", "all tools"):
         return None
     if isinstance(t, list):
-        return [x.strip() for x in t if x.strip()]
+        return [u for x in t if (u := _unquote(str(x)))]
     # Inline YAML list: `tools: []` is EXPLICITLY no tools (maximally confined — pure), and
     # `tools: [a, b]` is a list — not a single tool named "[a, b]". Real-fleet finding.
     if t.startswith("[") and t.endswith("]"):
         inner = t[1:-1].strip()
-        return [x.strip() for x in inner.split(",") if x.strip()] if inner else []
-    return [x.strip() for x in t.split(",") if x.strip()]
+        return [u for x in inner.split(",") if (u := _unquote(x))] if inner else []
+    return [u for x in t.split(",") if (u := _unquote(x))]
 
 
 def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
@@ -534,7 +548,10 @@ def main():
             else:
                 buf += ch
         out.append(buf)
-        return [x.strip() for x in out if x.strip()]
+        # _unquote each item: a quoted `"Bash(git:*)"` specifier must keep its meaning, not become a
+        # `"Bash` base that classifies as Unknown and slips an effect-specific deny gate (the parens/
+        # colon/star in a Bash specifier are exactly what invites YAML quoting).
+        return [u for x in out if (u := _unquote(x))]
 
     def _raw_tools(meta):
         """The raw `allowed-tools` items (specifiers intact), or [] if absent."""
@@ -542,8 +559,8 @@ def main():
         if v is None:
             return []
         if isinstance(v, list):
-            return [str(x).strip() for x in v if str(x).strip()]
-        s = str(v).strip()
+            return [u for x in v if (u := _unquote(str(x)))]
+        s = _unquote(str(v).strip())  # a whole-value quote around an inline list / single specifier
         if s.startswith("[") and s.endswith("]"):
             s = s[1:-1]
         return _split_tools(s)
