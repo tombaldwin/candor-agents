@@ -154,6 +154,14 @@ check("tool_list: a quoted bare tool keeps its identity (not Unknown)",
       and _tl('---\ntools: "Read, Bash"\n---\nx') == ["Read", "Bash"])
 check("tool_list: quoting does not disturb `tools: []` (still explicitly confined, not ambient)",
       _tl("---\ntools: []\n---\nx") == [])
+# inline YAML comments are stripped (the real parser Claude uses drops them) — else the last tool
+# before the comment becomes `Bash # …` → Unknown, evading a deny gate. Quote-aware; `C#` kept.
+check("frontmatter: an inline `# comment` after tools is stripped, not parsed as a tool",
+      _tl("---\ntools: Read, Bash # only safe\n---\nx") == ["Read", "Bash"]
+      and _tl("---\ntools: Read # c\n---\nx") == ["Read"]
+      and _tl("---\ntools:\n  - Read\n  - Bash  # shell\n---\nx") == ["Read", "Bash"])
+check("frontmatter: a `#` without leading space (C#) is NOT a comment",
+      parse_frontmatter("---\ndescription: Reviews C# code\n---\nx")[0]["description"] == "Reviews C# code")
 # agent end-to-end: a quoted Bash still classifies as Exec
 req, _ = scan({"q.md": agent("q", '"Bash"')})
 check("a quoted `tools: \"Bash\"` agent classifies as Exec (not Unknown)",
