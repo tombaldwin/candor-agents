@@ -12,7 +12,8 @@ pipx install git+https://github.com/tombaldwin/candor-agents   # recommended —
 # (plain `pip install …` works but ships top-level modules `cli`/`scan`/`observe`; install into a
 #  venv or pipx, not a shared environment where those generic names could clash with other packages)
 
-candor-agents scan    <project>    # DECLARED: what the fleet MAY do (.claude/agents/*.md + .mcp.json)
+candor-agents scan    <project>    # DECLARED: what the fleet MAY do (agents, .mcp.json, settings,
+                                   #           permissions, slash-commands, skills)
 candor-agents observe <project>    # OBSERVED: what it actually DID (the session transcripts)
 candor-agents drift   <project>    # the gap: least-privilege advice + anomalies
 ```
@@ -34,7 +35,7 @@ candor-rust answers `show` / `where` / `callers` / `map` / `whatif` over either 
 
 ```sh
 bash run.sh        # the declared-mode demo — STANDALONE: needs only git + stable cargo
-python3 test.py    # 42 behavioral checks, incl. the unmodified-candor-query integration lane
+python3 test.py    # 102 behavioral checks, incl. the unmodified-candor-query integration lane
 python3 fuzz.py    # soundness fuzzer (default 40 seeds), teeth verified per mechanism
 ```
 
@@ -61,6 +62,12 @@ What the fixture demo shows (all real mechanics, deliberately seeded):
 - **Ambient authority is visible**: the legacy `triage` agent (no `tools:` line = inherits
   everything) reads `{Clock Exec Fs Ipc Net Unknown}` — the report makes the un-confined agent the
   obvious outlier.
+- **Confinement is read, not just grants**: `permissions.deny` in settings.json *subtracts* a
+  hard-denied tool or MCP server (`"WebFetch"`, `"mcp__github"`) from every unit's surface — sound,
+  because the harness enforces it — while a scoped deny (`Bash(curl:*)`) is disclosed but not
+  subtracted (the tool stays usable). Slash commands (`.claude/commands`) and skills
+  (`.claude/skills`) are scanned as their own `command:`/`skill:` units, effects from their
+  `allowed-tools` (a command's `!`-shell adds Exec + its command heads).
 
 **Combined mode** (validated): write the fleet report and a code engine's report under ONE
 prefix and candor-query treats them as one world — `where Fs` lists agents beside Rust functions.
@@ -74,6 +81,6 @@ spec 0.4 would want s/function/unit/).
 
 ## What this is not (yet)
 
-Not a product: not wired to hooks/cron entry points, no runtime validation, the MCP capability table is tiny.
-The next real steps, if pursued: a `unitKind` note in candor-spec; an MCP capability-declaration
-convention (the `Unknown` killer); scanning a real fleet in the wild.
+Not a product: no runtime validation, the MCP capability table is small, and cron entry points
+aren't modelled yet. The next real steps, if pursued: a `unitKind` note in candor-spec; an MCP
+capability-declaration convention (the `Unknown` killer); scanning a real fleet in the wild.

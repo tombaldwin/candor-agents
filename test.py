@@ -487,5 +487,101 @@ check("--agents prints the version header + the exact installed contract",
       r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.4")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
+# ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
+def build(agents_files=None, settings=None, commands=None, skills=None, mcp=None):
+    """A full project: agents + .claude/settings.json + .claude/commands + .claude/skills + .mcp.json."""
+    d = tempfile.mkdtemp()
+    adir = os.path.join(d, ".claude", "agents")
+    os.makedirs(adir)
+    for fn, c in (agents_files or {}).items():
+        open(os.path.join(adir, fn), "w").write(c)
+    if settings is not None:
+        json.dump(settings, open(os.path.join(d, ".claude", "settings.json"), "w"))
+    for rel, c in (commands or {}).items():
+        p = os.path.join(d, ".claude", "commands", rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").write(c)
+    for name, c in (skills or {}).items():
+        sp = os.path.join(d, ".claude", "skills", name)
+        os.makedirs(sp, exist_ok=True)
+        open(os.path.join(sp, "SKILL.md"), "w").write(c)
+    if mcp is not None:
+        json.dump({"mcpServers": {s: {} for s in mcp}}, open(os.path.join(d, ".mcp.json"), "w"))
+    out = os.path.join(d, "r")
+    r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    rep = json.load(open(f"{out}.t.Fleet.json")) if r.returncode == 0 else None
+    return rep, r
+
+# a WHOLE-tool deny is hard-enforced by the harness → candor SUBTRACTS the effect
+rep, r = build({"net.md": agent("net", "WebFetch, Read")}, settings={"permissions": {"deny": ["WebFetch"]}})
+e = entry(rep, "net")
+check("deny WebFetch subtracts Net but keeps Fs (whole-tool deny is sound to remove)",
+      e is not None and "Net" not in e["inferred"] and "Fs" in e["inferred"], json.dumps(e))
+check("deny: the receipt names what was removed from the surface",
+      "permissions.deny removed" in r.stderr and "WebFetch" in r.stderr, r.stderr)
+
+# a SCOPED deny removes only a subset of uses — the tool stays usable, so it is NOT subtracted
+rep, r = build({"sh.md": agent("sh", "Bash")}, settings={"permissions": {"deny": ["Bash(curl:*)"]}})
+e = entry(rep, "sh")
+check("scoped deny Bash(curl:*) does NOT remove Exec (Bash stays usable — the cliff)",
+      e is not None and "Exec" in e["inferred"], json.dumps(e))
+check("scoped deny is disclosed as seen-but-not-subtracted",
+      "scoped" in r.stderr and "Bash(curl:*)" in r.stderr, r.stderr)
+
+# a whole-server mcp deny (`mcp__server`) removes that server's effects
+rep, r = build({"gh.md": agent("gh", "mcp__github__create_pr")}, settings={"permissions": {"deny": ["mcp__github"]}})
+check("deny mcp__github removes the github server (the only unit becomes pure → omitted)",
+      entry(rep, "gh") is None, json.dumps(rep["functions"]))
+
+# denying the Agent tool removes delegation (the edge-maker is gone)
+rep, r = build({"boss.md": agent("boss", "Agent", body="Spawn the `worker`."),
+                "worker.md": agent("worker", "WebFetch")}, settings={"permissions": {"deny": ["Agent"]}})
+b = entry(rep, "boss")
+check("deny Agent removes delegation (boss no longer inherits the worker's Net)",
+      b is None or "Net" not in b["inferred"], json.dumps(b))
+
+# hooks BYPASS the permission system — a `deny Bash` must not strip the hooks unit's Exec
+rep, r = build({"a.md": agent("a", "Read")},
+               settings={"permissions": {"deny": ["Bash"]},
+                         "hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "bash run.sh"}]}]}})
+hk = entry(rep, "hooks")
+check("hooks bypass permissions: deny Bash leaves the hooks unit's Exec intact",
+      hk is not None and "Exec" in hk["inferred"], json.dumps(hk))
+
+# a slash command is a unit; effects come from its allowed-tools (specifier stripped to base tool)
+rep, r = build(commands={"deploy.md": "---\nallowed-tools: Bash(kubectl:*), Read\n---\nDeploy it.\n"})
+e = entry(rep, "command:deploy")
+check("a slash command becomes a unit carrying its allowed-tools effects",
+      e is not None and e["unitKind"] == "command" and set(e["inferred"]) == {"Exec", "Fs"}, json.dumps(e))
+check("the session root invokes the command",
+      "command:deploy" in entry(rep, "session")["calls"])
+
+# a `!`-shell line in a command body surfaces Exec + the literal command head
+rep, r = build(commands={"st.md": "---\nallowed-tools: Bash(git status:*)\n---\nStatus:\n!`git status`\n"})
+e = entry(rep, "command:st")
+check("a command's !-shell surfaces Exec + the literal command head",
+      e is not None and "Exec" in e["inferred"] and "git" in e.get("cmds", []), json.dumps(e))
+
+# absent allowed-tools + no shell = a PURE command (omitted) — the OPPOSITE of an agent's absent tools:
+rep, r = build(agents_files={"a.md": agent("a", "Read")},
+               commands={"note.md": "---\ndescription: just a prompt\n---\nWrite a haiku.\n"})
+check("a prompt-only command (no allowed-tools, no shell) is pure → omitted, NOT ambient",
+      entry(rep, "command:note") is None, json.dumps(rep["functions"]))
+
+# a skill is a unit from its allowed-tools
+rep, r = build(skills={"fetcher": "---\nname: fetcher\nallowed-tools: WebFetch\n---\nFetch.\n"})
+e = entry(rep, "skill:fetcher")
+check("a skill becomes a unit carrying its allowed-tools effects",
+      e is not None and e["unitKind"] == "skill" and e["inferred"] == ["Net"], json.dumps(e))
+
+# permissions.deny applies to commands too
+rep, r = build(commands={"f.md": "---\nallowed-tools: WebFetch\n---\nFetch.\n"},
+               settings={"permissions": {"deny": ["WebFetch"]}})
+check("permissions.deny applies to a command (WebFetch-only command → pure → omitted)",
+      entry(rep, "command:f") is None, json.dumps(rep["functions"]))
+
+print()
+
+
 print(f"test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

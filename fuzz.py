@@ -69,6 +69,13 @@ def run_seed(seed):
     os.makedirs(adir)
     for f, c in files.items():
         open(os.path.join(adir, f), "w").write(c)
+    # SUBTRACTION soundness: sometimes deny a tool OFF the chain (never a SINKS tool, never the
+    # Agent/Task edge-makers) — permissions.deny must remove only what it names, so the threaded
+    # effect MUST survive. Catches over-subtraction (a deny filter dropping the wrong tool). The
+    # pool is disjoint from every SINKS tool, so denying it cannot legitimately cut the chain.
+    if rng.random() < 0.4:
+        deny_tool = rng.choice(["WebSearch", "Glob", "NotebookEdit", "PushNotification"])
+        json.dump({"permissions": {"deny": [deny_tool]}}, open(os.path.join(d, ".claude", "settings.json"), "w"))
     out = os.path.join(d, "r")
     r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "fz"],
                        capture_output=True, text=True)
