@@ -63,7 +63,7 @@ def compile_guard(policy_text, project_dir=None):
                         mcp_eff[name] = eff
             except Exception:
                 pass
-    deny, warnings, notes = set(), [], []
+    deny, notes, cliff = set(), [], set()
     for effs, scope in parse_denies(policy_text):
         for e in effs:
             if scope:
@@ -71,12 +71,18 @@ def compile_guard(policy_text, project_dir=None):
                              f"harness's project-wide permissions.deny — remove {sorted(inv.get(e, set()))} "
                              f"from {scope}'s `tools:` grants instead, or accept a fleet-wide `deny {e}`.")
                 continue
-            tools = inv.get(e, set())
-            deny |= tools
+            deny |= inv.get(e, set())
             deny |= {f"mcp__{s}" for s, ee in mcp_eff.items() if e in ee}
-            if e != "Exec" and "Bash" not in tools:
-                warnings.append(f"deny {e}: a granted `Bash` can still reach {e} (the §4 Exec cliff) — this "
-                                f"guard denies {sorted(tools)} but not Bash; add `deny Exec` to close it.")
+            if e != "Exec":
+                cliff.add(e)
+    # The §4 Exec-cliff warning fires per non-Exec effect ONLY when Bash itself isn't denied — if the
+    # policy ALSO denies Exec, Bash is in the deny set and the cliff is closed, so no warning (the
+    # real-world bug: a `deny Net` + `deny Exec` policy was still told to add `deny Exec`).
+    warnings = []
+    if "Bash" not in deny:
+        for e in sorted(cliff):
+            warnings.append(f"deny {e}: a granted `Bash` can still reach {e} (the §4 Exec cliff) — this guard "
+                            f"denies {sorted(inv.get(e, set()))} but not Bash; add `deny Exec` to close it.")
     return {"deny": sorted(deny), "warnings": warnings, "notes": notes}
 
 

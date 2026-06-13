@@ -694,6 +694,11 @@ check("guard: deny Net warns about the Exec cliff (a granted Bash can still curl
 g2 = guard.compile_guard("deny Exec")
 check("guard: deny Exec denies Bash with no cliff warning (it IS the subprocess effect)",
       g2["deny"] == ["Bash"] and not g2["warnings"], json.dumps(g2))
+# real-world sweep find: `deny Net` + `deny Exec` together CLOSES the cliff (Bash is denied) → the
+# "add deny Exec" warning must NOT fire (it did, misleadingly, on a real policy).
+gne = guard.compile_guard("deny Net\ndeny Exec")
+check("guard: deny Net + deny Exec closes the cliff → no misleading 'add deny Exec' warning",
+      "Bash" in gne["deny"] and "WebFetch" in gne["deny"] and not gne["warnings"], json.dumps(gne))
 g3 = guard.compile_guard("deny Net researcher")
 check("guard: a scoped deny isn't project-wide-enforceable → a grant-tightening note, no deny emitted",
       not g3["deny"] and any("researcher" in n for n in g3["notes"]), json.dumps(g3))
