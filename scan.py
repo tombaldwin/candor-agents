@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.10"
+VERSION = "agents-0.4.11"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -49,10 +49,21 @@ PURE_TOOLS = {
     "EnterWorktree", "ExitWorktree", "ToolSearch", "Monitor", "LSP", "SendMessage", "Workflow",
     "RemoteTrigger", "ListMcpResourcesTool", "ReadMcpResourceTool",
 }
-# Curated MCP capability table (under-report-and-say-so; everything else -> Unknown).
+# Curated MCP capability table (under-report-and-say-so; everything else -> Unknown). Keyed by the
+# CONVENTIONAL server name (the official / widely-used name); a project that names its server
+# differently keeps Unknown until it declares `candorEffects` (DECLARING.md) — the table never guesses
+# from a non-standard name. Only servers with an UNAMBIGUOUS effect are listed.
 MCP_TABLE = {
-    "gmail": {"Net", "Ipc"}, "slack": {"Net", "Ipc"}, "github": {"Net"},
-    "atlassian": {"Net"}, "filesystem": {"Fs"}, "postgres": {"Db"}, "sqlite": {"Db"},
+    # messaging that also crosses to the user's device/account (Net + Ipc)
+    "gmail": {"Net", "Ipc"}, "slack": {"Net", "Ipc"},
+    # web / SaaS APIs (Net)
+    "github": {"Net"}, "gitlab": {"Net"}, "atlassian": {"Net"}, "notion": {"Net"}, "linear": {"Net"},
+    "sentry": {"Net"}, "stripe": {"Net"}, "cloudflare": {"Net"}, "gdrive": {"Net"}, "google-maps": {"Net"},
+    "brave-search": {"Net"}, "fetch": {"Net"}, "puppeteer": {"Net"}, "playwright": {"Net"},
+    # databases (Db)
+    "postgres": {"Db"}, "sqlite": {"Db"}, "mysql": {"Db"}, "mongodb": {"Db"}, "redis": {"Db"},
+    # local stores (Fs) and time (Clock) — the official servers of these names
+    "filesystem": {"Fs"}, "memory": {"Fs"}, "time": {"Clock"},
 }
 # Refining the Exec cliff (spec §4 ⟨0.5⟩): a literal, statically-known sub-command head MAY be
 # classified — its effects are ADDED to the caller (a subprocess still spawned, so `Exec` stays),
@@ -70,7 +81,9 @@ CANDOR_HEADS = ("candor", "candor-run.sh", "candor-scan", "candor-query", "cando
 # under-report rule forbids it, so those heads keep the bare cliff.
 COMMAND_HEAD = {
     "curl": {"Net"}, "wget": {"Net"}, "http": {"Net"}, "ssh": {"Net"}, "scp": {"Net"},
-    "psql": {"Db"}, "mysql": {"Db"}, "sqlite3": {"Db"}, "mongosh": {"Db"}, "redis-cli": {"Db"},
+    "sftp": {"Net"}, "ftp": {"Net"}, "telnet": {"Net"},
+    "psql": {"Db"}, "mysql": {"Db"}, "sqlite3": {"Db"}, "mongosh": {"Db"}, "mongo": {"Db"},
+    "redis-cli": {"Db"}, "cqlsh": {"Db"}, "influx": {"Db"},
 }
 COMMAND_HEAD.update({h: {"Fs", "Env"} for h in CANDOR_HEADS})  # §7-item-12: analyzers do Fs/Env only
 # `tools:` absent => the agent inherits EVERYTHING (Claude Code's default): ambient authority.
