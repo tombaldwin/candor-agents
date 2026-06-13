@@ -702,6 +702,10 @@ check("guard: deny Net + deny Exec closes the cliff → no misleading 'add deny 
 g3 = guard.compile_guard("deny Net researcher")
 check("guard: a scoped deny isn't project-wide-enforceable → a grant-tightening note, no deny emitted",
       not g3["deny"] and any("researcher" in n for n in g3["notes"]), json.dumps(g3))
+# deny Db: no built-in tool PRODUCES Db (only Bash/MCP) → a clear message, not "denies []"
+gdb = guard.compile_guard("deny Db")
+check("guard: deny Db (no built-in Db tool) explains it's reached via Bash/MCP, not 'denies []'",
+      not gdb["deny"] and any("no built-in tool produces Db" in w for w in gdb["warnings"]), json.dumps(gdb))
 # a configured Net MCP server is denied too (mcp__server)
 _gd = tempfile.mkdtemp()
 json.dump({"mcpServers": {"github": {}}}, open(os.path.join(_gd, ".mcp.json"), "w"))
