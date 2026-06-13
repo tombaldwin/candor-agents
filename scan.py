@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.6"
+VERSION = "agents-0.4.7"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -388,16 +388,40 @@ def main():
     # scope: the scan describes the PROJECT.
     hook_cmds, hook_events, hook_why = set(), [], set()
     tool_hook_matchers = []  # matchers of TOOL-event hooks that run a command — the per-agent reach
+    # `permissions.deny` (settings.json) is HARD-ENFORCED by the harness (precedence deny > ask >
+    # allow), so a WHOLLY-denied tool/server is genuinely unreachable — candor SUBTRACTS it. This is
+    # the one place the may-analysis tightens on sound data. A SCOPED deny (`Bash(curl:*)`, one mcp
+    # tool `mcp__s__t`, a path glob) removes only a SUBSET of a tool's uses — the tool stays usable,
+    # so it is recorded as informative but NOT subtracted (the Bash cliff: Exec survives one denied
+    # command). `allow`/`ask` don't expand capability and are ignored (candor stays an upper bound).
+    # Hooks BYPASS the permission system (the harness runs them directly), so a `deny Bash` never
+    # strips the hooks unit's Exec.
+    denied_tools, denied_servers, scoped_denies = set(), set(), set()
     for sf in ("settings.json", "settings.local.json"):
         sp = os.path.join(root, ".claude", sf)
         if not os.path.exists(sp):
             continue
         try:
-            hooks_cfg = json.load(open(sp)).get("hooks") or {}
+            cfg = json.load(open(sp))
         except Exception as e:
-            print(f"candor-agents: unreadable .claude/{sf} ({e}) — its hooks are UNKNOWN", file=sys.stderr)
+            print(f"candor-agents: unreadable .claude/{sf} ({e}) — its hooks/permissions are UNKNOWN", file=sys.stderr)
             hook_why.add(f"hooks-unreadable:{sf}")
             continue
+        for rule in (cfg.get("permissions") or {}).get("deny") or []:
+            if not isinstance(rule, str):
+                continue
+            r = rule.strip()
+            if r.startswith("mcp__"):
+                parts = r.split("__")
+                if len(parts) == 2 and parts[1]:
+                    denied_servers.add(parts[1])  # `mcp__server` = the whole server
+                else:
+                    scoped_denies.add(r)          # `mcp__server__tool` = one tool, not the server
+            elif "(" in r:
+                scoped_denies.add(r)              # `Bash(curl:*)` / `Read(./secret/**)` — scoped
+            elif r:
+                denied_tools.add(r)               # a bare tool name = the whole tool
+        hooks_cfg = cfg.get("hooks") or {}
         for event in sorted(hooks_cfg):
             entries = hooks_cfg[event]
             if not isinstance(entries, list):
@@ -422,9 +446,99 @@ def main():
                 hook_events.append(f"{event}({n_cmds})")
     has_hooks = bool(hook_events or hook_why)
 
-    if not agents and not has_hooks:
-        print(f"candor-agents: no agent definitions under {adir} and no hooks — nothing to analyze.", file=sys.stderr)
+    # Apply the harness-enforced denials: drop a wholly-denied tool/server from any grant list. A
+    # specifier (`Bash(curl:*)`) is left in place — base tool stays usable, so its effect stays.
+    def live(tools):
+        """A grant list with the wholly-denied tools/servers removed (None stays ambient)."""
+        if tools is None:
+            return None
+        out = []
+        for t in tools:
+            b = t.split("(", 1)[0].strip()
+            if b in denied_tools:
+                continue
+            if b.startswith("mcp__"):
+                seg = b.split("__")
+                if len(seg) >= 2 and seg[1] in denied_servers:
+                    continue
+            out.append(t)
+        return out
+    ambient_live = [t for t in AMBIENT if t not in denied_tools]
+    live_servers = [s for s in mcp_servers if s not in denied_servers]
+    for a in agents.values():
+        a["lt"] = live(a["tools"])  # deny-filtered grants, used for effects/edges/link
+
+    # ── slash commands + skills: in-session capability/entry units ────────────────────────────────
+    # `.claude/commands/**/*.md` (a `/command`) and `.claude/skills/*/SKILL.md` (a model-invoked
+    # skill) each carry their OWN `allowed-tools` frontmatter and a command may run `!`-prefixed
+    # shell — a capability surface distinct from the agents. The session root invokes them; they hold
+    # tools (so a tool-event hook can fire on their use) but do not themselves delegate. Effects come
+    # from `allowed-tools` (specifiers stripped to the base tool — `Bash(git:*)` is still Exec, the
+    # cliff) plus, for a command, the heads of any `!` shell line. An ABSENT `allowed-tools` is PURE
+    # (a prompt-only command), NOT ambient — the opposite of an agent's absent `tools:`.
+    def _split_tools(s):
+        """Comma-split a tool list, respecting parens so `Bash(a, b), Read` keeps the specifier whole."""
+        out, buf, depth = [], "", 0
+        for ch in s:
+            if ch == "(":
+                depth += 1; buf += ch
+            elif ch == ")":
+                depth = max(0, depth - 1); buf += ch
+            elif ch == "," and depth == 0:
+                out.append(buf); buf = ""
+            else:
+                buf += ch
+        out.append(buf)
+        return [x.strip() for x in out if x.strip()]
+
+    def _allowed(meta):
+        """Base tool names from an `allowed-tools` frontmatter value (string/list/inline-list); [] if absent."""
+        v = meta.get("allowed-tools")
+        if v is None:
+            return []
+        if isinstance(v, list):
+            items = [str(x) for x in v]
+        else:
+            s = str(v).strip()
+            if s.startswith("[") and s.endswith("]"):
+                s = s[1:-1]
+            items = _split_tools(s)
+        return [t.split("(", 1)[0].strip() for t in items if t.strip()]
+
+    commands, skills = {}, {}
+    cdir = os.path.join(root, ".claude", "commands")
+    if os.path.isdir(cdir):
+        for dp, _ds, fs_ in os.walk(cdir):
+            for f in sorted(fs_):
+                if not f.endswith(".md"):
+                    continue
+                rel = os.path.relpath(os.path.join(dp, f), cdir)[:-3].replace(os.sep, ":")
+                meta, body = parse_frontmatter(open(os.path.join(dp, f)).read())
+                heads = set()
+                for line in body.splitlines():
+                    if line.lstrip().startswith("!"):
+                        heads |= bash_cmds(line.lstrip()[1:])
+                commands[f"command:{rel}"] = {"tools": _allowed(meta),
+                                              "file": os.path.relpath(os.path.join(dp, f), root), "heads": heads}
+    sdir = os.path.join(root, ".claude", "skills")
+    if os.path.isdir(sdir):
+        for d in sorted(os.listdir(sdir)):
+            sm = os.path.join(sdir, d, "SKILL.md")
+            if not os.path.isfile(sm):
+                continue
+            meta, _b = parse_frontmatter(open(sm).read())
+            skills[f"skill:{d}"] = {"tools": _allowed(meta), "file": os.path.relpath(sm, root)}
+
+    if not agents and not has_hooks and not commands and not skills:
+        print(f"candor-agents: no agent definitions under {adir}, no commands/skills, and no hooks "
+              f"— nothing to analyze.", file=sys.stderr)
         return 2
+    if denied_tools or denied_servers or scoped_denies:
+        sub = sorted(denied_tools | {f"mcp:{s}" for s in denied_servers})
+        msg = f"candor-agents: permissions.deny removed {{{', '.join(sub) or '—'}}} from the fleet surface"
+        if scoped_denies:
+            msg += f"; scoped (not subtracted — tool stays usable): {', '.join(sorted(scoped_denies))}"
+        print(msg, file=sys.stderr)
 
     # ── edges (delegation) ────────────────────────────────────────────────────────────────────
     # Ladder mirrors the code engine: named-delegation narrowing (devirt) > CHA over all agents.
@@ -443,65 +557,81 @@ def main():
               f"to avoid clobbering it", file=sys.stderr)
     calls = {}
     for name, a in agents.items():
-        has_agent_tool = ("Agent" in (a["tools"] or []) or "Task" in (a["tools"] or [])
-                          or (nested and a["tools"] is None))
+        lt = a["lt"]  # deny-filtered: a denied `Agent`/`Task` grant can no longer delegate
+        has_agent_tool = ("Agent" in (lt or []) or "Task" in (lt or [])
+                          or (nested and a["tools"] is None and "Agent" not in denied_tools))
         edges = []
         if has_agent_tool:
             mentioned = [n for n in names if n != name and re.search(rf"(?:^|[`'\"\s]){re.escape(n)}[`'\"\s.,]", a["body"] + " " + a["desc"] + " ")]
             edges = mentioned if mentioned else [n for n in names if n != name]  # CHA fallback
         calls[name] = sorted(edges)
+    # Commands and skills are leaf units (they hold tools but don't spawn subagents) — init their
+    # edge lists so the hook-matcher loop and the sidecar see them.
+    for u in list(commands) + list(skills):
+        calls[u] = []
     # The session root: an entry point holding every tool + every configured MCP server, able to
-    # spawn every agent. Named `session` (not `main`): in combined mode (fleet + code reports under
-    # ONE prefix) the crate's `fn main` would collide with it.
-    calls[ROOT] = sorted(names + ([HOOKS] if has_hooks else []))
+    # spawn every agent and invoke every command/skill. Named `session` (not `main`): in combined
+    # mode (fleet + code reports under ONE prefix) the crate's `fn main` would collide with it.
+    calls[ROOT] = sorted(names + list(commands) + list(skills) + ([HOOKS] if has_hooks else []))
     if has_hooks:
         calls[HOOKS] = []
         # A TOOL-event hook (PreToolUse/PostToolUse) runs its command on the matching tool use of
-        # ANY agent, not just the session root — so each agent whose granted tools match a hook's
-        # matcher EDGES to the hooks unit and inherits its Exec. Without this, `forbid reviewer ->
-        # Exec` passed green while a PostToolUse hook exec'd on the reviewer's every edit. Lifecycle
-        # hooks (Stop/SessionStart/…) stay session-only. Conservative: an unparseable matcher edges
-        # no agent (under-report, never fabricate).
-        for name, a in agents.items():
-            if any(tools_match_matcher(a["tools"], m) for m in tool_hook_matchers):
+        # ANY unit, not just the session root — so each agent/command/skill whose tools match a
+        # hook's matcher EDGES to the hooks unit and inherits its Exec. Without this, `forbid
+        # reviewer -> Exec` passed green while a PostToolUse hook exec'd on the reviewer's every edit.
+        # Lifecycle hooks (Stop/SessionStart/…) stay session-only. Conservative: an unparseable
+        # matcher edges no unit (under-report, never fabricate). Holders carry deny-filtered tools.
+        holders = {n: a["lt"] for n, a in agents.items()}
+        holders.update({n: live(c["tools"]) for n, c in commands.items()})
+        holders.update({n: live(s["tools"]) for n, s in skills.items()})
+        for name, tools in holders.items():
+            if any(tools_match_matcher(tools, m) for m in tool_hook_matchers):
                 calls[name] = sorted(set(calls[name]) | {HOOKS})
 
     # ── per-agent direct effects ──────────────────────────────────────────────────────────────
+    # The MCP reach of an ambient unit (every CONFIGURED, non-denied server): one helper, used by
+    # the ambient agents and the session root (was copy-pasted three ways).
+    def mcp_effects(servers):
+        e, w = set(), set()
+        for s in servers:
+            if s in MCP_TABLE:
+                e |= MCP_TABLE[s]
+            elif s in declared_mcp:
+                e |= declared_mcp[s]
+            elif s in declared_bad:
+                e.add("Unknown"); w.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
+            else:
+                e.add("Unknown"); w.add(f"mcp-uncurated:{s}")
+        return e, w
+
     direct, fs_detail, why_map, unresolved_direct = {}, {}, {}, {}
     for name, a in agents.items():
-        tools = a["tools"]
-        if tools is None:
-            # Ambient authority: every built-in + every configured MCP server's tools.
-            effs, fs, why = classify(AMBIENT, mcp_servers)
-            for s in mcp_servers:
-                if s in MCP_TABLE:
-                    effs |= MCP_TABLE[s]
-                elif s in declared_mcp:
-                    effs |= declared_mcp[s]
-                elif s in declared_bad:
-                    effs.add("Unknown")
-                    why.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
-                else:
-                    effs.add("Unknown")
-                    why.add(f"mcp-uncurated:{s}")
+        if a["tools"] is None:
+            # Ambient authority: every built-in + every configured MCP server's tools (minus denials).
+            effs, fs, why = classify(ambient_live, live_servers, declared_mcp, declared_bad)
+            me_, mw_ = mcp_effects(live_servers)
+            effs |= me_; why |= mw_
             why.add("ambient:tools-unrestricted")
             effs.add("Unknown")
         else:
-            effs, fs, why = classify(tools, mcp_servers, declared_mcp, declared_bad)
+            effs, fs, why = classify(a["lt"], live_servers, declared_mcp, declared_bad)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
         unresolved_direct[name] = "Unknown" in effs
-    me, mf, mw = classify(AMBIENT, mcp_servers)
-    for s in mcp_servers:
-        if s in MCP_TABLE:
-            me |= MCP_TABLE[s]
-        elif s in declared_mcp:
-            me |= declared_mcp[s]
-        elif s in declared_bad:
-            me.add("Unknown")
-            mw.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
-        else:
-            me.add("Unknown")
-            mw.add(f"mcp-uncurated:{s}")
+    # Commands / skills: effects from their (deny-filtered) allowed-tools; a command's `!`-shell adds
+    # Exec + its heads, unless Bash itself is denied (then the shell line could not run).
+    for u, c in commands.items():
+        effs, fs, why = classify(live(c["tools"]), live_servers, declared_mcp, declared_bad)
+        if c["heads"] and "Bash" not in denied_tools:
+            effs.add("Exec")
+        direct[u], fs_detail[u], why_map[u] = effs, fs, why
+        unresolved_direct[u] = "Unknown" in effs
+    for u, sk in skills.items():
+        effs, fs, why = classify(live(sk["tools"]), live_servers, declared_mcp, declared_bad)
+        direct[u], fs_detail[u], why_map[u] = effs, fs, why
+        unresolved_direct[u] = "Unknown" in effs
+    me, mf, mw = classify(ambient_live, live_servers, declared_mcp, declared_bad)
+    me_, mw_ = mcp_effects(live_servers)
+    me |= me_; mw |= mw_
     direct[ROOT], fs_detail[ROOT], why_map[ROOT] = me, mf, mw
     unresolved_direct[ROOT] = "Unknown" in me
     if has_hooks:
@@ -530,9 +660,12 @@ def main():
         if not linked:
             print(f"candor-agents: --link {link}: no entryPoint functions found — nothing linked", file=sys.stderr)
         for name, a in agents.items():
-            runs_code = a["tools"] is None or "Bash" in a["tools"]
+            runs_code = (a["tools"] is None and "Bash" not in denied_tools) or "Bash" in (a["lt"] or [])
             if runs_code:
                 calls[name] = sorted(set(calls[name]) | set(linked))
+        for u, c in commands.items():
+            if "Bash" in live(c["tools"]):  # a command that shells out runs the project's own binaries
+                calls[u] = sorted(set(calls[u]) | set(linked))
         calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
 
     # ── transitive fixpoint (spec §5a) — one shared propagate(), used by observe.py too ─────────
@@ -554,6 +687,10 @@ def main():
         # spec ⟨0.5⟩ unitKind: a fleet's units are not functions — informative, never semantic.
         if n in agents:
             kind, loc = "agent", agents[n]["file"]
+        elif n in commands:
+            kind, loc = "command", commands[n]["file"]
+        elif n in skills:
+            kind, loc = "skill", skills[n]["file"]
         elif n == HOOKS:
             kind, loc = "hooks", f".claude/settings*.json hooks: {', '.join(hook_events) or '(unreadable)'}"
         else:
@@ -574,6 +711,8 @@ def main():
             entry["unknownWhy"] = sorted(why_map[n])
         if kind == "hooks" and hook_cmds:
             entry["cmds"] = sorted(hook_cmds)
+        elif kind == "command" and commands[n]["heads"] and "Bash" not in denied_tools:
+            entry["cmds"] = sorted(commands[n]["heads"])
         if kind == "session":
             entry["entryPoint"] = True
         # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is

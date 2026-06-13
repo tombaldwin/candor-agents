@@ -17,7 +17,8 @@ is the fleet-specific surface.
 pipx install git+https://github.com/tombaldwin/candor-agents   # recommended — isolated (plain pip
                                                                # works too, but only into a venv)
 
-candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: .claude/agents/*.md + .mcp.json
+candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: agents, .mcp.json, settings,
+                                                       #           slash-commands, skills
 candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: the session transcripts
 candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege)
 ```
@@ -33,10 +34,10 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 
 ## How to read the report
 
-- Units are agent types plus the `session` root (`entryPoint: true`); `hash` is `<fleet>#<agent>`.
-  Every unit carries `unitKind` (spec 0.5 draft, informative): `agent`, `session`, or `hooks` —
-  a fleet's units are not functions, and the field keeps a merged prefix (fleet + code reports)
-  readable.
+- Units are agent types, `command:`/`skill:` units, and the `session` root (`entryPoint: true`);
+  `hash` is `<fleet>#<unit>`. Every unit carries `unitKind` (spec 0.5 draft, informative): `agent`,
+  `command`, `skill`, `session`, or `hooks` — a fleet's units are not functions, and the field
+  keeps a merged prefix (fleet + code reports) readable.
 - `inferred` is the transitive effect set (delegation propagates a delegate's effects to its
   delegator); `direct` is the agent's own grants/actions.
 - **Grants are MAY-use upper bounds**: a declared effect says the agent *can* reach it, never that
@@ -52,6 +53,18 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 - A missing `tools:` line is **ambient authority** (everything + Unknown); `tools: []` is
   maximally confined. A frontmatter-less `.md` in `.claude/agents/` is not an agent and is
   skipped with disclosure.
+- **`permissions.deny` is subtracted** (settings.json): a wholly-denied tool or MCP server
+  (`"WebFetch"`, `"mcp__github"`) is hard-enforced by the harness, so its effect is *removed* from
+  every unit — the one place the may-analysis tightens on sound data. A **scoped** deny
+  (`Bash(curl:*)`, one mcp tool, a path glob) removes only a subset of a tool's uses, so it is
+  disclosed on the receipt but **not** subtracted (the tool stays usable; Exec survives the cliff).
+  `allow`/`ask` don't expand capability and are ignored. Hooks bypass permissions, so a `deny Bash`
+  never strips the `hooks` unit's Exec.
+- **Slash commands and skills are units**: `.claude/commands/**/*.md` (`command:<name>`) and
+  `.claude/skills/*/SKILL.md` (`skill:<name>`) carry their own `allowed-tools` (effects classify
+  from it; `Bash(git:*)` is still Exec) and a command's `!`-shell adds Exec + its command heads.
+  The session root invokes them. Unlike an agent, an **absent `allowed-tools` is pure** (a
+  prompt-only command), not ambient.
 - **Hooks are capability surface**: `.claude/settings.json` / `settings.local.json` hook commands
   run *automatically* — they appear as a `hooks` unit (Exec + the command heads as `cmds`). A
   **tool-event** hook (`PreToolUse`/`PostToolUse`) fires on the matching tool use of any agent, so
