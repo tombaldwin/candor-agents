@@ -725,6 +725,16 @@ json.dump({"mcpServers": {"github": {}}}, open(os.path.join(_gd, ".mcp.json"), "
 g4 = guard.compile_guard("deny Net", project_dir=_gd)
 check("guard: deny Net also denies a configured Net MCP server (mcp__github)",
       "mcp__github" in g4["deny"], json.dumps(g4))
+# guard VALIDATES a declared candorEffects like scan (SPEC §5.1) — a typo voids+warns, not silent under-protect
+_gv = tempfile.mkdtemp()
+json.dump({"mcpServers": {"db": {"candorEffects": ["Database"]}}}, open(os.path.join(_gv, ".mcp.json"), "w"))
+g5 = guard.compile_guard("deny Db", project_dir=_gv)
+check("guard: a typo'd candorEffects voids loudly (not a silent under-protect)",
+      "mcp__db" not in g5["deny"] and any("voided" in w and "db" in w for w in g5["warnings"]), json.dumps(g5))
+_gw = tempfile.mkdtemp()
+json.dump({"mcpServers": {"mydb": {"candorEffects": ["Db"]}}}, open(os.path.join(_gw, ".mcp.json"), "w"))
+check("guard: a VALID candorEffects denies the declared server (mcp__mydb)",
+      "mcp__mydb" in guard.compile_guard("deny Db", project_dir=_gw)["deny"])
 # THE DUAL CLOSES THE LOOP: guard WRITES permissions.deny, scan READS it → the fleet loses the effect
 rep, r = build(agents_files={"net.md": agent("net", "WebFetch")},
                settings={"permissions": {"deny": guard.compile_guard("deny Net")["deny"]}})
