@@ -20,10 +20,6 @@ import os
 import re
 import sys
 
-import yaml  # frontmatter is real YAML — parse it with the real parser Claude uses, not a hand-rolled
-             # subset (which silently diverged: quoted/commented tool tokens classified as Unknown and
-             # evaded effect-specific deny gates). PyYAML is candor-agents' one runtime dep.
-
 SPEC = "0.4"
 VERSION = "agents-0.4.11"
 
@@ -146,6 +142,33 @@ _CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _SUBST = re.compile(r"[$<]\(\s*([A-Za-z0-9._+/-]+)")
 
 
+def _strip_comment(s):
+    """Strip a trailing YAML inline comment (` #…`): a `#` preceded by whitespace (or at the start) and
+    NOT inside quotes begins a comment, which the real YAML parser Claude uses drops. Without this a
+    `tools: Read, Bash # only safe` kept `Bash # only safe` as one token → Unknown, evading a deny gate.
+    Quote-aware so a `#` inside a quoted scalar stays literal; `C#`/`a#b` (no leading space) stay."""
+    q = None
+    for i, ch in enumerate(s):
+        if q:
+            if ch == q:
+                q = None
+        elif ch in "\"'":
+            q = ch
+        elif ch == "#" and (i == 0 or s[i - 1] in " \t"):
+            return s[:i].rstrip()
+    return s
+
+
+def _unquote(s):
+    """Strip ONE layer of matching surrounding quotes from a YAML scalar tool token. A user who quotes
+    a tool entry to protect its specifier's special chars — `"Bash(git:*)"`, `'mcp__x__y'` (the parens,
+    colon, and star invite YAML quoting) — must NOT have it become an unrecognized tool that classifies
+    as `Unknown` (its base `"Bash` no longer matches), which would silently turn a definite Exec/Net into
+    Unknown and evade an effect-specific `deny Exec`/`deny Net` gate. Quoting is presentation, not meaning."""
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        return s[1:-1].strip()
+    return s
 
 
 def propagate(seed, edges):
@@ -255,42 +278,49 @@ def bash_cmds(command):
 
 
 def parse_frontmatter(text):
-    """Parse a file's YAML frontmatter with the REAL parser (the one Claude Code uses), returning
-    (meta, body). `meta` is the parsed mapping, `{}` when there is NO frontmatter block (a plain .md —
-    not an agent), or **None** when a block is present but its YAML is MALFORMED — a distinct signal the
-    caller must DISCLOSE (a broken agent must never be silently dropped, the under-report direction).
-    Using real YAML retires the hand-rolled subset whose quote/comment gaps let tools evade deny gates."""
+    """The agent-file YAML frontmatter subset that matters: name/description/tools (string or list)."""
     m = re.match(r"\A---\n(.*?)\n---\n?(.*)\Z", text, re.S)
     if not m:
         return {}, text
-    body = m.group(2)
-    try:
-        meta = yaml.safe_load(m.group(1))
-    except yaml.YAMLError:
-        return None, body          # present but unparseable → malformed (caller discloses)
-    if meta is None:
-        return {}, body            # an empty frontmatter block (`---\n---`) — no keys
-    if not isinstance(meta, dict):
-        return None, body          # frontmatter that isn't a mapping (a bare list/scalar) — malformed
+    meta, body = {}, m.group(2)
+    lines = m.group(1).split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        km = re.match(r"^(\w[\w-]*):\s*(.*)$", line)
+        if km:
+            key, val = km.group(1), _strip_comment(km.group(2)).strip()
+            if val == "" and i + 1 < len(lines) and lines[i + 1].lstrip().startswith("- "):
+                items = []
+                while i + 1 < len(lines) and lines[i + 1].lstrip().startswith("- "):
+                    items.append(_strip_comment(lines[i + 1].lstrip()[2:]).strip())
+                    i += 1
+                meta[key] = items
+            else:
+                meta[key] = val
+        i += 1
     return meta, body
 
 
 def tool_list(meta):
-    """The declared tools, or None for 'inherit everything'. PyYAML hands us native types: a YAML list
-    (`[a, b]` or block `- a`) is already a Python list with quotes/comments stripped; a plain scalar
-    (`Read, Bash`) is one string we comma-split (candor's convention — YAML keeps it as one scalar)."""
+    """The declared tools, or None for 'inherit everything'."""
     t = meta.get("tools")
-    if t is None:
+    if t is None or t == "" or t == "*":
+        return None
+    if isinstance(t, str):
+        t = _unquote(t)  # a whole-value quote (`tools: "Read, Bash"`) — strip before splitting
+    # `tools: All tools` (and bare `all`) — the human "everything" convention, found ×12 on a real
+    # public fleet reading as an unknown tool named "All tools". It MEANS ambient authority.
+    if isinstance(t, str) and t.strip().lower() in ("all", "all tools"):
         return None
     if isinstance(t, list):
-        # `tools: []` is EXPLICITLY no tools (maximally confined — pure), not ambient.
-        return [s for x in t if (s := str(x).strip())]
-    t = str(t).strip()
-    # `tools: ""`/`*` → ambient; `tools: All tools` (and bare `all`) is the human "everything"
-    # convention (found ×12 on a real public fleet) — ambient authority, not a tool named "All tools".
-    if t in ("", "*") or t.lower() in ("all", "all tools"):
-        return None
-    return [s for x in t.split(",") if (s := x.strip())]
+        return [u for x in t if (u := _unquote(str(x)))]
+    # Inline YAML list: `tools: []` is EXPLICITLY no tools (maximally confined — pure), and
+    # `tools: [a, b]` is a list — not a single tool named "[a, b]". Real-fleet finding.
+    if t.startswith("[") and t.endswith("]"):
+        inner = t[1:-1].strip()
+        return [u for x in inner.split(",") if (u := _unquote(x))] if inner else []
+    return [u for x in t.split(",") if (u := _unquote(x))]
 
 
 def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
@@ -409,31 +439,21 @@ def main():
     agents = {}  # name -> {tools: list|None, body, desc}
     adir = os.path.join(root, ".claude", "agents")
     if os.path.isdir(adir):
-        skipped, malformed = [], []
+        skipped = []
         for f in sorted(os.listdir(adir)):
             if not f.endswith(".md"):
                 continue
             meta, body = parse_frontmatter(open(os.path.join(adir, f)).read())
-            if meta is None:
-                # a frontmatter block IS present but its YAML is malformed — DISCLOSE, never silently
-                # drop (that would under-report a real agent's capability surface). Claude Code's own
-                # YAML parser would likely also reject it, so it is not analyzed, but loudly.
-                malformed.append(f)
-                continue
             if not meta:
                 # no frontmatter at all (a README, notes…): Claude Code won't load it — counting
                 # it would FABRICATE an ambient-authority unit the runtime doesn't have
                 skipped.append(f)
                 continue
-            name = str(meta.get("name") or f[:-3])
+            name = meta.get("name") or f[:-3]
             agents[name] = {"tools": tool_list(meta), "body": body, "desc": str(meta.get("description", "")), "file": f}
         if skipped:
             print(f"candor-agents: skipped {len(skipped)} .md file(s) with no frontmatter "
                   f"(not agent definitions): {', '.join(skipped[:5])}{'…' if len(skipped) > 5 else ''}",
-                  file=sys.stderr)
-        if malformed:
-            print(f"candor-agents: {len(malformed)} agent .md file(s) have MALFORMED YAML frontmatter "
-                  f"— NOT analyzed (fix the YAML): {', '.join(malformed[:5])}{'…' if len(malformed) > 5 else ''}",
                   file=sys.stderr)
     # ── hooks: commands the harness runs AUTOMATICALLY on tool events ─────────────────────────
     # `.claude/settings.json` / `settings.local.json` hook entries are fleet capability surface:
@@ -545,18 +565,22 @@ def main():
             else:
                 buf += ch
         out.append(buf)
-        return [x.strip() for x in out if x.strip()]
+        # _unquote each item: a quoted `"Bash(git:*)"` specifier must keep its meaning, not become a
+        # `"Bash` base that classifies as Unknown and slips an effect-specific deny gate (the parens/
+        # colon/star in a Bash specifier are exactly what invites YAML quoting).
+        return [u for x in out if (u := _unquote(x))]
 
     def _raw_tools(meta):
-        """The raw `allowed-tools` items (specifiers intact), or [] if absent. PyYAML gives a real list
-        for a YAML sequence (quotes/comments already stripped); a scalar `Bash(git:*), Read` is one
-        string we paren-aware-split (a Bash specifier's `(a, b)` commas must not split it)."""
+        """The raw `allowed-tools` items (specifiers intact), or [] if absent."""
         v = meta.get("allowed-tools")
         if v is None:
             return []
         if isinstance(v, list):
-            return [s for x in v if (s := str(x).strip())]
-        return _split_tools(str(v).strip())
+            return [u for x in v if (u := _unquote(str(x)))]
+        s = _unquote(str(v).strip())  # a whole-value quote around an inline list / single specifier
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        return _split_tools(s)
 
     def _bash_spec_head(spec):
         """The command word a `Bash(...)` specifier scopes to (`git diff:*`→git, `*candor-run.sh*`
@@ -579,7 +603,6 @@ def main():
         return heads
 
     commands, skills = {}, {}
-    cs_malformed = []  # command/skill files whose YAML frontmatter is malformed (disclosed, not analyzed)
     cdir = os.path.join(root, ".claude", "commands")
     if os.path.isdir(cdir):
         for dp, _ds, fs_ in os.walk(cdir):
@@ -588,9 +611,6 @@ def main():
                     continue
                 rel = os.path.relpath(os.path.join(dp, f), cdir)[:-3].replace(os.sep, ":")
                 meta, body = parse_frontmatter(open(os.path.join(dp, f)).read())
-                if meta is None:
-                    cs_malformed.append(os.path.relpath(os.path.join(dp, f), root))
-                    continue
                 raw = _raw_tools(meta)
                 commands[f"command:{rel}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
                                               "file": os.path.relpath(os.path.join(dp, f), root),
@@ -602,16 +622,9 @@ def main():
             if not os.path.isfile(sm):
                 continue
             meta, body = parse_frontmatter(open(sm).read())
-            if meta is None:
-                cs_malformed.append(os.path.relpath(sm, root))
-                continue
             raw = _raw_tools(meta)
             skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
                                     "file": os.path.relpath(sm, root), "heads": _heads(raw, body)}
-    if cs_malformed:
-        print(f"candor-agents: {len(cs_malformed)} command/skill file(s) have MALFORMED YAML frontmatter "
-              f"— NOT analyzed (fix the YAML): {', '.join(cs_malformed[:5])}{'…' if len(cs_malformed) > 5 else ''}",
-              file=sys.stderr)
 
     # ── scheduled tasks: autonomous entry points ──────────────────────────────────────────────────
     # A DURABLE cron job (CronCreate `durable: true`) persists to .claude/scheduled_tasks.json and

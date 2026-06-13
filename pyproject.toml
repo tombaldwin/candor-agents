@@ -9,8 +9,6 @@ description = "candor for agent fleets — declared vs observed effects, transit
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 requires-python = ">=3.9"
-dependencies = ["PyYAML>=5.1"]  # parse agent/command/skill frontmatter with the REAL YAML parser
-                               # (Claude's), not a hand-rolled subset whose gaps let tools evade gates
 keywords = ["agents", "effects", "static-analysis", "claude-code", "policy", "candor"]
 
 [project.urls]
