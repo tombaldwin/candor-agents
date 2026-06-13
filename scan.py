@@ -631,10 +631,17 @@ def main():
         print(f"candor-agents: an agent is named `hooks` — the settings-hooks unit is `{HOOKS}` "
               f"to avoid clobbering it", file=sys.stderr)
     calls = {}
-    # Precompile ONE word-boundary regex per agent name (was a fresh compile per agent×name pair — a
+    # Precompile ONE name-boundary regex per agent name (was a fresh compile per agent×name pair — a
     # quadratic-with-compile blow-up: 600 agents took 11s; precompiled, the compile cost is O(n) and
-    # the per-pair search is cheap).
-    name_re = {n: re.compile(rf"(?:^|[`'\"\s]){re.escape(n)}[`'\"\s.,]") for n in names}
+    # the per-pair search is cheap). The boundary is "not flanked by a name-CONTINUATION char": agent
+    # names are `[A-Za-z0-9._+-]`, so a mention is a real one when the chars around it can't be part of
+    # the same name. An earlier explicit-delimiter class ([`'"\s.,]) MISSED a name followed by `:`,
+    # wrapped in `()`, or split by `/` — and since narrowing keeps only matched names, a punctuation-
+    # adjacent delegate was silently DROPPED (an unsound under-report of a real edge). `.` is treated
+    # as a delimiter (a trailing period is prose punctuation), so the only residual ambiguity — a name
+    # literally containing `.` — over-reports a harmless extra edge rather than dropping a real one.
+    _NC = r"[A-Za-z0-9_+-]"  # name-continuation chars (dot excluded: prose punctuation, not a boundary break)
+    name_re = {n: re.compile(rf"(?<!{_NC}){re.escape(n)}(?!{_NC})") for n in names}
     for name, a in agents.items():
         lt = a["lt"]  # deny-filtered: a denied `Agent`/`Task` grant can no longer delegate
         has_agent_tool = ("Agent" in (lt or []) or "Task" in (lt or [])
