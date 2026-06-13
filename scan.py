@@ -70,6 +70,24 @@ _CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _SUBST = re.compile(r"[$<]\(\s*([A-Za-z0-9._+/-]+)")
 
 
+def propagate(seed, edges):
+    """Transitive fixpoint over a delegation graph: each unit accumulates its callees' values to a
+    least fixpoint (spec §5a). One implementation, used by scan.py (effects, fs kinds) and observe.py
+    (effects, fs, hosts, cmds, paths) — so the declared and observed halves of a drift comparison can
+    never propagate differently. `seed`: name -> set; `edges`: name -> iterable of callee names."""
+    acc = {k: set(v) for k, v in seed.items()}
+    changed = True
+    while changed:
+        changed = False
+        for caller, callees in edges.items():
+            for callee in callees:
+                add = acc.get(callee) or set()
+                if add - acc.setdefault(caller, set()):
+                    acc[caller] |= add
+                    changed = True
+    return acc
+
+
 def bash_cmds(command):
     """Command heads from a shell string — the decidable literal subset, fabrication-averse.
 
@@ -474,29 +492,12 @@ def main():
                 calls[name] = sorted(set(calls[name]) | set(linked))
         calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
 
-    # ── transitive fixpoint (spec §5a) ────────────────────────────────────────────────────────
-    inferred = {n: set(direct[n]) for n in calls}
+    # ── transitive fixpoint (spec §5a) — one shared propagate(), used by observe.py too ─────────
+    seed = {n: set(direct[n]) for n in calls}
     for fn_, effs_ in linked.items():
-        inferred.setdefault(fn_, set(effs_))
-    changed = True
-    while changed:
-        changed = False
-        for n, callees in calls.items():
-            for c in callees:
-                add = inferred.get(c, set()) - inferred[n]
-                if add:
-                    inferred[n] |= add
-                    changed = True
-    fs_tr = {n: set(fs_detail.get(n, set())) for n in calls}
-    changed = True
-    while changed:
-        changed = False
-        for n, callees in calls.items():
-            for c in callees:
-                add = fs_tr.get(c, set()) - fs_tr[n]
-                if add:
-                    fs_tr[n] |= add
-                    changed = True
+        seed.setdefault(fn_, set(effs_))
+    inferred = propagate(seed, calls)
+    fs_tr = propagate({n: set(fs_detail.get(n, set())) for n in calls}, calls)
 
     # ── emit the spec §2 envelope + §2.2 sidecar ─────────────────────────────────────────────
     functions = []
@@ -506,27 +507,31 @@ def main():
         effs = inferred[n]
         if not effs:
             continue  # pure units are omitted from the report (present in the sidecar)
+        # ONE discriminant for the unit's kind + location (was three scattered ternaries/conditions).
+        # spec ⟨0.5⟩ unitKind: a fleet's units are not functions — informative, never semantic.
+        if n in agents:
+            kind, loc = "agent", agents[n]["file"]
+        elif n == HOOKS:
+            kind, loc = "hooks", f".claude/settings*.json hooks: {', '.join(hook_events) or '(unreadable)'}"
+        else:
+            kind, loc = "session", "(session root)"
         entry = {
             "fn": n,
-            "loc": agents[n]["file"] if n in agents
-                   else f".claude/settings*.json hooks: {', '.join(hook_events) or '(unreadable)'}" if n == HOOKS
-                   else "(session root)",
+            "loc": loc,
             "inferred": sorted(effs),
             "direct": sorted(direct.get(n, set())),
             "declared": [], "undeclared": sorted(effs - {"Unknown"}), "overdeclared": [],
             "unresolved": "Unknown" in effs,
-            # spec ⟨0.5⟩ unitKind: a fleet's units are not functions — name what each one is, so a
-            # merged prefix (fleet + code reports) renders sensibly. Informative, never semantic.
-            "unitKind": "session" if n == ROOT else "hooks" if n == HOOKS else "agent",
+            "unitKind": kind,
             "calls": calls[n],
         }
         if fs_tr.get(n):
             entry["fs"] = sorted(fs_tr[n])
         if why_map.get(n):
             entry["unknownWhy"] = sorted(why_map[n])
-        if n == HOOKS and hook_cmds:
+        if kind == "hooks" and hook_cmds:
             entry["cmds"] = sorted(hook_cmds)
-        if n == ROOT:
+        if kind == "session":
             entry["entryPoint"] = True
         # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is
         # chainable like any sibling (`<fleet>#<agent>`, the pkg#LocalName shape).

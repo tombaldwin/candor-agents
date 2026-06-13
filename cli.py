@@ -96,7 +96,9 @@ def main():
         # to documentation).
         import agentsmd
         from scan import VERSION
-        print(f"<!-- candor-{VERSION} · the agent contract for this installed version -->")
+        # Canonical header shape, consistent across the family: `candor-<engine> <version>`
+        # (VERSION is "agents-<semver>"; the first `-` separates engine from version).
+        print(f"<!-- candor-{VERSION.replace('-', ' ', 1)} · the agent contract for this installed version -->")
         sys.stdout.write(agentsmd.AGENTS_MD)
         return 0
     if cmd == "scan":

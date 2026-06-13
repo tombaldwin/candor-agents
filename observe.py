@@ -19,7 +19,7 @@ import os
 import re
 import sys
 
-from scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds  # one source
+from scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds, propagate  # one source
 
 
 def transcript_dir_for(path):
@@ -147,23 +147,10 @@ def observe(tdir, out_prefix, fleet):
         if parent != unit:
             edges.setdefault(parent, set()).add(unit)
 
-    # fixpoint: observed effects + surfaces propagate up the delegation graph
-    def propagate(seed):
-        acc = {k: set(v) for k, v in seed.items()}
-        changed = True
-        while changed:
-            changed = False
-            for caller, callees in edges.items():
-                for callee in callees:
-                    add = acc.get(callee) or set()
-                    if add - acc.setdefault(caller, set()):
-                        acc[caller] |= add
-                        changed = True
-        return acc
-
-    inferred = propagate(direct)
-    hosts_t, cmds_t, paths_t = propagate(hosts), propagate(cmds), propagate(paths)
-    fs_t = propagate(fs_kinds)
+    # fixpoint: observed effects + surfaces propagate up the delegation graph (one shared propagate())
+    inferred = propagate(direct, edges)
+    hosts_t, cmds_t, paths_t = propagate(hosts, edges), propagate(cmds, edges), propagate(paths, edges)
+    fs_t = propagate(fs_kinds, edges)
 
     functions = []
     for n in sorted(set(unit_of_file.values()) | {"session"}):
