@@ -21,6 +21,7 @@ candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: agents, .mcp.
                                                        #           slash-commands, skills, cron
 candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: the session transcripts
 candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege)
+candor-agents guard   <policy-file> [<project-dir>]    # ENFORCED: deny-policy -> permissions.deny
 ```
 
 `scan` reads the fleet's declarations and writes `<prefix>.<fleet>.Fleet.json` (+ a callgraph
@@ -66,6 +67,12 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   disclosed on the receipt but **not** subtracted (the tool stays usable; Exec survives the cliff).
   `allow`/`ask` don't expand capability and are ignored. Hooks bypass permissions, so a `deny Bash`
   never strips the `hooks` unit's Exec.
+- **`guard` is the dual — may → ENFORCED** (spec §6.2 ⟨0.5⟩): `candor-agents guard <policy>` compiles
+  a `deny <Effect>` rule into the `permissions.deny` the harness enforces *natively*, so the boundary
+  holds at runtime, not just in CI. scan READS `permissions.deny` to subtract; guard WRITES it. It is
+  honest about the §4 cliff — denying the directly-Net tools doesn't bind a `Bash` that can curl, so
+  it warns and tells you to add `deny Exec`; a per-agent scope a project-wide `permissions.deny` can't
+  express is reported as unenforceable (tighten that agent's grants instead).
 - **Slash commands and skills are units**: `.claude/commands/**/*.md` (`command:<name>`) and
   `.claude/skills/*/SKILL.md` (`skill:<name>`) carry their own `allowed-tools` (effects classify
   from it; `Bash(git:*)` is still Exec) and a command's `!`-shell adds Exec + its command heads.

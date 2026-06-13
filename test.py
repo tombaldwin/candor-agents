@@ -684,6 +684,31 @@ rep, r = build(commands={"m.md": "---\nallowed-tools: Bash(mongo:*)\n---\nx\n"})
 check("new command head mongo refines to Db",
       "Db" in entry(rep, "command:m")["inferred"], json.dumps(entry(rep, "command:m")))
 
+# ══ guard: compile a deny-policy into RUNTIME enforcement (may→enforced, roadmap #2) ═══════════════
+import guard
+g = guard.compile_guard("deny Net")
+check("guard: deny Net compiles to permissions.deny of the Net-producing tools",
+      set(g["deny"]) == {"WebFetch", "WebSearch"}, json.dumps(g))
+check("guard: deny Net warns about the Exec cliff (a granted Bash can still curl)",
+      any("Exec cliff" in w for w in g["warnings"]), json.dumps(g["warnings"]))
+g2 = guard.compile_guard("deny Exec")
+check("guard: deny Exec denies Bash with no cliff warning (it IS the subprocess effect)",
+      g2["deny"] == ["Bash"] and not g2["warnings"], json.dumps(g2))
+g3 = guard.compile_guard("deny Net researcher")
+check("guard: a scoped deny isn't project-wide-enforceable → a grant-tightening note, no deny emitted",
+      not g3["deny"] and any("researcher" in n for n in g3["notes"]), json.dumps(g3))
+# a configured Net MCP server is denied too (mcp__server)
+_gd = tempfile.mkdtemp()
+json.dump({"mcpServers": {"github": {}}}, open(os.path.join(_gd, ".mcp.json"), "w"))
+g4 = guard.compile_guard("deny Net", project_dir=_gd)
+check("guard: deny Net also denies a configured Net MCP server (mcp__github)",
+      "mcp__github" in g4["deny"], json.dumps(g4))
+# THE DUAL CLOSES THE LOOP: guard WRITES permissions.deny, scan READS it → the fleet loses the effect
+rep, r = build(agents_files={"net.md": agent("net", "WebFetch")},
+               settings={"permissions": {"deny": guard.compile_guard("deny Net")["deny"]}})
+check("guard↔scan dual: the guard's permissions.deny makes scan show the fleet can no longer reach Net",
+      entry(rep, "net") is None, json.dumps(rep["functions"]))
+
 print()
 
 
