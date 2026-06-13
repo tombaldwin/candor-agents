@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.3"
+VERSION = "agents-0.4.4"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -78,8 +78,18 @@ def bash_cmds(command):
     from the first heredoc on is data, not commands (conservatively dropping what follows);
     leading VAR=… assignments are skipped; a head that isn't a plain word (comments, redirects,
     expansions) drops its segment rather than guessing. Command/process substitutions ($(git …),
-    <(sort …)) contribute their own heads — those run — except inside single quotes.
+    <(sort …)) AND legacy backtick substitutions (`cat x`) contribute their own heads — those run.
     """
+    heads = set()
+    # Backtick substitutions are legacy `$()`: capture their head, then BLANK the span so the
+    # quote-aware scanner below (which handles ' and " only) doesn't mis-tokenize a backtick'd
+    # command and then drop the REAL command after the assignment (`VERSION=`cat V` ./deploy.sh`
+    # previously yielded nothing — both cat and deploy.sh lost).
+    for m in re.finditer(r"`\s*([A-Za-z0-9._+/-]+)", command):
+        name = m.group(1).rsplit("/", 1)[-1]
+        if name not in _KW_SKIP and name not in _KW_DROP and _CMD_NAME.match(name):
+            heads.add(name)
+    command = re.sub(r"`[^`]*`?", " ", command)
     s = command.split("<<", 1)[0]
     segs, cur, unsq, q = [], [], [], None
     i, n = 0, len(s)
@@ -124,13 +134,13 @@ def bash_cmds(command):
         i += 1
     segs.append("".join(cur))
 
-    heads = set()
     for seg in segs:
         for tok in seg.split():
             if _ASSIGN.match(tok):
-                if "$(" in tok or "`" in tok:
-                    break  # the value opens a substitution — the _SUBST pass owns its head
-                continue
+                if "$(" in tok:
+                    break  # a $() substitution opens in the value — its head comes via _SUBST and
+                           # the `;`-split path; descending into it would mint loop-var heads
+                continue   # a plain VAR= prefix (backtick values were blanked above) — keep scanning
             if tok.endswith(")") and not tok.startswith("("):
                 continue  # a case arm (`audit)`) — the command, if any, follows it
             if tok[0] in "'\"" and not (len(tok) > 1 and tok.endswith(tok[0])):
@@ -229,29 +239,51 @@ def main():
     if not args:
         print(__doc__.strip(), file=sys.stderr)
         return 2
-    root = args[0]
-    # An unknown flag must FAIL, not be silently ignored or read as the project dir (a typo'd
-    # flag near a gate deserves exit 2, not a confusing scan).
-    known = {"--out", "--fleet", "--nested-spawn", "--link"}
-    skip = set()
-    for i, a in enumerate(args):
-        if a in ("--out", "--fleet", "--link"):
-            skip.add(i + 1)
-        elif a.startswith("--") and a not in known and i not in skip:
-            print(f"candor-agents: unknown flag {a} (usage: scan <dir> [--out <prefix>] [--fleet <name>] [--link <prefix>] [--nested-spawn])", file=sys.stderr)
+    # ONE flag pass (was four, with a skip-set the validator both built and read). An unknown flag,
+    # a flag-shaped or missing value, or a second positional all FAIL with exit 2 — never silently
+    # ignored or read as the project dir. The first positional is the scan root.
+    usage = ("usage: scan <dir> [--out <prefix>] [--fleet <name>] [--link <prefix>] [--nested-spawn]")
+    out, fleet, link, nested, root = "report", None, None, False, None
+    i = 0
+
+    def value(flag):
+        if i + 1 >= len(args) or args[i + 1].startswith("--"):
+            print(f"candor-agents: {flag} requires a value ({usage})", file=sys.stderr)
+            return None
+        return args[i + 1]
+
+    while i < len(args):
+        a = args[i]
+        if a == "--out":
+            v = value("--out")
+            if v is None:
+                return 2
+            out = v; i += 2
+        elif a == "--fleet":
+            v = value("--fleet")
+            if v is None:
+                return 2
+            fleet = v; i += 2
+        elif a == "--link":
+            v = value("--link")
+            if v is None:
+                return 2
+            link = v; i += 2
+        elif a == "--nested-spawn":
+            nested = True; i += 1
+        elif a.startswith("--"):
+            print(f"candor-agents: unknown flag {a} ({usage})", file=sys.stderr)
             return 2
-    out = "report"
-    fleet = os.path.basename(os.path.abspath(root)) or "fleet"
-    for i, a in enumerate(args):
-        if a == "--out" and i + 1 < len(args):
-            out = args[i + 1]
-        if a == "--fleet" and i + 1 < len(args):
-            fleet = args[i + 1]
-    nested = "--nested-spawn" in args
-    link = None
-    for i, a in enumerate(args):
-        if a == "--link" and i + 1 < len(args):
-            link = args[i + 1]
+        elif root is None:
+            root = a; i += 1
+        else:
+            print(f"candor-agents: unexpected extra argument {a} ({usage})", file=sys.stderr)
+            return 2
+    if root is None:
+        print(f"candor-agents: a project dir is required ({usage})", file=sys.stderr)
+        return 2
+    if fleet is None:
+        fleet = os.path.basename(os.path.abspath(root)) or "fleet"
 
     # MCP servers configured for the project — plus any DECLARED capabilities: a `candorEffects`
     # array on a server's entry ("candorEffects": ["Net","Ipc"]) classifies that server exactly like
@@ -345,6 +377,18 @@ def main():
     # ── edges (delegation) ────────────────────────────────────────────────────────────────────
     # Ladder mirrors the code engine: named-delegation narrowing (devirt) > CHA over all agents.
     names = sorted(agents)
+    # Reserved synthetic-unit names. If a real agent claims one, DISAMBIGUATE the synthetic unit —
+    # never clobber the user's declared agent (that silently dropped its grants/edges and made drift
+    # mis-flag it). Warn so the rare collision is visible. The unitKind stays "session"/"hooks".
+    ROOT, HOOKS = "session", "hooks"
+    if ROOT in agents:
+        ROOT = "session-root"
+        print(f"candor-agents: an agent is named `session` — the session ROOT unit is `{ROOT}` "
+              f"to avoid clobbering it", file=sys.stderr)
+    if HOOKS in agents:
+        HOOKS = "hooks-unit"
+        print(f"candor-agents: an agent is named `hooks` — the settings-hooks unit is `{HOOKS}` "
+              f"to avoid clobbering it", file=sys.stderr)
     calls = {}
     for name, a in agents.items():
         has_agent_tool = ("Agent" in (a["tools"] or []) or "Task" in (a["tools"] or [])
@@ -357,9 +401,9 @@ def main():
     # The session root: an entry point holding every tool + every configured MCP server, able to
     # spawn every agent. Named `session` (not `main`): in combined mode (fleet + code reports under
     # ONE prefix) the crate's `fn main` would collide with it.
-    calls["session"] = sorted(names + (["hooks"] if has_hooks else []))
+    calls[ROOT] = sorted(names + ([HOOKS] if has_hooks else []))
     if has_hooks:
-        calls["hooks"] = []
+        calls[HOOKS] = []
 
     # ── per-agent direct effects ──────────────────────────────────────────────────────────────
     direct, fs_detail, why_map, unresolved_direct = {}, {}, {}, {}
@@ -385,7 +429,6 @@ def main():
             effs, fs, why = classify(tools, mcp_servers, declared_mcp, declared_bad)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
         unresolved_direct[name] = "Unknown" in effs
-    ROOT = "session"
     me, mf, mw = classify(AMBIENT, mcp_servers)
     for s in mcp_servers:
         if s in MCP_TABLE:
@@ -401,9 +444,9 @@ def main():
     direct[ROOT], fs_detail[ROOT], why_map[ROOT] = me, mf, mw
     unresolved_direct[ROOT] = "Unknown" in me
     if has_hooks:
-        direct["hooks"] = {"Exec"} | ({"Unknown"} if hook_why else set())
-        fs_detail["hooks"], why_map["hooks"] = set(), set(hook_why)
-        unresolved_direct["hooks"] = bool(hook_why)
+        direct[HOOKS] = {"Exec"} | ({"Unknown"} if hook_why else set())
+        fs_detail[HOOKS], why_map[HOOKS] = set(), set(hook_why)
+        unresolved_direct[HOOKS] = bool(hook_why)
 
     # ── --link: the Exec-boundary refinement ─────────────────────────────────────────────────
     # Edge every Bash-holding (or ambient) agent to each entryPoint of the linked CODE report, and
@@ -466,7 +509,7 @@ def main():
         entry = {
             "fn": n,
             "loc": agents[n]["file"] if n in agents
-                   else f".claude/settings*.json hooks: {', '.join(hook_events) or '(unreadable)'}" if n == "hooks"
+                   else f".claude/settings*.json hooks: {', '.join(hook_events) or '(unreadable)'}" if n == HOOKS
                    else "(session root)",
             "inferred": sorted(effs),
             "direct": sorted(direct.get(n, set())),
@@ -474,16 +517,16 @@ def main():
             "unresolved": "Unknown" in effs,
             # spec ⟨0.5⟩ unitKind: a fleet's units are not functions — name what each one is, so a
             # merged prefix (fleet + code reports) renders sensibly. Informative, never semantic.
-            "unitKind": "session" if n == "session" else "hooks" if n == "hooks" else "agent",
+            "unitKind": "session" if n == ROOT else "hooks" if n == HOOKS else "agent",
             "calls": calls[n],
         }
         if fs_tr.get(n):
             entry["fs"] = sorted(fs_tr[n])
         if why_map.get(n):
             entry["unknownWhy"] = sorted(why_map[n])
-        if n == "hooks" and hook_cmds:
+        if n == HOOKS and hook_cmds:
             entry["cmds"] = sorted(hook_cmds)
-        if n == "session":
+        if n == ROOT:
             entry["entryPoint"] = True
         # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is
         # chainable like any sibling (`<fleet>#<agent>`, the pkg#LocalName shape).

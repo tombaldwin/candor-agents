@@ -16,6 +16,7 @@ advice, the AS-EFF-002 analog).
 """
 import json
 import os
+import re
 import sys
 
 from scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds  # one source
@@ -25,7 +26,10 @@ def transcript_dir_for(path):
     """A project dir maps to ~/.claude/projects/<slug>; a dir already holding *.jsonl is used as-is."""
     if any(f.endswith(".jsonl") for f in os.listdir(path)) if os.path.isdir(path) else False:
         return path
-    slug = os.path.abspath(path).replace("/", "-").replace(".", "-")
+    # Claude Code's project slug flattens EVERY non-alphanumeric to `-` (not only `/` and `.`), so a
+    # path with `_`, `@`, a space etc. (e.g. `~/git/my_app`, the public-sweep `Updog_restore`) mapped
+    # to a slug that never exists — observe/drift silently dead for those projects. Match its rule.
+    slug = re.sub(r"[^a-zA-Z0-9]", "-", os.path.abspath(path))
     cand = os.path.expanduser(os.path.join("~/.claude/projects", slug))
     return cand if os.path.isdir(cand) else None
 
@@ -213,16 +217,34 @@ def main(argv=None):
     out = ".candor/report"
     target = "."
     tdir_override = None
+    fleet_override = None
     i = 0
+    # A value-taking flag with a missing/flag-shaped value FAILS (never silently consuming the next
+    # flag or falling back to a default) — the gateless-ignore class the unknown-flag work forbids.
+    def value(flag):
+        if i + 1 >= len(args) or args[i + 1].startswith("--"):
+            sys.stderr.write(f"candor-agents: {flag} requires a value\n")
+            return None
+        return args[i + 1]
     while i < len(args):
-        if args[i] == "--out" and i + 1 < len(args):
-            out = args[i + 1]
-            i += 2
-        elif args[i] == "--transcripts" and i + 1 < len(args):
-            tdir_override = args[i + 1]
-            i += 2
+        if args[i] == "--out":
+            v = value("--out")
+            if v is None:
+                return 2
+            out = v; i += 2
+        elif args[i] == "--transcripts":
+            v = value("--transcripts")
+            if v is None:
+                return 2
+            tdir_override = v; i += 2
+        elif args[i] == "--fleet":
+            v = value("--fleet")
+            if v is None:
+                return 2
+            fleet_override = v; i += 2
         elif args[i].startswith("--"):
-            sys.stderr.write(f"candor-agents: unknown flag {args[i]} (usage: observe <dir> [--out <prefix>] [--transcripts <dir>])\n")
+            sys.stderr.write(f"candor-agents: unknown flag {args[i]} "
+                             f"(usage: observe <dir> [--out <prefix>] [--transcripts <dir>] [--fleet <name>])\n")
             return 2
         else:
             target = args[i]
@@ -232,11 +254,15 @@ def main(argv=None):
         sys.stderr.write(f"candor-agents: no transcripts found for {target} "
                          f"(expected *.jsonl there, or ~/.claude/projects/<slug>/ to exist)\n")
         return 2
-    # the fleet name: the project dir when it's real, else the transcript dir's slug — the
-    # cross-project sweep produced reports named after /dev/null otherwise
-    base = os.path.basename(os.path.abspath(target)).lstrip("-")
-    if (not os.path.isdir(target)) or base in ("", "null", "dev"):
-        base = os.path.basename(os.path.abspath(tdir)).lstrip("-") or "fleet"
+    # the fleet name: an explicit --fleet (drift passes it so both halves agree), else the project
+    # dir when it's real, else the transcript dir's slug — the cross-project sweep produced reports
+    # named after /dev/null otherwise.
+    if fleet_override:
+        base = fleet_override
+    else:
+        base = os.path.basename(os.path.abspath(target)).lstrip("-")
+        if (not os.path.isdir(target)) or base in ("", "null", "dev"):
+            base = os.path.basename(os.path.abspath(tdir)).lstrip("-") or "fleet"
     observe(tdir, out, base)
     return 0
 

@@ -23,13 +23,15 @@ def _run(mod, args):
 
 
 def drift(target, strict, transcripts=None):
-    import scan  # the declared-mode classifier tables double as the join vocabulary
     fleet = os.path.basename(os.path.abspath(target)).lstrip("-") or "fleet"
     with tempfile.TemporaryDirectory() as td:
         rc = _run("scan.py", [target, "--out", os.path.join(td, "d"), "--fleet", fleet])
         if rc != 0:
             return rc
-        obs_args = [target, "--out", os.path.join(td, "o")]
+        # Pass the SAME --fleet to observe so both halves write `{d,o}.<fleet>.*.json` — without it
+        # observe derived the name independently and renamed it for dirs basenamed dev/null/empty,
+        # so drift's json.load below hit a FileNotFoundError on a project dir literally named `dev`.
+        obs_args = [target, "--out", os.path.join(td, "o"), "--fleet", fleet]
         if transcripts:
             obs_args += ["--transcripts", transcripts]
         rc = _run("observe.py", obs_args)
@@ -102,13 +104,28 @@ def main():
     if cmd == "observe":
         return _run("observe.py", rest)
     if cmd == "drift":
-        strict = "--strict" in rest
-        transcripts = None
-        if "--transcripts" in rest:
-            transcripts = rest[rest.index("--transcripts") + 1]
-        positional = [a for a in rest if not a.startswith("--") and a != transcripts]
-        target = positional[0] if positional else "."
-        return drift(target, strict, transcripts)
+        # Parse flag/value pairs explicitly so an unknown flag FAILS (never silently runs non-strict
+        # or against the wrong transcripts), a trailing value-less flag errors instead of IndexError,
+        # and the positional target isn't dropped when it happens to equal a flag's value.
+        strict, transcripts, target = False, None, None
+        i = 0
+        while i < len(rest):
+            a = rest[i]
+            if a == "--strict":
+                strict = True; i += 1
+            elif a == "--transcripts":
+                if i + 1 >= len(rest):
+                    print("candor-agents: --transcripts requires a value", file=sys.stderr); return 2
+                transcripts = rest[i + 1]; i += 2
+            elif a.startswith("--"):
+                print(f"candor-agents: unknown flag {a} "
+                      f"(usage: drift <dir> [--transcripts <dir>] [--strict])", file=sys.stderr)
+                return 2
+            elif target is None:
+                target = a; i += 1
+            else:
+                print(f"candor-agents: unexpected extra argument {a}", file=sys.stderr); return 2
+        return drift(target or ".", strict, transcripts)
     # bare `candor-agents <dir>` = scan, the static default
     return _run("scan.py", args)
 

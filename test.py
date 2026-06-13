@@ -283,7 +283,7 @@ with tempfile.TemporaryDirectory() as td:
     check("observe: literal surfaces from tool inputs (Bash cmds, file paths)",
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
     check("observe version is single-sourced from scan (no drift)",
-          obs["candor"]["version"].endswith("0.4.3"), obs["candor"]["version"])
+          obs["candor"]["version"] == __import__("scan").VERSION, obs["candor"]["version"])
     check("observe: spec 0.4 envelope + hash + package",
           obs["candor"]["spec"] == "0.4" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
@@ -325,6 +325,10 @@ check("bash_cmds: comments are prose — their `;`/apostrophes never corrupt the
       and bash_cmds("# don't split here\ngrep 'a|b' f") == {"grep"})
 check("bash_cmds: a quoted path with spaces is one (unsplittable) head, not fabricated words",
       bash_cmds('"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless x') == set())
+check("bash_cmds: a backtick substitution AND the command after it are both captured",
+      bash_cmds("VERSION=`cat VERSION` ./deploy.sh") == {"cat", "deploy.sh"})
+check("bash_cmds: a bare backtick substitution contributes its head",
+      bash_cmds("echo `git rev-parse HEAD`") == {"echo", "git"})
 
 r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", "fixture/transcripts"],
                    capture_output=True, text=True)
@@ -392,6 +396,25 @@ with tempfile.TemporaryDirectory() as td:
                        capture_output=True, text=True)
     check("hooks: no agents AND no hooks still exits 2 (nothing to analyze)", r.returncode == 2)
 
+# a real agent named `hooks` or `session` must NOT be clobbered by the synthetic units
+with tempfile.TemporaryDirectory() as td:
+    adir = os.path.join(td, ".claude", "agents"); os.makedirs(adir)
+    open(os.path.join(adir, "hooks.md"), "w").write(agent("hooks", "WebFetch"))
+    open(os.path.join(adir, "session.md"), "w").write(agent("session", "Grep"))
+    json.dump({"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "./h.sh"}]}]}},
+              open(os.path.join(td, ".claude", "settings.json"), "w"))
+    out = os.path.join(td, "r")
+    r = subprocess.run([sys.executable, SCAN, td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    rep = json.load(open(f"{out}.t.Fleet.json"))
+    eh, es = entry(rep, "hooks"), entry(rep, "session")
+    check("reserved-name: an agent named `hooks` keeps its own grant (Net), not clobbered to Exec",
+          eh is not None and eh["direct"] == ["Net"] and eh["unitKind"] == "agent", json.dumps(eh))
+    check("reserved-name: an agent named `session` keeps its Grep grant, not the ambient root set",
+          es is not None and es["direct"] == ["Fs"] and es["unitKind"] == "agent", json.dumps(es))
+    check("reserved-name: the synthetic units get disambiguated names + a warning",
+          entry(rep, "hooks-unit") is not None and entry(rep, "session-root") is not None
+          and "to avoid clobbering" in r.stderr, r.stderr)
+
 # drift must NOT call an unobserved hooks unit a trim candidate (hook runs aren't tool_use events)
 with tempfile.TemporaryDirectory() as td:
     os.makedirs(os.path.join(td, ".claude"))
@@ -405,6 +428,42 @@ with tempfile.TemporaryDirectory() as td:
     check("drift: hooks are 'not observable', never a trim candidate",
           "hook runs are not observable" in r.stdout and "hooks: declared {Exec} but NEVER" not in r.stdout,
           r.stdout)
+
+# drift CLI guards: unknown flags fail, a value-less --transcripts fails (not IndexError), and the
+# target isn't dropped when it equals the transcripts value.
+def driftcli(*a):
+    return subprocess.run([sys.executable, "cli.py", "drift", *a], capture_output=True, text=True)
+check("drift: an unknown flag fails with exit 2 (not a silent non-strict run)",
+      driftcli("fixture", "--strcit", "--transcripts", "fixture/transcripts").returncode == 2)
+check("drift: a value-less trailing --transcripts fails cleanly (no IndexError)",
+      driftcli("fixture", "--transcripts").returncode == 2)
+r = driftcli("fixture", "--transcripts", "fixture")  # target == transcripts value
+check("drift: a target equal to the transcripts value is not dropped to '.'",
+      "fleet `fixture`" in r.stdout or "no agent definitions under fixture" in (r.stdout + r.stderr), r.stdout + r.stderr)
+
+# transcript slug flattens ALL non-alphanumerics (not just / and .) — verify by planting a fake
+# project transcript dir under a temp HOME for an underscore-named target and confirming it resolves.
+with tempfile.TemporaryDirectory() as home:
+    proj = os.path.join(home, "git", "my_app")
+    os.makedirs(proj)
+    slug = "-" + os.path.join(home, "git", "my-app").lstrip("/").replace("/", "-")
+    # the real slug flattens '_' -> '-' too; build it the same way observe should
+    import re as _re
+    slug = _re.sub(r"[^a-zA-Z0-9]", "-", os.path.abspath(proj))
+    pdir = os.path.join(home, ".claude", "projects", slug); os.makedirs(pdir)
+    open(os.path.join(pdir, "s.jsonl"), "w").write("")
+    old_home = os.environ.get("HOME")
+    os.environ["HOME"] = home
+    try:
+        import importlib, observe as _obs
+        importlib.reload(_obs)
+        check("transcript slug flattens '_' (underscore project resolves its transcripts)",
+              _obs.transcript_dir_for(proj) == pdir, f"{_obs.transcript_dir_for(proj)} != {pdir}")
+    finally:
+        if old_home is not None:
+            os.environ["HOME"] = old_home
+        import importlib, observe as _obs
+        importlib.reload(_obs)
 
 print()
 
