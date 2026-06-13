@@ -354,6 +354,19 @@ check("drift: observed-outside-declaration is loud, advisory exit 0",
 r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an, "--strict"], capture_output=True, text=True)
 check("drift --strict: an anomaly fails the build (exit 1)", r.returncode == 1)
 
+# drift must NOT call a command/cron/session a "trim candidate agent" — they aren't agents and aren't
+# recorded as distinct units in transcripts (the bug: every declared unit got the agent-trim advice).
+_dd = tempfile.mkdtemp()
+os.makedirs(os.path.join(_dd, ".claude", "agents")); os.makedirs(os.path.join(_dd, ".claude", "commands"))
+os.makedirs(os.path.join(_dd, ".transcripts"))
+open(os.path.join(_dd, ".claude", "agents", "a.md"), "w").write(agent("a", "WebFetch"))
+open(os.path.join(_dd, ".claude", "commands", "c.md"), "w").write("---\nallowed-tools: Bash(curl:*)\n---\nx\n")
+_j.dump([{"id": "n", "cron": "0 9 * * *", "prompt": "go", "durable": True}], open(os.path.join(_dd, ".claude", "scheduled_tasks.json"), "w"))
+r = subprocess.run([sys.executable, "cli.py", "drift", _dd, "--transcripts", os.path.join(_dd, ".transcripts")], capture_output=True, text=True)
+check("drift: command:/cron:/session are 'not a trim candidate', a real agent still is",
+      "command:c: declared" in r.stdout and "not a trim candidate" in r.stdout
+      and "cron:n" in r.stdout and "a: declared {Net} but NEVER OBSERVED" in r.stdout, r.stdout)
+
 # ── hooks: settings.json commands are fleet capability surface ────────────────────────────────────
 with tempfile.TemporaryDirectory() as td:
     adir = os.path.join(td, ".claude", "agents")

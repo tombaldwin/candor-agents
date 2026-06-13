@@ -63,6 +63,13 @@ def drift(target, strict, transcripts=None):
                 # so "never observed" would be a structural artifact, not least-privilege advice
                 print(f"  {unit}: declared {{{', '.join(sorted(dec))}}} — hook runs are not "
                       f"observable in transcripts; review the hook commands themselves")
+            elif unit == "session" or unit.startswith(("command:", "skill:", "cron:")):
+                # The session root and command/skill/cron units aren't recorded as DISTINCT units in
+                # transcripts (their tool uses appear under the agent/session), so "never observed" is
+                # a structural artifact, not least-privilege advice — and none of them is an "agent" to
+                # trim. Only true agent units get the trim-candidate advice below.
+                print(f"  {unit}: declared {{{', '.join(sorted(dec))}}} — not recorded as a distinct "
+                      f"unit in transcripts (its activity appears under the session); not a trim candidate")
             else:
                 print(f"  {unit}: declared {{{', '.join(sorted(dec))}}} but NEVER OBSERVED in these "
                       f"sessions — if that holds over time, the whole agent is a trim candidate")
