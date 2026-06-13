@@ -18,7 +18,7 @@ pipx install git+https://github.com/tombaldwin/candor-agents   # recommended —
                                                                # works too, but only into a venv)
 
 candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: agents, .mcp.json, settings,
-                                                       #           slash-commands, skills
+                                                       #           slash-commands, skills, cron
 candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: the session transcripts
 candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege)
 ```
@@ -34,10 +34,11 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 
 ## How to read the report
 
-- Units are agent types, `command:`/`skill:` units, and the `session` root (`entryPoint: true`);
-  `hash` is `<fleet>#<unit>`. Every unit carries `unitKind` (spec 0.5 draft, informative): `agent`,
-  `command`, `skill`, `session`, or `hooks` — a fleet's units are not functions, and the field
-  keeps a merged prefix (fleet + code reports) readable.
+- Units are agent types, `command:`/`skill:`/`cron:` units, and the `session` root; the session and
+  each scheduled task are `entryPoint: true` (the autonomous roots). `hash` is `<fleet>#<unit>`.
+  Every unit carries `unitKind` (spec 0.5 draft, informative): `agent`, `command`, `skill`, `cron`,
+  `session`, or `hooks` — a fleet's units are not functions, and the field keeps a merged prefix
+  (fleet + code reports) readable.
 - `inferred` is the transitive effect set (delegation propagates a delegate's effects to its
   delegator); `direct` is the agent's own grants/actions.
 - **Grants are MAY-use upper bounds**: a declared effect says the agent *can* reach it, never that
@@ -78,6 +79,12 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   hooks (`Stop`/`SessionStart`/…) edge from the session root only. A project with hooks but no
   agents still scans. A hook type the scanner doesn't know reads Unknown. User-level (`~/.claude`)
   hooks are out of scope: the report describes the project.
+- **Scheduled tasks are autonomous entry points**: a *durable* cron job (`CronCreate durable:true`)
+  persists to `.claude/scheduled_tasks.json` and fires on its own schedule with no human or caller.
+  Each is a `cron:<id>` unit (`entryPoint: true`, `loc` carries the cron expression) that drives a
+  full session, so it inherits the whole fleet's reach — `deny Net cron:<id>` gates what can fire
+  autonomously. Non-durable cron is in-memory only (never on disk) and is correctly invisible: the
+  report describes what is declared to persist.
 - `observe` is **best-effort over an internal format**: the receipt discloses unparseable
   lines/files; literal surfaces (`cmds`/`paths`/`hosts`) are the decidable subset of observed tool
   inputs — absence is never a claim of absence.

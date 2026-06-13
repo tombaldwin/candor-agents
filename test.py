@@ -488,8 +488,9 @@ check("--agents prints the version header + the exact installed contract",
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 # ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
-def build(agents_files=None, settings=None, commands=None, skills=None, mcp=None):
-    """A full project: agents + .claude/settings.json + .claude/commands + .claude/skills + .mcp.json."""
+def build(agents_files=None, settings=None, commands=None, skills=None, mcp=None, crons=None):
+    """A full project: agents + .claude/settings.json + .claude/commands + .claude/skills + .mcp.json
+    + .claude/scheduled_tasks.json."""
     d = tempfile.mkdtemp()
     adir = os.path.join(d, ".claude", "agents")
     os.makedirs(adir)
@@ -497,6 +498,8 @@ def build(agents_files=None, settings=None, commands=None, skills=None, mcp=None
         open(os.path.join(adir, fn), "w").write(c)
     if settings is not None:
         json.dump(settings, open(os.path.join(d, ".claude", "settings.json"), "w"))
+    if crons is not None:
+        json.dump(crons, open(os.path.join(d, ".claude", "scheduled_tasks.json"), "w"))
     for rel, c in (commands or {}).items():
         p = os.path.join(d, ".claude", "commands", rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -579,6 +582,34 @@ rep, r = build(commands={"f.md": "---\nallowed-tools: WebFetch\n---\nFetch.\n"},
                settings={"permissions": {"deny": ["WebFetch"]}})
 check("permissions.deny applies to a command (WebFetch-only command → pure → omitted)",
       entry(rep, "command:f") is None, json.dumps(rep["functions"]))
+
+# ══ scheduled tasks: autonomous entry points (.claude/scheduled_tasks.json) ════════════════════════
+# a durable cron job is a `cron:<id>` entry point that drives a full session → inherits its reach
+rep, r = build(agents_files={"net.md": agent("net", "WebFetch")},
+               crons=[{"id": "nightly", "cron": "7 9 * * *", "prompt": "fetch the digest", "durable": True}])
+e = entry(rep, "cron:nightly")
+check("a durable scheduled task is a cron entry-point unit that drives the session",
+      e is not None and e["unitKind"] == "cron" and e.get("entryPoint") is True and e["calls"] == ["session"],
+      json.dumps(e))
+check("the cron task inherits the session's transitive reach (its autonomous blast radius)",
+      e is not None and "Net" in e["inferred"], json.dumps(e))
+check("the cron loc carries the schedule expression",
+      e is not None and "7 9 * * *" in e["loc"], json.dumps(e))
+
+# a project with ONLY a scheduled task (no agents) still has an autonomous surface
+rep, r = build(crons=[{"id": "solo", "cron": "0 * * * *", "prompt": "do the thing", "durable": True}])
+check("a scheduled-task-only project scans (the session+cron autonomous surface)",
+      rep is not None and entry(rep, "cron:solo") is not None, r.stderr)
+
+# no scheduled_tasks.json → no cron units
+rep, r = build(agents_files={"a.md": agent("a", "Read")})
+check("no scheduled_tasks.json → no cron units",
+      rep is not None and not any(f["fn"].startswith("cron:") for f in rep["functions"]))
+
+# a malformed scheduled_tasks.json is disclosed, not fatal
+rep, r = build(agents_files={"a.md": agent("a", "Read")}, crons={"not": "a list of tasks"})
+check("a malformed scheduled_tasks.json does not crash the scan (no cron units, scan still succeeds)",
+      rep is not None and not any(f["fn"].startswith("cron:") for f in rep["functions"]), r.stderr)
 
 # ══ Exec-cliff refinement: known sub-command heads classify (spec §4 ⟨0.5⟩) ═══════════════════════
 # a known head ADDS its effect and keeps Exec (a subprocess was still spawned)
