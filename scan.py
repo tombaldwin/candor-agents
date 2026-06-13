@@ -574,9 +574,10 @@ def main():
             sm = os.path.join(sdir, d, "SKILL.md")
             if not os.path.isfile(sm):
                 continue
-            meta, _b = parse_frontmatter(open(sm).read())
-            skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in _raw_tools(meta)],
-                                    "file": os.path.relpath(sm, root)}
+            meta, body = parse_frontmatter(open(sm).read())
+            raw = _raw_tools(meta)
+            skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
+                                    "file": os.path.relpath(sm, root), "heads": _heads(raw, body)}
 
     # ── scheduled tasks: autonomous entry points ──────────────────────────────────────────────────
     # A DURABLE cron job (CronCreate `durable: true`) persists to .claude/scheduled_tasks.json and
@@ -698,18 +699,20 @@ def main():
     # Exec + the heads' REFINED effects (spec §4 ⟨0.5⟩: a known head classifies — `curl`→Net,
     # `candor*`→Fs/Env; an unknown head keeps the bare Exec cliff), unless Bash is denied (the shell
     # line could not run). Exec is never dropped — a subprocess was still spawned.
+    def with_heads(unit, effs):  # commands AND skills refine the Exec cliff by their shell heads alike
+        if unit["heads"] and "Bash" not in denied_tools:
+            effs.add("Exec")
+            for h in unit["heads"]:
+                effs |= COMMAND_HEAD.get(h, set())
+        return effs
     for u, c in commands.items():
         effs, fs, why = classify(live(c["tools"]), live_servers, declared_mcp, declared_bad)
-        if c["heads"] and "Bash" not in denied_tools:
-            effs.add("Exec")
-            for h in c["heads"]:
-                effs |= COMMAND_HEAD.get(h, set())
-        direct[u], fs_detail[u], why_map[u] = effs, fs, why
-        unresolved_direct[u] = "Unknown" in effs
+        direct[u], fs_detail[u], why_map[u] = with_heads(c, effs), fs, why
+        unresolved_direct[u] = "Unknown" in direct[u]
     for u, sk in skills.items():
         effs, fs, why = classify(live(sk["tools"]), live_servers, declared_mcp, declared_bad)
-        direct[u], fs_detail[u], why_map[u] = effs, fs, why
-        unresolved_direct[u] = "Unknown" in effs
+        direct[u], fs_detail[u], why_map[u] = with_heads(sk, effs), fs, why
+        unresolved_direct[u] = "Unknown" in direct[u]
     me, mf, mw = classify(ambient_live, live_servers, declared_mcp, declared_bad)
     me_, mw_ = mcp_effects(live_servers)
     me |= me_; mw |= mw_
@@ -804,8 +807,10 @@ def main():
             entry["unknownWhy"] = sorted(why_map[n])
         if kind == "hooks" and hook_cmds:
             entry["cmds"] = sorted(hook_cmds)
-        elif kind == "command" and commands[n]["heads"] and "Bash" not in denied_tools:
-            entry["cmds"] = sorted(commands[n]["heads"])
+        elif kind in ("command", "skill") and "Bash" not in denied_tools:
+            heads = (commands if kind == "command" else skills)[n]["heads"]
+            if heads:
+                entry["cmds"] = sorted(heads)
         if kind in ("session", "cron"):
             entry["entryPoint"] = True  # autonomous roots: the session, and each scheduled task
         # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is
