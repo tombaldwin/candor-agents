@@ -53,10 +53,13 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   maximally confined. A frontmatter-less `.md` in `.claude/agents/` is not an agent and is
   skipped with disclosure.
 - **Hooks are capability surface**: `.claude/settings.json` / `settings.local.json` hook commands
-  run *automatically* on tool events — they appear as a `hooks` unit (Exec + the command heads as
-  `cmds`), edged from the session root. A project with hooks but no agents still scans. A hook
-  type the scanner doesn't know reads Unknown. User-level (`~/.claude`) hooks are out of scope:
-  the report describes the project.
+  run *automatically* — they appear as a `hooks` unit (Exec + the command heads as `cmds`). A
+  **tool-event** hook (`PreToolUse`/`PostToolUse`) fires on the matching tool use of any agent, so
+  each agent whose granted tools match the hook's `matcher` **edges to `hooks`** and inherits its
+  Exec — `forbid reviewer -> Exec` catches a hook that execs on the reviewer's edits. Lifecycle
+  hooks (`Stop`/`SessionStart`/…) edge from the session root only. A project with hooks but no
+  agents still scans. A hook type the scanner doesn't know reads Unknown. User-level (`~/.claude`)
+  hooks are out of scope: the report describes the project.
 - `observe` is **best-effort over an internal format**: the receipt discloses unparseable
   lines/files; literal surfaces (`cmds`/`paths`/`hosts`) are the decidable subset of observed tool
   inputs — absence is never a claim of absence.

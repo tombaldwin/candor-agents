@@ -358,7 +358,8 @@ check("drift --strict: an anomaly fails the build (exit 1)", r.returncode == 1)
 with tempfile.TemporaryDirectory() as td:
     adir = os.path.join(td, ".claude", "agents")
     os.makedirs(adir)
-    open(os.path.join(adir, "worker.md"), "w").write(agent("worker", "Read"))
+    open(os.path.join(adir, "reader.md"), "w").write(agent("reader", "Read, Grep"))   # cannot trigger Write|Edit
+    open(os.path.join(adir, "writer.md"), "w").write(agent("writer", "Read, Edit"))    # CAN trigger Write|Edit
     json.dump({"hooks": {
         "PostToolUse": [{"matcher": "Write|Edit",
                          "hooks": [{"type": "command", "command": "python3 $CLAUDE_PROJECT_DIR/.claude/check.py"}]}],
@@ -378,6 +379,13 @@ with tempfile.TemporaryDirectory() as td:
           "hooks" in entry(rep, "session")["calls"] and "Exec" in entry(rep, "session")["inferred"])
     check("hooks: the receipt discloses that hooks run automatically",
           "run AUTOMATICALLY" in r.stderr and "Stop(1)" in r.stderr, r.stderr)
+    # the matcher-aware per-agent reach: an agent whose tools MATCH the PostToolUse matcher edges to
+    # hooks and inherits Exec; one whose tools can't trigger it does NOT.
+    wr, rd = entry(rep, "writer"), entry(rep, "reader")
+    check("hooks: a matching agent (Edit) edges to hooks and inherits Exec",
+          wr is not None and "hooks" in wr["calls"] and "Exec" in wr["inferred"], json.dumps(wr))
+    check("hooks: a non-matching agent (Read/Grep) does NOT edge to a Write|Edit hook",
+          rd is not None and "hooks" not in rd["calls"] and "Exec" not in rd["inferred"], json.dumps(rd))
 
 # a project with hooks but NO agents still has a capability surface (the pgman shape)
 with tempfile.TemporaryDirectory() as td:

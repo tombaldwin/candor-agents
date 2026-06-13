@@ -61,6 +61,33 @@ MCP_TABLE = {
 # 182 ambient agents produced a ~20k-edge all-reaches-all smear; without, the graph is honest).
 AMBIENT = sorted(TOOL_EFFECTS)
 
+# Hook events that fire on a TOOL USE (so they reach back into the agent that triggered them) vs
+# session-lifecycle events (Stop/SessionStart/…) which fire at the session level only.
+TOOL_HOOK_EVENTS = {"PreToolUse", "PostToolUse"}
+
+
+def tools_match_matcher(tools, matcher):
+    """Whether an agent holding `tools` (None = ambient = every tool) can trigger a tool-event hook
+    with this Claude Code `matcher`. Empty/`*` matches all tools; otherwise the matcher is a regex,
+    commonly a `|`-alternation of tool names (`Write|Edit|MultiEdit`). Under-report on an unparseable
+    alternative rather than fabricate an edge (the family posture)."""
+    m = (matcher or "").strip()
+    if m in ("", "*"):
+        return True
+    if tools is None:  # ambient authority holds every tool — matches any non-empty matcher
+        return True
+    for alt in m.split("|"):
+        alt = alt.strip()
+        if not alt:
+            continue
+        try:
+            pat = re.compile(f"^(?:{alt})$")
+        except re.error:
+            continue  # unparseable — don't fabricate an edge
+        if any(pat.match(t) for t in tools):
+            return True
+    return False
+
 
 # keywords a command FOLLOWS (`then git push`) vs keywords followed by non-commands (`for f in …`)
 _KW_SKIP = {"if", "then", "else", "elif", "do", "while", "until", "time", "exec", "!", "{", "}"}
@@ -360,6 +387,7 @@ def main():
     # scanner doesn't know reads Unknown, never silence. User-level (~/.claude) hooks are out of
     # scope: the scan describes the PROJECT.
     hook_cmds, hook_events, hook_why = set(), [], set()
+    tool_hook_matchers = []  # matchers of TOOL-event hooks that run a command — the per-agent reach
     for sf in ("settings.json", "settings.local.json"):
         sp = os.path.join(root, ".claude", sf)
         if not os.path.exists(sp):
@@ -376,14 +404,20 @@ def main():
                 continue
             n_cmds = 0
             for ent in entries:
+                ent_cmds = 0
                 for h in (ent.get("hooks") or []) if isinstance(ent, dict) else []:
                     if not isinstance(h, dict):
                         continue
                     if h.get("type") == "command" and isinstance(h.get("command"), str):
                         hook_cmds |= bash_cmds(h["command"])
                         n_cmds += 1
+                        ent_cmds += 1
                     else:
                         hook_why.add(f"hook-type:{h.get('type', '?')}")
+                # A TOOL-event hook with a command reaches back into whichever agent's tool use
+                # matches `matcher` — record the matcher so those agents edge to the hooks unit.
+                if ent_cmds and event in TOOL_HOOK_EVENTS and isinstance(ent, dict):
+                    tool_hook_matchers.append(ent.get("matcher", "") if isinstance(ent.get("matcher"), str) else "")
             if n_cmds:
                 hook_events.append(f"{event}({n_cmds})")
     has_hooks = bool(hook_events or hook_why)
@@ -422,6 +456,15 @@ def main():
     calls[ROOT] = sorted(names + ([HOOKS] if has_hooks else []))
     if has_hooks:
         calls[HOOKS] = []
+        # A TOOL-event hook (PreToolUse/PostToolUse) runs its command on the matching tool use of
+        # ANY agent, not just the session root — so each agent whose granted tools match a hook's
+        # matcher EDGES to the hooks unit and inherits its Exec. Without this, `forbid reviewer ->
+        # Exec` passed green while a PostToolUse hook exec'd on the reviewer's every edit. Lifecycle
+        # hooks (Stop/SessionStart/…) stay session-only. Conservative: an unparseable matcher edges
+        # no agent (under-report, never fabricate).
+        for name, a in agents.items():
+            if any(tools_match_matcher(a["tools"], m) for m in tool_hook_matchers):
+                calls[name] = sorted(set(calls[name]) | {HOOKS})
 
     # ── per-agent direct effects ──────────────────────────────────────────────────────────────
     direct, fs_detail, why_map, unresolved_direct = {}, {}, {}, {}
