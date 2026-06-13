@@ -476,7 +476,7 @@ check("agentsmd ships in the wheel (py-modules list)",
       '"agentsmd"' in open(os.path.join(HERE, "pyproject.toml")).read())
 r = subprocess.run([sys.executable, os.path.join(HERE, "cli.py"), "--agents"], capture_output=True, text=True)
 check("--agents prints the version header + the exact installed contract",
-      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents-")
+      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.4")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 print(f"test: {PASS} passed, {FAIL} failed")
