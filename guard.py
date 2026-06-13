@@ -81,8 +81,16 @@ def compile_guard(policy_text, project_dir=None):
     warnings = []
     if "Bash" not in deny:
         for e in sorted(cliff):
-            warnings.append(f"deny {e}: a granted `Bash` can still reach {e} (the §4 Exec cliff) — this guard "
-                            f"denies {sorted(inv.get(e, set()))} but not Bash; add `deny Exec` to close it.")
+            tools = sorted(inv.get(e, set()))
+            if tools:
+                warnings.append(f"deny {e}: a granted `Bash` can still reach {e} (the §4 Exec cliff) — this "
+                                f"guard denies {tools} but not Bash; add `deny Exec` to close it.")
+            else:
+                # No built-in tool PRODUCES this effect (e.g. Db) — it's reachable only via Bash (a
+                # shell client) or an MCP server, so permissions.deny on a tool can't enforce it.
+                warnings.append(f"deny {e}: no built-in tool produces {e} — it's reached via `Bash` (a shell "
+                                f"client) or an MCP server; add `deny Exec` and/or deny the relevant mcp__server "
+                                f"to enforce it.")
     return {"deny": sorted(deny), "warnings": warnings, "notes": notes}
 
 
