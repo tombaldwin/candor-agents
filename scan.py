@@ -753,12 +753,11 @@ def main():
             runs_code = (a["tools"] is None and "Bash" not in denied_tools) or "Bash" in (a["lt"] or [])
             if runs_code:
                 calls[name] = sorted(set(calls[name]) | set(linked))
-        for u, c in commands.items():
-            # A command that shells out may run the project's own binaries — UNLESS its heads are all
-            # known external tools (spec §4 transitive bound: e.g. a command that only runs candor
-            # *over* the code reads Fs, it doesn't perform the code's Net/Db). Bare-Bash or any
-            # unknown head keeps the cliff and the link.
-            if "Bash" in live(c["tools"]) and not (c["heads"] and all(h in COMMAND_HEAD for h in c["heads"])):
+        # A command/skill that shells out may run the project's own binaries — UNLESS its heads are all
+        # known external tools (spec §4 transitive bound: e.g. one that only runs candor *over* the code
+        # reads Fs, it doesn't perform the code's Net/Db). Bare-Bash or any unknown head keeps the link.
+        for u, unit in {**commands, **skills}.items():
+            if "Bash" in live(unit["tools"]) and not (unit["heads"] and all(h in COMMAND_HEAD for h in unit["heads"])):
                 calls[u] = sorted(set(calls[u]) | set(linked))
         calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
 
