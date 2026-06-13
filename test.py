@@ -126,6 +126,23 @@ check("unnamed Agent tool CHA-edges to all", cg["boss"] == ["a", "b"], f"got {cg
 check("CHA boss inherits the union", entry(rep, "boss")["inferred"] == ["Exec", "Fs", "Net"],
       f"got {entry(rep, 'boss')['inferred']}")
 
+# PAREN-AWARE agent tools (documented `Agent(worker)` spawn-allowlist + base-stripping a Bash specifier).
+# `Agent(worker)` must still count as the Agent tool (enable delegation) — a literal `"Agent" in tools`
+# missed it and disabled delegation (review find); and `Bash(git:*)` base-strips to Exec, not Unknown.
+rep, cg = scan({
+    "coord.md": agent("coord", "Agent(worker), Read", body="Use the worker subagent to fetch things."),
+    "worker.md": agent("worker", "WebFetch"),
+    "gitter.md": agent("gitter", "Bash(git:*), Read"),
+    "multi.md": agent("multi", "Bash(git:*, npm:*), Read"),  # inner comma must NOT shatter the token
+})
+check("Agent(worker) still grants the Agent tool → delegation enabled (not silently disabled)",
+      cg["coord"] == ["worker"] and "Net" in entry(rep, "coord")["inferred"], f"got {cg['coord']}")
+check("a Bash(git:*) specifier base-strips to Exec (not Unknown → not a deny-Exec evasion)",
+      entry(rep, "gitter")["inferred"] == ["Exec", "Fs"] and not entry(rep, "gitter")["unresolved"],
+      f"got {entry(rep, 'gitter')}")
+check("a multi-arg specifier Bash(git:*, npm:*) is paren-aware (inner comma kept) → Exec",
+      entry(rep, "multi")["inferred"] == ["Exec", "Fs"], f"got {entry(rep, 'multi')}")
+
 # ── 3. ambient authority (no tools: line) ─────────────────────────────────────────────────────────
 rep, cg = scan({"legacy.md": agent("legacy", None)}, mcp=["billing"])
 e = entry(rep, "legacy")

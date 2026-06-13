@@ -174,6 +174,33 @@ def _unquote(s):
     return s
 
 
+def split_tools(s):
+    """Comma-split a tool list, RESPECTING parens so a specifier with an inner comma stays whole:
+    `Agent(worker, researcher), Read` → ['Agent(worker, researcher)', 'Read'] (a naive `.split(',')`
+    shattered it). `Agent(...)` is documented agent-frontmatter syntax (the spawn allowlist)."""
+    out, buf, depth = [], "", 0
+    for ch in s:
+        if ch == "(":
+            depth += 1; buf += ch
+        elif ch == ")":
+            depth = max(0, depth - 1); buf += ch
+        elif ch == "," and depth == 0:
+            out.append(buf); buf = ""
+        else:
+            buf += ch
+    out.append(buf)
+    return [u for x in out if (u := _unquote(x))]
+
+
+def base_tool(t):
+    """The base tool NAME of a token, dropping any `(...)` specifier: `Bash(git:*)` → `Bash`,
+    `Agent(worker)` → `Agent`, `mcp__github__create(x)` → `mcp__github__create`, `Read` → `Read`. The
+    agent tool path must base-strip like the command path / the `live()` deny path already do — else
+    `Agent(worker)` fails the `"Agent" in tools` delegation check (silently disabling a real spawn
+    reach) and `Bash(git:*)` classifies as Unknown not Exec (evading a `deny Exec` gate)."""
+    return t.split("(", 1)[0].strip()
+
+
 def propagate(seed, edges):
     """Transitive fixpoint over a delegation graph: each unit accumulates its callees' values to a
     least fixpoint (spec §5a). One implementation, used by scan.py (effects, fs kinds) and observe.py
@@ -335,8 +362,8 @@ def tool_list(meta):
     # `tools: [a, b]` is a list — not a single tool named "[a, b]". Real-fleet finding.
     if t.startswith("[") and t.endswith("]"):
         inner = t[1:-1].strip()
-        return [u for x in inner.split(",") if (u := _unquote(x))] if inner else []
-    return [u for x in t.split(",") if (u := _unquote(x))]
+        return split_tools(inner) if inner else []   # paren-aware (keeps `Agent(a, b)` whole)
+    return split_tools(t)
 
 
 def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
@@ -345,12 +372,13 @@ def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
     declared_bad = declared_bad or {}
     effs, fs, why = set(), set(), set()
     for t in tools:
-        if t in TOOL_EFFECTS:
-            effs |= TOOL_EFFECTS[t]
-            if t in FS_KIND:
-                fs.add(FS_KIND[t])
-        elif t.startswith("mcp__"):
-            server = t.split("__")[1]
+        b = base_tool(t)  # strip a `(...)` specifier: `Bash(git:*)`→Bash (Exec, not Unknown — gate-safe)
+        if b in TOOL_EFFECTS:
+            effs |= TOOL_EFFECTS[b]
+            if b in FS_KIND:
+                fs.add(FS_KIND[b])
+        elif b.startswith("mcp__"):
+            server = b.split("__")[1]
             if server in MCP_TABLE:
                 effs |= MCP_TABLE[server]
             elif server in declared_mcp:
@@ -361,7 +389,7 @@ def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
             else:
                 effs.add("Unknown")
                 why.add(f"mcp-uncurated:{server}")
-        elif t in PURE_TOOLS:
+        elif b in PURE_TOOLS:
             pass
         else:
             # A tool we've never heard of is an unresolvable call, not silently pure.
@@ -719,7 +747,10 @@ def main():
     name_re = {n: re.compile(rf"(?<!{_NC}){re.escape(n)}(?!{_NC})") for n in names}
     for name, a in agents.items():
         lt = a["lt"]  # deny-filtered: a denied `Agent`/`Task` grant can no longer delegate
-        has_agent_tool = ("Agent" in (lt or []) or "Task" in (lt or [])
+        # base-strip the specifier: `Agent(worker)` (documented spawn-allowlist syntax) still grants the
+        # Agent tool — a literal `"Agent" in lt` missed it and silently DISABLED delegation (review find).
+        lt_bases = {base_tool(t) for t in (lt or [])}
+        has_agent_tool = ("Agent" in lt_bases or "Task" in lt_bases
                           or (nested and a["tools"] is None and "Agent" not in denied_tools))
         edges = []
         if has_agent_tool:
@@ -837,7 +868,7 @@ def main():
         if not linked:
             print(f"candor-agents: --link {link}: no entryPoint functions found — nothing linked", file=sys.stderr)
         for name, a in agents.items():
-            runs_code = (a["tools"] is None and "Bash" not in denied_tools) or "Bash" in (a["lt"] or [])
+            runs_code = (a["tools"] is None and "Bash" not in denied_tools) or "Bash" in {base_tool(t) for t in (a["lt"] or [])}
             if runs_code:
                 calls[name] = sorted(set(calls[name]) | set(linked))
         # A command/skill that shells out may run the project's own binaries — UNLESS its heads are all
