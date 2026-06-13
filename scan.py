@@ -142,6 +142,23 @@ _CMD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _SUBST = re.compile(r"[$<]\(\s*([A-Za-z0-9._+/-]+)")
 
 
+def _strip_comment(s):
+    """Strip a trailing YAML inline comment (` #…`): a `#` preceded by whitespace (or at the start) and
+    NOT inside quotes begins a comment, which the real YAML parser Claude uses drops. Without this a
+    `tools: Read, Bash # only safe` kept `Bash # only safe` as one token → Unknown, evading a deny gate.
+    Quote-aware so a `#` inside a quoted scalar stays literal; `C#`/`a#b` (no leading space) stay."""
+    q = None
+    for i, ch in enumerate(s):
+        if q:
+            if ch == q:
+                q = None
+        elif ch in "\"'":
+            q = ch
+        elif ch == "#" and (i == 0 or s[i - 1] in " \t"):
+            return s[:i].rstrip()
+    return s
+
+
 def _unquote(s):
     """Strip ONE layer of matching surrounding quotes from a YAML scalar tool token. A user who quotes
     a tool entry to protect its specifier's special chars — `"Bash(git:*)"`, `'mcp__x__y'` (the parens,
@@ -272,11 +289,11 @@ def parse_frontmatter(text):
         line = lines[i]
         km = re.match(r"^(\w[\w-]*):\s*(.*)$", line)
         if km:
-            key, val = km.group(1), km.group(2).strip()
+            key, val = km.group(1), _strip_comment(km.group(2)).strip()
             if val == "" and i + 1 < len(lines) and lines[i + 1].lstrip().startswith("- "):
                 items = []
                 while i + 1 < len(lines) and lines[i + 1].lstrip().startswith("- "):
-                    items.append(lines[i + 1].lstrip()[2:].strip())
+                    items.append(_strip_comment(lines[i + 1].lstrip()[2:]).strip())
                     i += 1
                 meta[key] = items
             else:
