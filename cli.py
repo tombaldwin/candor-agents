@@ -76,6 +76,11 @@ def drift(target, strict, transcripts=None):
             continue
         unused = dec - obs - {"Unknown"}
         extra = obs - dec - {"Unknown"}
+        # An observed Unknown the agent NEVER DECLARED (Unknown not in dec) is a confined agent reaching
+        # an uncurated, unclassifiable capability outside its declaration — the most security-relevant
+        # drift. It must count as an anomaly (and trip --strict), not just print a soft note; stripping
+        # Unknown from `extra` let it pass the gate clean. (A declared Unknown is acknowledged, so fine.)
+        undeclared_unknown = "Unknown" in obs and "Unknown" not in dec and bool(owhy.get(unit))
         if unused:
             print(f"  {unit}: granted-but-unused {{{', '.join(sorted(unused))}}} — least-privilege "
                   f"trim candidates (AS-EFF-002's fleet analog)")
@@ -83,10 +88,14 @@ def drift(target, strict, transcripts=None):
             anomalies += 1
             print(f"  {unit}: OBSERVED-OUTSIDE-DECLARATION {{{', '.join(sorted(extra))}}} — read this: "
                   f"a scan gap, a renamed grant, or the harness let something through")
-        if "Unknown" in obs and owhy.get(unit):
-            print(f"  {unit}: observed Unknown via {', '.join(owhy[unit])} — an uncurated tool ran; "
-                  f"curate it or read the transcript")
-        if not unused and not extra:
+        if undeclared_unknown:
+            anomalies += 1
+            print(f"  {unit}: OBSERVED-OUTSIDE-DECLARATION Unknown via {', '.join(owhy[unit])} — an "
+                  f"uncurated tool the agent never declared ran; curate it or it is undeclared drift")
+        elif "Unknown" in obs and owhy.get(unit):
+            print(f"  {unit}: observed Unknown via {', '.join(owhy[unit])} — declared; an uncurated "
+                  f"tool ran, curate it or read the transcript")
+        if not unused and not extra and not undeclared_unknown:
             print(f"  {unit}: declarations match observation")
     if anomalies and strict:
         print(f"drift: {anomalies} anomaly unit(s) (--strict)", file=sys.stderr)

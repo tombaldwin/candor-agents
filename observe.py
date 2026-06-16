@@ -241,6 +241,11 @@ def main(argv=None):
         sys.stderr.write(f"candor-agents: no transcripts found for {target} "
                          f"(expected *.jsonl there, or ~/.claude/projects/<slug>/ to exist)\n")
         return 2
+    # An explicit --transcripts override bypasses transcript_dir_for's existence check, so a path that
+    # doesn't exist or is a file would crash in observe()'s os.listdir. Fail clean instead.
+    if not os.path.isdir(tdir):
+        sys.stderr.write(f"candor-agents: transcripts path {tdir} is not a directory\n")
+        return 2
     # the fleet name: an explicit --fleet (drift passes it so both halves agree), else the project
     # dir when it's real, else the transcript dir's slug — the cross-project sweep produced reports
     # named after /dev/null otherwise.
