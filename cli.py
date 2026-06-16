@@ -20,6 +20,16 @@ import subprocess
 import sys
 import tempfile
 
+# Harness BUILT-IN agent types: they have no project `.md` declaration by design, so an undeclared
+# observation of one is NOT drift. Everything else with no declaration that PERFORMED effects IS drift
+# (a renamed/custom agent, or a `subagent` unit from a dropped meta sidecar) — see drift(). Conservative
+# by intent: a builtin not listed here is flagged (a false alarm the operator resolves by declaring or
+# extending this set) rather than silently passed — the gate fails loud, never open.
+BUILTIN_AGENTS = {
+    "general-purpose", "Explore", "Plan", "claude", "claude-code-guide",
+    "statusline-setup", "output-style-setup",
+}
+
 
 def _run(mod, args):
     return subprocess.call([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), mod)] + args)
@@ -53,9 +63,19 @@ def drift(target, strict, transcripts=None):
     for unit in sorted(set(d) | set(o)):
         dec, obs = d.get(unit), o.get(unit)
         if dec is None:
-            # builtin agent types (general-purpose, Explore…) have no .md declaration — informative
-            print(f"  {unit}: observed only ({', '.join(sorted(obs))}) — no declaration to compare "
-                  f"(a built-in agent type, or a declaration the scan didn't see)")
+            # An observed unit with NO declaration. The harness BUILT-IN agent types legitimately have no
+            # project `.md` — exempt them. But a NON-builtin undeclared unit that PERFORMED effects is the
+            # gate's whole point: a renamed/custom agent with no declaration, or a dropped `meta.json`
+            # sidecar that collapses the unit name to `subagent`, would otherwise launder Net/Exec past
+            # `--strict` (it printed a soft note and `continue`d, never counting an anomaly). Flag it.
+            if unit not in BUILTIN_AGENTS and obs:
+                anomalies += 1
+                print(f"  {unit}: OBSERVED-OUTSIDE-DECLARATION {{{', '.join(sorted(obs))}}} — an agent "
+                      f"with NO declaration performed effects (a renamed/undeclared agent, or a dropped "
+                      f"meta sidecar collapsing the unit to `subagent`); declare it or remove it")
+            else:
+                print(f"  {unit}: observed only ({', '.join(sorted(obs))}) — no declaration to compare "
+                      f"(a built-in agent type)")
             continue
         if obs is None:
             if unit == "hooks":
