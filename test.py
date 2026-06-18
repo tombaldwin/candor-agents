@@ -61,7 +61,11 @@ rep, cg = scan({
     "bystander.md": agent("bystander", "WebSearch"),
 })
 check("named delegation narrows edges", cg["boss"] == ["worker"], f"got {cg['boss']}")
-check("narrowed boss inherits only worker's Net", entry(rep, "boss")["inferred"] == ["Net"],
+# Bare `Agent`: the edge to worker is precise (no bystander smear), but the spawn target is unprovable —
+# so the reach is worker's Net PLUS a disclosed Unknown residual (can spawn an unmentioned agent). The
+# narrowing stays precise (no FABRICATED concrete effect); Unknown just blocks a false certification.
+check("narrowed boss inherits worker's Net + a disclosed spawn residual",
+      entry(rep, "boss")["inferred"] == ["Net", "Unknown"],
       f"got {entry(rep, 'boss')['inferred']}")
 
 # name at the very START of the body (the regex-anchor case)
@@ -84,8 +88,9 @@ rep, cg = scan({
 })
 check("punctuation-adjacent names narrow (`name:`, `(name)`, space)",
       cg["boss"] == ["helper", "reviewer", "security-auditor"], f"got {cg['boss']}")
-check("boss inherits ALL three punctuation-adjacent delegates' effects",
-      entry(rep, "boss")["inferred"] == ["Exec", "Fs", "Net"], f"got {entry(rep, 'boss')['inferred']}")
+check("boss inherits ALL three punctuation-adjacent delegates' effects (+ bare-Agent spawn residual)",
+      entry(rep, "boss")["inferred"] == ["Exec", "Fs", "Net", "Unknown"],
+      f"got {entry(rep, 'boss')['inferred']}")
 
 # FABRICATION guard: a common-word agent name appearing in a PATH or identifier in prose is NOT a
 # delegation mention (`.`/`/` are name-continuation chars) — else a false edge fabricates inherited effects.
@@ -106,6 +111,32 @@ rep, cg = scan({
 })
 check("path-fragment name does not fabricate an edge when another name really narrows",
       cg["boss"] == ["reviewer"] and "Exec" not in entry(rep, "boss")["inferred"], f"got {cg['boss']}")
+
+# THE SPAWN-RESIDUAL FIND (R11 seam battery): a bare `Agent` holder that mentions only a PURE agent can
+# still spawn an unmentioned EFFECTFUL one at runtime — a prompt mention is not proof of the spawn set
+# (unlike a harness-enforced allowlist). Narrowing to the mention WITHOUT disclosing read the
+# orchestrator pure → a silent under-report (`deny Exec orch` falsely green). It must carry Unknown,
+# while the precise edge (helper, NOT the smear of deployer) is kept for the map.
+rep, cg = scan({
+    "orch.md": agent("orch", "Agent, Read", body="For summaries, delegate to the `helper`."),
+    "helper.md": agent("helper", "TodoWrite"),       # pure
+    "deployer.md": agent("deployer", "Bash"),        # Exec — reachable via the Agent tool, not mentioned
+})
+check("bare-Agent orchestrator mentioning only a pure agent discloses the spawn residual (not silent-pure)",
+      cg["orch"] == ["helper"] and "Unknown" in entry(rep, "orch")["inferred"]
+      and entry(rep, "orch")["unresolved"], f"got {entry(rep, 'orch')['inferred']}")
+
+# ALLOWLIST control (the SOUND devirt analog): a declared `Agent(helper)` spawn-allowlist is
+# harness-enforced, so narrowing to it is sound — NO Unknown residual even with an effectful deployer
+# present, and the ALLOWLIST (not a prompt mention of deployer) decides the edges.
+rep, cg = scan({
+    "orch.md": agent("orch", "Agent(helper), Read", body="Mentions deployer in prose but cannot spawn it."),
+    "helper.md": agent("helper", "TodoWrite"),
+    "deployer.md": agent("deployer", "Bash"),
+})
+check("declared Agent(allowlist) narrows soundly — no spawn residual, allowlist beats the prose mention",
+      cg["orch"] == ["helper"] and "Unknown" not in entry(rep, "orch")["inferred"],
+      f"got inferred={entry(rep, 'orch')['inferred']} edges={cg['orch']}")
 
 # a name embedded in a LONGER name is NOT a mention (boundary holds the precise direction too)
 rep, cg = scan({
@@ -258,8 +289,12 @@ rep, cg = scan({
     "b.md": agent("b", "Agent", body="Use `c`."),
     "c.md": agent("c", "Bash"),
 })
-check("effect propagates up a 3-deep named chain",
-      entry(rep, "a")["inferred"] == ["Exec"] and entry(rep, "b")["inferred"] == ["Exec"])
+# a and b hold bare `Agent` and narrow by mention → each discloses the spawn residual (Unknown) on top
+# of the propagated Exec; c performs Exec directly (no `Agent` tool → no residual).
+check("effect propagates up a 3-deep named chain (+ bare-Agent residual on the spawners)",
+      entry(rep, "a")["inferred"] == ["Exec", "Unknown"]
+      and entry(rep, "b")["inferred"] == ["Exec", "Unknown"]
+      and entry(rep, "c")["inferred"] == ["Exec"])
 
 # ── 6. pure units: omitted from the report, present in the sidecar ───────────────────────────────
 rep, cg = scan({
