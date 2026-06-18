@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.4"
-VERSION = "agents-0.4.11"
+VERSION = "agents-0.4.12"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -481,6 +481,7 @@ def main():
 
     # Agent definitions.
     agents = {}  # name -> {tools: list|None, body, desc}
+    dup_names = set()  # agent `name:`s declared by >1 file — disambiguated below, NEVER silently clobbered
     unreadable = []  # .md files that couldn't be read (permission/encoding) — disclosed, never fatal
     adir = os.path.join(root, ".claude", "agents")
     if os.path.isdir(adir):
@@ -498,7 +499,28 @@ def main():
                 skipped.append(f)
                 continue
             name = meta.get("name") or f[:-3]
-            agents[name] = {"tools": tool_list(meta), "body": body, "desc": str(meta.get("description", "")), "file": f}
+            key = name
+            if name in dup_names or name in agents:
+                # Two+ agent files declaring the SAME `name:`. Silently overwriting (the old
+                # `agents[name] = …`) dropped the earlier agent's grants/edges, so drift compared an
+                # observed `name` against only the SURVIVOR — LAUNDERING a real violation (the dropped
+                # agent's stricter contract vanished → clean exit, the cardinal silent miss) and able to
+                # mis-flag the innocent one. Keep ALL of them, disambiguated by file so NEITHER holds the
+                # bare `name`: an observed bare `name` then matches no declaration and routes to the
+                # OBSERVED-OUTSIDE-DECLARATION anomaly (the safe flag), and the collision is surfaced.
+                # (Distinct from the session/hooks guard, where one USER agent vs a SYNTHETIC unit keeps
+                # the user's bare name; here two USER agents collide, so neither is authoritative — the
+                # runtime can't disambiguate same-named agents either.)
+                if name not in dup_names:
+                    dup_names.add(name)
+                    orig = agents.pop(name)  # the first file held the bare name — rename it too
+                    agents[f"{name}#{orig['file']}"] = orig
+                    print(f"candor-agents: duplicate agent name `{name}` — `{orig['file']}` is now unit "
+                          f"`{name}#{orig['file']}`; rename one (the runtime can't tell them apart either)",
+                          file=sys.stderr)
+                key = f"{name}#{f}"
+                print(f"candor-agents: duplicate agent name `{name}` — `{f}` is unit `{key}`", file=sys.stderr)
+            agents[key] = {"tools": tool_list(meta), "body": body, "desc": str(meta.get("description", "")), "file": f}
         if skipped:
             print(f"candor-agents: skipped {len(skipped)} .md file(s) with no frontmatter "
                   f"(not agent definitions): {', '.join(skipped[:5])}{'…' if len(skipped) > 5 else ''}",
@@ -703,7 +725,10 @@ def main():
             if not isinstance(t, dict):
                 continue
             tid = str(t.get("id") or t.get("name") or i)
-            crons[f"cron:{tid}"] = {"cron": str(t.get("cron", "")), "prompt": str(t.get("prompt", ""))}
+            ckey = f"cron:{tid}"
+            if ckey in crons:  # two scheduled tasks sharing an explicit id/name — keep both (the same
+                ckey = f"cron:{tid}#{i}"  # silent-clobber class as duplicate agent names above)
+            crons[ckey] = {"cron": str(t.get("cron", "")), "prompt": str(t.get("prompt", ""))}
 
     if not agents and not has_hooks and not commands and not skills and not crons:
         print(f"candor-agents: no agent definitions under {adir}, no commands/skills, no hooks, and no "
