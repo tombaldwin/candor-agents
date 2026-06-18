@@ -201,6 +201,20 @@ def base_tool(t):
     return t.split("(", 1)[0].strip()
 
 
+def agent_spawn_allowlist(tools):
+    """The agent names in any `Agent(x, y)` / `Task(x)` spawn-allowlist specifier — the HARNESS-ENFORCED
+    delegation set, candor's sound devirt analog (the runtime cannot spawn an agent outside it). Returns
+    an empty set when no allowlist is declared: a BARE `Agent` grant, whose runtime spawn target is a
+    string chosen at runtime and therefore unprovable. `tools` is a (deny-filtered) grant list."""
+    out = set()
+    for t in (tools or []):
+        s = t.strip()
+        if base_tool(s) in ("Agent", "Task") and "(" in s and s.endswith(")"):
+            inner = s[s.index("(") + 1 : -1]
+            out |= {n.strip() for n in inner.split(",") if n.strip()}
+    return out
+
+
 def propagate(seed, edges):
     """Transitive fixpoint over a delegation graph: each unit accumulates its callees' values to a
     least fixpoint (spec §5a). One implementation, used by scan.py (effects, fs kinds) and observe.py
@@ -770,6 +784,10 @@ def main():
     # still delimit, so the punctuation-adjacent delegates the earlier fix recovered still match.
     _NC = r"[A-Za-z0-9_./+-]"  # name-continuation chars (incl. . and / — path/identifier fragments aren't mentions)
     name_re = {n: re.compile(rf"(?<!{_NC}){re.escape(n)}(?!{_NC})") for n in names}
+    # Bare-`Agent` agents narrowed by a PROMPT MENTION: the mention is advisory text, not proof of the
+    # spawn set, so the narrowed reach is a lower bound — the residual must be disclosed (Unknown), not
+    # silently dropped. Collected here, applied to `direct` after effects are classified below.
+    unresolved_spawn = set()
     for name, a in agents.items():
         lt = a["lt"]  # deny-filtered: a denied `Agent`/`Task` grant can no longer delegate
         # base-strip the specifier: `Agent(worker)` (documented spawn-allowlist syntax) still grants the
@@ -779,9 +797,26 @@ def main():
                           or (nested and a["tools"] is None and "Agent" not in denied_tools))
         edges = []
         if has_agent_tool:
-            hay = a["body"] + " " + a["desc"] + " "
-            mentioned = [n for n in names if n != name and name_re[n].search(hay)]
-            edges = mentioned if mentioned else [n for n in names if n != name]  # CHA fallback
+            # Resolution ladder, mirroring the code engine's dyn dispatch:
+            #  1. A declared `Agent(x,y)` spawn-allowlist is HARNESS-ENFORCED — the sound devirt analog.
+            #     Narrow to it with NO residual (the runtime cannot spawn outside the allowlist).
+            #  2. Bare `Agent` + a PROMPT MENTION: the mention narrows for precision but does NOT prove
+            #     the agent won't spawn an unmentioned (possibly effectful) one — so keep the precise
+            #     edges AND disclose the residual as Unknown (the code engine's unresolvable-dispatch
+            #     posture). A narrowed-pure reading here was a silent under-report (adversarial find).
+            #  3. Bare `Agent`, no mention: CHA over the whole fleet — a sound over-approximation with no
+            #     residual beyond the fleet, so no Unknown.
+            allowlist = agent_spawn_allowlist(lt)
+            if allowlist:
+                edges = [n for n in names if n != name and n in allowlist]
+            else:
+                hay = a["body"] + " " + a["desc"] + " "
+                mentioned = [n for n in names if n != name and name_re[n].search(hay)]
+                if mentioned:
+                    edges = mentioned
+                    unresolved_spawn.add(name)
+                else:
+                    edges = [n for n in names if n != name]  # CHA fallback (sound; no residual)
         calls[name] = sorted(edges)
     # Commands and skills are leaf units (they hold tools but don't spawn subagents) — init their
     # edge lists so the hook-matcher loop and the sidecar see them.
@@ -838,6 +873,15 @@ def main():
             effs, fs, why = classify(a["lt"], live_servers, declared_mcp, declared_bad)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
         unresolved_direct[name] = "Unknown" in effs
+    # Disclose the unprovable spawn residual on bare-`Agent` agents narrowed by a prompt mention (ladder
+    # rung 2 above): they CAN spawn an unmentioned, possibly effectful agent at runtime, so a narrowed
+    # reach that omits it would be a silent under-report — Unknown blocks a false `deny` certification
+    # while the precise mentioned edges stay for map / blast-radius. (Allowlisted `Agent(x,y)` and the
+    # CHA fallback are sound, so they're not flagged.)
+    for name in unresolved_spawn:
+        direct[name].add("Unknown")
+        why_map[name].add("agent-spawn:bare `Agent` narrowed by prompt mention (can spawn an unmentioned agent)")
+        unresolved_direct[name] = True
     # Commands / skills: effects from their (deny-filtered) allowed-tools; a command's shell heads add
     # Exec + the heads' REFINED effects (spec §4 ⟨0.5⟩: a known head classifies — `curl`→Net,
     # `candor*`→Fs/Env; an unknown head keeps the bare Exec cliff), unless Bash is denied (the shell
