@@ -480,6 +480,28 @@ r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts
 check("drift --strict: a BUILT-IN undeclared agent (general-purpose) is NOT a false anomaly (exit 0)",
       r.returncode == 0)
 
+# AG-DUP (key-collision FABRICATION class, the 2026-06-18 cross-engine sweep): two agent files with the
+# SAME `name:` used to SILENTLY CLOBBER (`agents[name] = …`) — only the survivor's contract reached drift,
+# LAUNDERING the dropped agent's stricter contract (a pure `worker` observed running shell read CLEAN, the
+# cardinal silent miss). Now BOTH are kept, disambiguated by file (`name#file`), so neither holds the bare
+# name and an observed bare `worker` routes to OBSERVED-OUTSIDE-DECLARATION (the safe flag).
+_dup = tempfile.mkdtemp()
+_da = os.path.join(_dup, ".claude", "agents"); os.makedirs(_da)
+open(os.path.join(_da, "a-pure.md"), "w").write(agent("worker", "Read"))   # pure worker — no Exec
+open(os.path.join(_da, "z-priv.md"), "w").write(agent("worker", "Bash"))   # privileged worker — Exec
+r = subprocess.run([sys.executable, "scan.py", _dup, "--out", os.path.join(_dup, "d"), "--fleet", "F"], capture_output=True, text=True)
+_units = {e["fn"] for e in _j.load(open(os.path.join(_dup, "d.F.Fleet.json")))["functions"]}
+check("scan: duplicate agent names are BOTH kept, disambiguated (no silent clobber)",
+      "worker#a-pure.md" in _units and "worker#z-priv.md" in _units and "worker" not in _units, _units)
+check("scan: the duplicate-name collision is WARNED on stderr", "duplicate agent name `worker`" in r.stderr)
+_dtx = os.path.join(tempfile.mkdtemp(), "t"); os.makedirs(os.path.join(_dtx, "s1", "subagents"))
+open(os.path.join(_dtx, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "worker"})) + "\n")
+open(os.path.join(_dtx, "s1", "subagents", "agent-w.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "rm -rf /x"})) + "\n")
+_j.dump({"agentType": "worker", "toolUseId": "toolu_s1"}, open(os.path.join(_dtx, "s1", "subagents", "agent-w.meta.json"), "w"))
+r = subprocess.run([sys.executable, "cli.py", "drift", _dup, "--transcripts", _dtx, "--strict"], capture_output=True, text=True)
+check("drift --strict: a same-named-agent collision no longer launders a violation (exit 1, flagged)",
+      r.returncode == 1 and "worker: OBSERVED-OUTSIDE-DECLARATION" in r.stdout, r.stdout)
+
 # drift must NOT call a command/cron/session a "trim candidate agent" — they aren't agents and aren't
 # recorded as distinct units in transcripts (the bug: every declared unit got the agent-trim advice).
 _dd = tempfile.mkdtemp()
