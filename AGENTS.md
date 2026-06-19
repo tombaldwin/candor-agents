@@ -37,7 +37,7 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 
 - Units are agent types, `command:`/`skill:`/`cron:` units, and the `session` root; the session and
   each scheduled task are `entryPoint: true` (the autonomous roots). `hash` is `<fleet>#<unit>`.
-  Every unit carries `unitKind` (spec 0.5 draft, informative): `agent`, `command`, `skill`, `cron`,
+  Every unit carries `unitKind` (spec ⟨0.5⟩, informative): `agent`, `command`, `skill`, `cron`,
   `session`, or `hooks` — a fleet's units are not functions, and the field keeps a merged prefix
   (fleet + code reports) readable.
 - `inferred` is the transitive effect set (delegation propagates a delegate's effects to its
@@ -54,7 +54,10 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   heads are all known external tools is exempt (running candor *over* the code reads `Fs`, it doesn't
   perform the code's `Net`/`Db`).
 - An **uncurated MCP server** or unknown tool reads `Unknown` with a named origin in `unknownWhy`
-  (`mcp-uncurated:<server>`, `tool-unknown:<name>`) — never silence. A `.mcp.json` server can
+  (`mcp-uncurated:<server>`, `tool-unknown:<name>`, `ambient:tools-unrestricted`, `agent-spawn:…`) —
+  never silence. As a **domain engine** (spec §4 ⟨0.7⟩) the fleet has no code dispatch/reflection, so it
+  emits these *fleet* origins instead of the code-canonical `reflect:`/`native:`/`dispatch:`/`callback:`
+  vocabulary — the universal rule is that *every* direct `Unknown` source carries a named `unknownWhy`. A `.mcp.json` server can
   declare its effects via the `candorEffects` convention (see DECLARING.md); declared-not-verified
   trust, curated table outranks.
 - A missing `tools:` line is **ambient authority** (everything + Unknown); `tools: []` is

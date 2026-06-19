@@ -81,7 +81,7 @@ and inherit their *measured* effects, so `callers <code-fn>` climbs into the fle
 
 See [DESIGN.md](DESIGN.md) for the full mapping, the tool table, and the honest non-transfers
 (the Bash capability cliff; grants are may-use upper bounds; dynamic tool surfacing → `Unknown`;
-spec 0.4 would want s/function/unit/).
+the function/unit distinction, carried by the spec's `unitKind` field as of ⟨0.5⟩).
 
 ## What this is not (yet)
 
