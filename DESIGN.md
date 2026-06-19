@@ -87,8 +87,8 @@ tier ported to fleets.
   gate — but the marketing must say "can reach", never "does".
 - **Dynamic tool surfacing** (ToolSearch-style deferred tools, runtime MCP connects) is the
   reflection analog → `Unknown`.
-- **The spec says "function".** The envelope carries the mapping fine, but candor-spec 0.4 would
-  want s/function/unit/ language and a `unitKind` hint before any of this is real.
+- **The spec says "function".** The envelope carries the mapping fine; the function/unit gap was
+  closed in candor-spec ⟨0.5⟩, which added the `unitKind` hint this engine now emits on every unit.
 
 ## Real-fleet validation (wshobson/agents, 36.6k stars, 2026-06-11)
 
@@ -131,8 +131,8 @@ inherits its recorded transitive effects. Verified end to end with the unmodifie
   the gate verdict crosses the code/fleet boundary.
 
 One naming rule fell out: the fleet's session root is named `session` (not `main`) so it can't
-collide with a crate's `fn main` under a merged prefix. The general lesson for spec 0.4: combined
-mode needs unit names to be namespace-disjoint across engines (a `unitKind` field is the fix).
+collide with a crate's `fn main` under a merged prefix. The general lesson, since adopted: combined
+mode needs unit names to be namespace-disjoint across engines — the `unitKind` field (spec ⟨0.5⟩) is the fix.
 
 ## Verdict criteria
 

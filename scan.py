@@ -20,8 +20,8 @@ import os
 import re
 import sys
 
-SPEC = "0.4"
-VERSION = "agents-0.4.12"
+SPEC = "0.7"
+VERSION = "agents-0.7.0"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -999,7 +999,7 @@ def main():
                 entry["cmds"] = sorted(heads)
         if kind in ("session", "cron"):
             entry["entryPoint"] = True  # autonomous roots: the session, and each scheduled task
-        # spec-0.4 MUST: every producer emits the cross-boundary join key — a fleet report is
+        # spec §2 MUST: every producer emits the cross-boundary join key — a fleet report is
         # chainable like any sibling (`<fleet>#<agent>`, the pkg#LocalName shape).
         entry["hash"] = f"{fleet}#{n}"
         functions.append(entry)

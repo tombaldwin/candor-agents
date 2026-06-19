@@ -306,9 +306,9 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 
 # ── 7. envelope + main ────────────────────────────────────────────────────────────────────────────
 rep, cg = scan({"a.md": agent("a", "Read")})
-check("spec envelope (candor.spec = 0.4)", rep["candor"]["spec"] == "0.4")
-check("hash join keys emitted (0.4 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
-check("unitKind names every fleet unit (spec 0.5 draft: agent/session/hooks)",
+check("spec envelope (candor.spec = 0.7)", rep["candor"]["spec"] == "0.7")
+check("hash join keys emitted (§2 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
+check("unitKind names every fleet unit (spec ⟨0.5⟩: agent/session/hooks)",
       all(f.get("unitKind") in ("agent", "session", "hooks") for f in rep["functions"])
       and entry(rep, "session")["unitKind"] == "session")
 m = entry(rep, "session")
@@ -354,7 +354,7 @@ adir = os.path.join(d, ".claude", "agents")
 os.makedirs(adir)
 open(os.path.join(adir, "runner.md"), "w").write(agent("runner", "Bash"))
 open(os.path.join(adir, "watcher.md"), "w").write(agent("watcher", "WebSearch"))
-code = {"candor": {"version": "x", "spec": "0.4"},
+code = {"candor": {"version": "x", "spec": "0.7"},
         "functions": [{"fn": "main", "loc": "src/main.rs", "inferred": ["Db", "Exec"],
                        "direct": ["Db"], "declared": [], "undeclared": [], "overdeclared": [],
                        "unresolved": False, "calls": [], "entryPoint": True}]}
@@ -412,8 +412,8 @@ with tempfile.TemporaryDirectory() as td:
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
     check("observe version is single-sourced from scan (no drift)",
           obs["candor"]["version"] == __import__("scan").VERSION, obs["candor"]["version"])
-    check("observe: spec 0.4 envelope + hash + package",
-          obs["candor"]["spec"] == "0.4" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
+    check("observe: spec 0.7 envelope + hash + package",
+          obs["candor"]["spec"] == "0.7" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
           set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
 # bash_cmds: the observed-cmds extractor (first non-fixture run found it fabricating heads)
@@ -699,7 +699,7 @@ check("agentsmd ships in the wheel (py-modules list)",
       '"agentsmd"' in open(os.path.join(HERE, "pyproject.toml")).read())
 r = subprocess.run([sys.executable, os.path.join(HERE, "cli.py"), "--agents"], capture_output=True, text=True)
 check("--agents prints the version header + the exact installed contract",
-      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.4")
+      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.7")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 # ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
@@ -866,7 +866,7 @@ def build_linked(cmds, code_effects):
         p = os.path.join(d, ".claude", "commands", rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         open(p, "w").write(c)
-    json.dump({"candor": {"version": "x", "toolchain": "t", "spec": "0.4"}, "package": "code",
+    json.dump({"candor": {"version": "x", "toolchain": "t", "spec": "0.7"}, "package": "code",
                "functions": [{"fn": "main", "inferred": code_effects, "direct": code_effects,
                               "entryPoint": True, "calls": [], "hash": "code#main"}]},
               open(os.path.join(d, "code.code.Main.json"), "w"))
