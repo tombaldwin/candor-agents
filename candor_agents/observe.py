@@ -19,7 +19,7 @@ import os
 import re
 import sys
 
-from scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds, propagate  # one source
+from candor_agents.scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds, propagate  # one source
 
 
 def transcript_dir_for(path):
@@ -100,8 +100,11 @@ def observe(tdir, out_prefix, fleet):
     meta_parent_tooluse = {}  # subagent file -> the parent's tool_use id (the delegation edge key)
     for s in sessions:
         unit_of_file[os.path.join(tdir, s)] = "session"
-    subdirs = [os.path.join(tdir, d, "subagents") for d in os.listdir(tdir)
-               if os.path.isdir(os.path.join(tdir, d, "subagents"))]
+    # Subagent transcripts live in `subagents/` dirs; a subagent that itself spawns one NESTS them
+    # (`…/subagents/x/subagents/y.jsonl`). Walk for EVERY `subagents` dir at any depth so a nested
+    # subagent's effects are observed, not silently dropped (the cardinal sin) — a one-level glob
+    # missed them. os.walk visits each dir once, so no transcript is processed twice.
+    subdirs = [dp for dp, _dn, _fn in os.walk(tdir) if os.path.basename(dp) == "subagents"]
     for sd in subdirs:
         for f in sorted(os.listdir(sd)):
             if not f.endswith(".jsonl"):
@@ -109,13 +112,17 @@ def observe(tdir, out_prefix, fleet):
             p = os.path.join(sd, f)
             unit = "subagent"
             meta = p[:-6] + ".meta.json"
-            try:
-                m = json.load(open(meta))
-                unit = m.get("agentType") or "subagent"
-                if m.get("toolUseId"):
-                    meta_parent_tooluse[p] = m["toolUseId"]
-            except Exception:
-                bad["files"] += 1
+            # A MISSING sidecar is the normal optional case (the unit falls back to `subagent`, which
+            # drift then flags as undeclared) — only a sidecar that EXISTS but won't parse counts as an
+            # "unreadable file"; conflating the two over-reported the best-effort-coverage receipt.
+            if os.path.exists(meta):
+                try:
+                    m = json.load(open(meta))
+                    unit = m.get("agentType") or "subagent"
+                    if m.get("toolUseId"):
+                        meta_parent_tooluse[p] = m["toolUseId"]
+                except Exception:
+                    bad["files"] += 1
             unit_of_file[p] = unit
 
     direct, fs_kinds, why = {}, {}, {}

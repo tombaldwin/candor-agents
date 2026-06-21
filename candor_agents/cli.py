@@ -32,13 +32,15 @@ BUILTIN_AGENTS = {
 
 
 def _run(mod, args):
-    return subprocess.call([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), mod)] + args)
+    # Dispatch a sibling module as its own process via `-m candor_agents.<mod>` so the package
+    # resolves wherever it's installed (pipx/venv/site-packages) — not by a fragile file path.
+    return subprocess.call([sys.executable, "-m", f"candor_agents.{mod}"] + args)
 
 
 def drift(target, strict, transcripts=None):
     fleet = os.path.basename(os.path.abspath(target)).lstrip("-") or "fleet"
     with tempfile.TemporaryDirectory() as td:
-        rc = _run("scan.py", [target, "--out", os.path.join(td, "d"), "--fleet", fleet])
+        rc = _run("scan", [target, "--out", os.path.join(td, "d"), "--fleet", fleet])
         if rc != 0:
             return rc
         # Pass the SAME --fleet to observe so both halves write `{d,o}.<fleet>.*.json` — without it
@@ -47,7 +49,7 @@ def drift(target, strict, transcripts=None):
         obs_args = [target, "--out", os.path.join(td, "o"), "--fleet", fleet]
         if transcripts:
             obs_args += ["--transcripts", transcripts]
-        rc = _run("observe.py", obs_args)
+        rc = _run("observe", obs_args)
         if rc != 0:
             return rc
         declared = json.load(open(os.path.join(td, f"d.{fleet}.Fleet.json")))
@@ -130,24 +132,24 @@ def main():
         return 0 if args else 2
     cmd, rest = args[0], args[1:]
     if cmd in ("--agents", "agents"):
-        # The agent contract for THE INSTALLED VERSION, embedded as a module (the wheel ships
-        # py-modules only) — doc and engine cannot drift (the §2.1 version-trust rule applied
-        # to documentation).
-        import agentsmd
-        from scan import VERSION
+        # The agent contract for THE INSTALLED VERSION, embedded as a module (AGENTS.md itself
+        # isn't shipped in the wheel) — doc and engine cannot drift (the §2.1 version-trust rule
+        # applied to documentation).
+        from candor_agents import agentsmd
+        from candor_agents.scan import VERSION
         # Canonical header shape, consistent across the family: `candor-<engine> <version>`
         # (VERSION is "agents-<semver>"; the first `-` separates engine from version).
         print(f"<!-- candor-{VERSION.replace('-', ' ', 1)} · the agent contract for this installed version -->")
         sys.stdout.write(agentsmd.AGENTS_MD)
         return 0
     if cmd == "scan":
-        return _run("scan.py", rest)
+        return _run("scan", rest)
     if cmd == "observe":
-        return _run("observe.py", rest)
+        return _run("observe", rest)
     if cmd == "guard":
         # may -> ENFORCED: compile a fleet deny-policy into the settings.json permissions.deny the
         # harness enforces natively (the dual of scan, which READS permissions.deny to subtract).
-        import guard
+        from candor_agents import guard
         return guard.main(rest)
     if cmd == "drift":
         # Parse flag/value pairs explicitly so an unknown flag FAILS (never silently runs non-strict
@@ -173,7 +175,7 @@ def main():
                 print(f"candor-agents: unexpected extra argument {a}", file=sys.stderr); return 2
         return drift(target or ".", strict, transcripts)
     # bare `candor-agents <dir>` = scan, the static default
-    return _run("scan.py", args)
+    return _run("scan", args)
 
 
 if __name__ == "__main__":

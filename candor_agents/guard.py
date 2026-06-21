@@ -11,15 +11,21 @@ granted `Bash` that can reach the same effect (a shell can curl). guard denies t
 WARNS about the cliff; `deny Exec` closes it. Per-agent scopes can't be expressed by the harness's
 project-wide permissions.deny — guard says so and points at grant-tightening instead.
 
+guard EMITS the permissions.deny fragment (to stdout) for you to merge into .claude/settings.json —
+it never writes the file itself (no risk of clobbering an existing settings.json). It is the
+read/write dual of scan in INTENT: scan READS permissions.deny to subtract effects from the surface;
+guard produces the permissions.deny that removes the capability.
+
   candor-agents guard <policy-file> [<project-dir>]   # prints a settings.json permissions.deny fragment
 """
 import json
 import os
 import sys
 
-from scan import TOOL_EFFECTS, MCP_TABLE
+from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE
 
 VOCAB = {"Net", "Fs", "Db", "Exec", "Env", "Clock", "Ipc", "Log", "Rand", "Clipboard"}
+VOCAB_LOWER = {e.lower(): e for e in VOCAB}  # case-fold map, to catch a miscased `deny net`
 
 
 def effect_tools():
@@ -40,7 +46,7 @@ def parse_denies(text):
     later effect-looking token (`deny Net foo Db`) is NOT collected. A set-membership partition would
     diverge here (it would treat the trailing `Db` as a scoped deny the engine never gates), so guard
     would no longer be the faithful dual of the engine's §6.2 enforcement."""
-    out = []
+    out, suspects = [], []
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line.lower().startswith("deny "):
@@ -51,10 +57,14 @@ def parse_denies(text):
                 effs.append(t)
             else:
                 scope = t  # first non-effect token is the scope and ends the rule
+                # Effect tokens are case-SENSITIVE but `deny ` isn't: a miscased `deny net` would
+                # otherwise read `net` as a scope and enforce nothing, silently. Flag the look-alike.
+                if t.lower() in VOCAB_LOWER:
+                    suspects.append((t, VOCAB_LOWER[t.lower()]))
                 break
         if effs:
             out.append((effs, scope))
-    return out
+    return out, suspects
 
 
 def compile_guard(policy_text, project_dir=None):
@@ -85,8 +95,12 @@ def compile_guard(policy_text, project_dir=None):
                         mcp_eff[name] = eff
             except Exception:
                 pass
+    rules, suspects = parse_denies(policy_text)
+    for tok, proper in suspects:
+        warnings.append(f"`deny {tok}`: effects are case-sensitive — `{tok}` was read as a scope name, not "
+                        f"the effect `{proper}`; use `deny {proper}` to enforce it fleet-wide.")
     deny, notes, cliff = set(), [], set()
-    for effs, scope in parse_denies(policy_text):
+    for effs, scope in rules:
         for e in effs:
             if scope:
                 notes.append(f"deny {e} {scope}: per-agent runtime enforcement isn't expressible via the "
@@ -97,21 +111,28 @@ def compile_guard(policy_text, project_dir=None):
             deny |= {f"mcp__{s}" for s, ee in mcp_eff.items() if e in ee}
             if e != "Exec":
                 cliff.add(e)
-    # The §4 Exec-cliff warning fires per non-Exec effect ONLY when Bash itself isn't denied — if the
-    # policy ALSO denies Exec, Bash is in the deny set and the cliff is closed, so no warning (the
-    # real-world bug: a `deny Net` + `deny Exec` policy was still told to add `deny Exec`).
-    if "Bash" not in deny:
-        for e in sorted(cliff):
-            tools = sorted(inv.get(e, set()))
-            if tools:
+    bash_denied = "Bash" in deny
+    for e in sorted(cliff):
+        tools = sorted(inv.get(e, set()))
+        if tools:
+            # A direct producer was denied; the residual reach is a granted `Bash` (the §4 cliff),
+            # which is closed iff Bash is itself denied (the `deny Net` + `deny Exec` case).
+            if not bash_denied:
                 warnings.append(f"deny {e}: a granted `Bash` can still reach {e} (the §4 Exec cliff) — this "
                                 f"guard denies {tools} but not Bash; add `deny Exec` to close it.")
-            else:
-                # No built-in tool PRODUCES this effect (e.g. Db) — it's reachable only via Bash (a
-                # shell client) or an MCP server, so permissions.deny on a tool can't enforce it.
-                warnings.append(f"deny {e}: no built-in tool produces {e} — it's reached via `Bash` (a shell "
-                                f"client) or an MCP server; add `deny Exec` and/or deny the relevant mcp__server "
-                                f"to enforce it.")
+        else:
+            # No built-in tool PRODUCES this effect (e.g. Db) — it's reachable only via `Bash` (a shell
+            # client) or an MCP server. Disclose the residual paths this guard can't bind INDEPENDENT of
+            # whether Bash is denied (a closed shell still leaves an uncurated/future MCP server), and
+            # don't instruct denying an mcp server already added to `deny` above.
+            residual = []
+            if not bash_denied:
+                residual.append("a granted `Bash` (add `deny Exec` to close it)")
+            denied_mcp = {s for s, ee in mcp_eff.items() if e in ee}
+            residual.append("an uncurated/unmodeled MCP server reaching it (deny its `mcp__server`)"
+                            if denied_mcp else "an MCP server reaching it (deny its `mcp__server`)")
+            warnings.append(f"deny {e}: no built-in tool produces {e}; this guard binds it only insofar as "
+                            f"you also close {' and '.join(residual)}.")
     return {"deny": sorted(deny), "warnings": warnings, "notes": notes}
 
 

@@ -5,12 +5,12 @@
 **Your agent fleet is an effect graph.** Agents are units, delegation is edges, tool grants are the
 classified leaves (`Bash`→`Exec`, `WebFetch`→`Net`, `Edit`→`Fs(write)`, an uncurated MCP server →
 `Unknown` — never silence). candor-agents ([candor.poly.io](https://candor.poly.io)) emits [candor-spec](https://github.com/tombaldwin/candor-spec)
-0.4 reports over a Claude Code project, in two modes that answer two different questions:
+0.7 reports over a Claude Code project, in two modes that answer two different questions:
 
 ```sh
 pipx install git+https://github.com/tombaldwin/candor-agents   # recommended — isolated venv
-# (plain `pip install …` works but ships top-level modules `cli`/`scan`/`observe`; install into a
-#  venv or pipx, not a shared environment where those generic names could clash with other packages)
+# (plain `pip install …` works too — the code ships as the `candor_agents` package, so nothing
+#  top-level can clash; pipx is still recommended for a CLI tool's own isolated environment)
 
 candor-agents scan    <project>    # DECLARED: what the fleet MAY do (agents, .mcp.json, settings,
                                    #           permissions, slash-commands, skills, cron)

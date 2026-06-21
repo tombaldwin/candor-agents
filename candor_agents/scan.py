@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.7"
-VERSION = "agents-0.7.0"
+VERSION = "agents-0.7.1"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -567,7 +567,18 @@ def main():
             print(f"candor-agents: unreadable .claude/{sf} ({e}) — its hooks/permissions are UNKNOWN", file=sys.stderr)
             hook_why.add(f"hooks-unreadable:{sf}")
             continue
-        for rule in (cfg.get("permissions") or {}).get("deny") or []:
+        # Valid JSON of the WRONG shape (a top-level list/scalar, or a non-dict permissions/hooks) must
+        # degrade and DISCLOSE, never crash: a traceback here aborts the whole scan, no report is
+        # written, and the gate then silently does not run. Mirror the .mcp.json / scheduled-tasks
+        # readers' shape-tolerance — this was the one config reader that trusted the post-load shape.
+        if not isinstance(cfg, dict):
+            print(f"candor-agents: .claude/{sf} is not a JSON object (got {type(cfg).__name__}) — "
+                  f"its hooks/permissions are UNKNOWN", file=sys.stderr)
+            hook_why.add(f"hooks-malformed:{sf}")
+            continue
+        perms = cfg.get("permissions")
+        deny_rules = perms.get("deny") if isinstance(perms, dict) else None
+        for rule in (deny_rules if isinstance(deny_rules, list) else []):
             if not isinstance(rule, str):
                 continue
             r = rule.strip()
@@ -581,7 +592,9 @@ def main():
                 scoped_denies.add(r)              # `Bash(curl:*)` / `Read(./secret/**)` — scoped
             elif r:
                 denied_tools.add(r)               # a bare tool name = the whole tool
-        hooks_cfg = cfg.get("hooks") or {}
+        hooks_cfg = cfg.get("hooks")
+        if not isinstance(hooks_cfg, dict):
+            hooks_cfg = {}
         for event in sorted(hooks_cfg):
             entries = hooks_cfg[event]
             if not isinstance(entries, list):
