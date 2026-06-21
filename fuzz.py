@@ -21,7 +21,6 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCAN = os.path.join(HERE, "scan.py")
 
 SINKS = {
     "net":  ("WebFetch", "Net"),
@@ -77,7 +76,7 @@ def run_seed(seed):
         deny_tool = rng.choice(["WebSearch", "Glob", "NotebookEdit", "PushNotification"])
         json.dump({"permissions": {"deny": [deny_tool]}}, open(os.path.join(d, ".claude", "settings.json"), "w"))
     out = os.path.join(d, "r")
-    r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "fz"],
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out, "--fleet", "fz"],
                        capture_output=True, text=True)
     if r.returncode != 0:
         return [f"seed {seed}: scan failed: {r.stderr.strip()}"]

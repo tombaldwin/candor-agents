@@ -15,7 +15,6 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCAN = os.path.join(HERE, "scan.py")
 PASS = FAIL = 0
 
 
@@ -44,7 +43,7 @@ def scan(files, mcp=None):
     if mcp is not None:
         json.dump({"mcpServers": {s: {} for s in mcp}}, open(os.path.join(d, ".mcp.json"), "w"))
     out = os.path.join(d, "r")
-    r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t"],
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out, "--fleet", "t"],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return (json.load(open(f"{out}.t.Fleet.json")), json.load(open(f"{out}.t.Fleet.callgraph.json")))
@@ -214,7 +213,7 @@ check("'tools: All tools' is ambient authority, not a tool named 'All tools'",
 
 # QUOTED tool tokens must keep their meaning — YAML quoting (to protect a specifier's `()`/`:`/`*`)
 # must not turn a definite tool into an `Unknown` that slips an effect-specific deny gate.
-from scan import parse_frontmatter, tool_list
+from candor_agents.scan import parse_frontmatter, tool_list
 def _tl(fm): m, _ = parse_frontmatter(fm); return tool_list(m)
 check("tool_list: a quoted bare tool keeps its identity (not Unknown)",
       _tl('---\ntools: "Bash"\n---\nx') == ["Bash"]
@@ -239,7 +238,7 @@ with tempfile.TemporaryDirectory() as _qd:
     os.makedirs(os.path.join(_qd, ".claude", "commands"))
     open(os.path.join(_qd, ".claude", "commands", "q.md"), "w").write('---\nallowed-tools: "Bash(curl:*)"\n---\nx\n')
     _qo = os.path.join(_qd, "r")
-    subprocess.run([sys.executable, SCAN, _qd, "--out", _qo, "--fleet", "t"], capture_output=True, text=True, check=True)
+    subprocess.run([sys.executable, "-m", "candor_agents.scan", _qd, "--out", _qo, "--fleet", "t"], capture_output=True, text=True, check=True)
     _qc = entry(json.load(open(f"{_qo}.t.Fleet.json")), "command:q")
     check("a quoted command `allowed-tools: \"Bash(curl:*)\"` keeps Exec+Net + the curl head",
           _qc and set(_qc["inferred"]) == {"Exec", "Net"} and "curl" in _qc.get("cmds", []), f"got {_qc}")
@@ -259,7 +258,7 @@ def scan_decl(files, mcp_entries):
         open(os.path.join(adir, fname), "w").write(content)
     json.dump({"mcpServers": mcp_entries}, open(os.path.join(d, ".mcp.json"), "w"))
     out = os.path.join(d, "r")
-    r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t"],
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out, "--fleet", "t"],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return (json.load(open(f"{out}.t.Fleet.json")), json.load(open(f"{out}.t.Fleet.callgraph.json")))
@@ -329,7 +328,7 @@ if Q and os.path.exists(Q):
     open(os.path.join(adir, "boss.md"), "w").write(agent("boss", "Agent", body="Use `leaf`."))
     open(os.path.join(adir, "leaf.md"), "w").write(agent("leaf", "WebFetch"))
     out = os.path.join(d, "r")
-    subprocess.run([sys.executable, SCAN, d, "--out", out], capture_output=True)
+    subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out], capture_output=True)
     pre = out
     w = subprocess.run([Q, "where", pre, "Net", "1"], capture_output=True, text=True)
     j = json.loads(w.stdout)
@@ -361,7 +360,7 @@ code = {"candor": {"version": "x", "spec": "0.7"},
 json.dump(code, open(os.path.join(d, "c.app.scan.json"), "w"))
 json.dump({"main": []}, open(os.path.join(d, "c.app.scan.callgraph.json"), "w"))
 out = os.path.join(d, "r")
-r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t",
+r = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out, "--fleet", "t",
                     "--link", os.path.join(d, "c")], capture_output=True, text=True)
 rep = json.load(open(f"{out}.t.Fleet.json"))
 cg = json.load(open(f"{out}.t.Fleet.callgraph.json"))
@@ -381,7 +380,7 @@ with tempfile.TemporaryDirectory() as td:
     open(os.path.join(adir, "README.md"), "w").write("# A catalog readme\nNot an agent; no frontmatter.\n")
     open(os.path.join(adir, "real.md"), "w").write(agent("real", "Read"))
     out = os.path.join(td, "deep", "dir", "r")  # --out into a directory that does not exist yet
-    r = subprocess.run([sys.executable, SCAN, td, "--out", out, "--fleet", "t"],
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", td, "--out", out, "--fleet", "t"],
                        capture_output=True, text=True)
     check("scan: --out creates missing directories (install-probe find)", r.returncode == 0, r.stderr)
     rep = json.load(open(f"{out}.t.Fleet.json"))
@@ -395,7 +394,7 @@ print()
 # ── observe + drift (the product surface: declared vs observed) ───────────────────────────────────
 import subprocess, tempfile
 with tempfile.TemporaryDirectory() as td:
-    r = subprocess.run([sys.executable, "observe.py", "fixture", "--transcripts", "fixture/transcripts",
+    r = subprocess.run([sys.executable, "-m", "candor_agents.observe", "fixture", "--transcripts", "fixture/transcripts",
                         "--out", os.path.join(td, "o")], capture_output=True, text=True)
     obs = json.load(open(os.path.join(td, "o.fixture.Observed.json")))
     by = {e["fn"]: e for e in obs["functions"]}
@@ -411,13 +410,13 @@ with tempfile.TemporaryDirectory() as td:
     check("observe: literal surfaces from tool inputs (Bash cmds, file paths)",
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
     check("observe version is single-sourced from scan (no drift)",
-          obs["candor"]["version"] == __import__("scan").VERSION, obs["candor"]["version"])
+          obs["candor"]["version"] == __import__("candor_agents.scan", fromlist=["VERSION"]).VERSION, obs["candor"]["version"])
     check("observe: spec 0.7 envelope + hash + package",
           obs["candor"]["spec"] == "0.7" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
           set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
 # bash_cmds: the observed-cmds extractor (first non-fixture run found it fabricating heads)
-from observe import bash_cmds
+from candor_agents.observe import bash_cmds
 check("bash_cmds: every segment head, not just the first",
       bash_cmds("cd /x && cargo build | tee log; git push") == {"cd", "cargo", "tee", "git"})
 check("bash_cmds: env-assignment prefixes are not commands",
@@ -467,7 +466,7 @@ check("bash_cmds: a backtick substitution AND the command after it are both capt
 check("bash_cmds: a bare backtick substitution contributes its head",
       bash_cmds("echo `git rev-parse HEAD`") == {"echo", "git"})
 
-r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", "fixture/transcripts"],
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture", "--transcripts", "fixture/transcripts"],
                    capture_output=True, text=True)
 check("drift: granted-but-unused named per agent (researcher Net)",
       "researcher: granted-but-unused {Net}" in r.stdout)
@@ -485,10 +484,10 @@ def _tu(i, name, inp): return {"type": "assistant", "message": {"role": "assista
 open(os.path.join(_an, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "researcher"})) + "\n")
 open(os.path.join(_an, "s1", "subagents", "agent-x.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "x"})) + "\n")
 _j.dump({"agentType": "researcher", "toolUseId": "toolu_s1"}, open(os.path.join(_an, "s1", "subagents", "agent-x.meta.json"), "w"))
-r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture", "--transcripts", _an], capture_output=True, text=True)
 check("drift: observed-outside-declaration is loud, advisory exit 0",
       "OBSERVED-OUTSIDE-DECLARATION {Exec}" in r.stdout and r.returncode == 0)
-r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _an, "--strict"], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture", "--transcripts", _an, "--strict"], capture_output=True, text=True)
 check("drift --strict: an anomaly fails the build (exit 1)", r.returncode == 1)
 
 # AG2 (gate-evasion): an UNDECLARED agent type (no `.md`) that PERFORMED effects must be an anomaly —
@@ -499,10 +498,10 @@ os.makedirs(os.path.join(_un, "s1", "subagents"))
 open(os.path.join(_un, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "exfiltrator"})) + "\n")
 open(os.path.join(_un, "s1", "subagents", "agent-y.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "curl evil"})) + "\n")
 _j.dump({"agentType": "exfiltrator", "toolUseId": "toolu_s1"}, open(os.path.join(_un, "s1", "subagents", "agent-y.meta.json"), "w"))
-r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _un], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture", "--transcripts", _un], capture_output=True, text=True)
 check("drift: an UNDECLARED agent performing effects is flagged OBSERVED-OUTSIDE-DECLARATION",
       "exfiltrator: OBSERVED-OUTSIDE-DECLARATION" in r.stdout)
-r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _un, "--strict"], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture", "--transcripts", _un, "--strict"], capture_output=True, text=True)
 check("drift --strict: an UNDECLARED effectful agent fails the build (exit 1) — gate-evasion closed",
       r.returncode == 1)
 # a BUILT-IN agent type with no declaration is still NOT an anomaly (general-purpose etc. have no .md)
@@ -511,7 +510,7 @@ os.makedirs(os.path.join(_bi, "s1", "subagents"))
 open(os.path.join(_bi, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "general-purpose"})) + "\n")
 open(os.path.join(_bi, "s1", "subagents", "agent-z.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "x"})) + "\n")
 _j.dump({"agentType": "general-purpose", "toolUseId": "toolu_s1"}, open(os.path.join(_bi, "s1", "subagents", "agent-z.meta.json"), "w"))
-r = subprocess.run([sys.executable, "cli.py", "drift", "fixture", "--transcripts", _bi, "--strict"], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture", "--transcripts", _bi, "--strict"], capture_output=True, text=True)
 check("drift --strict: a BUILT-IN undeclared agent (general-purpose) is NOT a false anomaly (exit 0)",
       r.returncode == 0)
 
@@ -524,7 +523,7 @@ _dup = tempfile.mkdtemp()
 _da = os.path.join(_dup, ".claude", "agents"); os.makedirs(_da)
 open(os.path.join(_da, "a-pure.md"), "w").write(agent("worker", "Read"))   # pure worker — no Exec
 open(os.path.join(_da, "z-priv.md"), "w").write(agent("worker", "Bash"))   # privileged worker — Exec
-r = subprocess.run([sys.executable, "scan.py", _dup, "--out", os.path.join(_dup, "d"), "--fleet", "F"], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.scan", _dup, "--out", os.path.join(_dup, "d"), "--fleet", "F"], capture_output=True, text=True)
 _units = {e["fn"] for e in _j.load(open(os.path.join(_dup, "d.F.Fleet.json")))["functions"]}
 check("scan: duplicate agent names are BOTH kept, disambiguated (no silent clobber)",
       "worker#a-pure.md" in _units and "worker#z-priv.md" in _units and "worker" not in _units, _units)
@@ -533,7 +532,7 @@ _dtx = os.path.join(tempfile.mkdtemp(), "t"); os.makedirs(os.path.join(_dtx, "s1
 open(os.path.join(_dtx, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "worker"})) + "\n")
 open(os.path.join(_dtx, "s1", "subagents", "agent-w.jsonl"), "w").write(_j.dumps(_tu("r1", "Bash", {"command": "rm -rf /x"})) + "\n")
 _j.dump({"agentType": "worker", "toolUseId": "toolu_s1"}, open(os.path.join(_dtx, "s1", "subagents", "agent-w.meta.json"), "w"))
-r = subprocess.run([sys.executable, "cli.py", "drift", _dup, "--transcripts", _dtx, "--strict"], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", _dup, "--transcripts", _dtx, "--strict"], capture_output=True, text=True)
 check("drift --strict: a same-named-agent collision no longer launders a violation (exit 1, flagged)",
       r.returncode == 1 and "worker: OBSERVED-OUTSIDE-DECLARATION" in r.stdout, r.stdout)
 
@@ -545,7 +544,7 @@ os.makedirs(os.path.join(_dd, ".transcripts"))
 open(os.path.join(_dd, ".claude", "agents", "a.md"), "w").write(agent("a", "WebFetch"))
 open(os.path.join(_dd, ".claude", "commands", "c.md"), "w").write("---\nallowed-tools: Bash(curl:*)\n---\nx\n")
 _j.dump([{"id": "n", "cron": "0 9 * * *", "prompt": "go", "durable": True}], open(os.path.join(_dd, ".claude", "scheduled_tasks.json"), "w"))
-r = subprocess.run([sys.executable, "cli.py", "drift", _dd, "--transcripts", os.path.join(_dd, ".transcripts")], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", _dd, "--transcripts", os.path.join(_dd, ".transcripts")], capture_output=True, text=True)
 check("drift: command:/cron:/session are 'not a trim candidate', a real agent still is",
       "command:c: declared" in r.stdout and "not a trim candidate" in r.stdout
       and "cron:n" in r.stdout and "a: declared {Net} but NEVER OBSERVED" in r.stdout, r.stdout)
@@ -563,7 +562,7 @@ with tempfile.TemporaryDirectory() as td:
                                             {"type": "telepathy"}]}],
     }}, open(os.path.join(td, ".claude", "settings.json"), "w"))
     out = os.path.join(td, "r")
-    r = subprocess.run([sys.executable, SCAN, td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
     rep = json.load(open(f"{out}.t.Fleet.json"))
     hk = entry(rep, "hooks")
     check("hooks: a `hooks` unit carries the settings.json commands (Exec + cmds surface)",
@@ -586,7 +585,7 @@ with tempfile.TemporaryDirectory() as td:
 # tools_match_matcher mirrors Claude Code's THREE-TIER matcher semantics (hooks reference). The
 # tier-2 PARTIAL regex was the bug: force-anchoring `^(?:m)$` made `^Notebook` / `Edit$` UNDER-match,
 # silently dropping a hook's Exec reach from an agent the harness really fires the hook on.
-from scan import tools_match_matcher as tmm
+from candor_agents.scan import tools_match_matcher as tmm
 check("matcher tier-1: exact `|`-list fires only on listed tools",
       tmm(["Edit"], "Edit|Write") and not tmm(["MultiEdit"], "Edit|Write"))
 check("matcher tier-1: `Edit` does NOT fire on `MultiEdit` (exact, not substring)",
@@ -607,7 +606,7 @@ with tempfile.TemporaryDirectory() as td:
     os.makedirs(os.path.join(td, ".claude"))
     json.dump({"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "./stop-hook.sh"}]}]}},
               open(os.path.join(td, ".claude", "settings.json"), "w"))
-    r = subprocess.run([sys.executable, SCAN, td, "--out", os.path.join(td, "r"), "--fleet", "t"],
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", td, "--out", os.path.join(td, "r"), "--fleet", "t"],
                        capture_output=True, text=True)
     rep = json.load(open(os.path.join(td, "r.t.Fleet.json")))
     check("hooks: an agent-less project with hooks still scans (hooks + session)",
@@ -615,7 +614,7 @@ with tempfile.TemporaryDirectory() as td:
           and "stop-hook.sh" in entry(rep, "hooks").get("cmds", []), r.stderr)
 with tempfile.TemporaryDirectory() as td:
     os.makedirs(os.path.join(td, ".claude"))
-    r = subprocess.run([sys.executable, SCAN, td, "--out", os.path.join(td, "r"), "--fleet", "t"],
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", td, "--out", os.path.join(td, "r"), "--fleet", "t"],
                        capture_output=True, text=True)
     check("hooks: no agents AND no hooks still exits 2 (nothing to analyze)", r.returncode == 2)
 
@@ -627,7 +626,7 @@ with tempfile.TemporaryDirectory() as td:
     json.dump({"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "./h.sh"}]}]}},
               open(os.path.join(td, ".claude", "settings.json"), "w"))
     out = os.path.join(td, "r")
-    r = subprocess.run([sys.executable, SCAN, td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
     rep = json.load(open(f"{out}.t.Fleet.json"))
     eh, es = entry(rep, "hooks"), entry(rep, "session")
     check("reserved-name: an agent named `hooks` keeps its own grant (Net), not clobbered to Exec",
@@ -646,7 +645,7 @@ with tempfile.TemporaryDirectory() as td:
     tdir = os.path.join(td, "tr"); os.makedirs(tdir)
     open(os.path.join(tdir, "s.jsonl"), "w").write(json.dumps({"message": {"content": [
         {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/x"}}]}}) + "\n")
-    r = subprocess.run([sys.executable, "cli.py", "drift", td, "--transcripts", tdir],
+    r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", td, "--transcripts", tdir],
                        capture_output=True, text=True)
     check("drift: hooks are 'not observable', never a trim candidate",
           "hook runs are not observable" in r.stdout and "hooks: declared {Exec} but NEVER" not in r.stdout,
@@ -655,7 +654,7 @@ with tempfile.TemporaryDirectory() as td:
 # drift CLI guards: unknown flags fail, a value-less --transcripts fails (not IndexError), and the
 # target isn't dropped when it equals the transcripts value.
 def driftcli(*a):
-    return subprocess.run([sys.executable, "cli.py", "drift", *a], capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", *a], capture_output=True, text=True)
 check("drift: an unknown flag fails with exit 2 (not a silent non-strict run)",
       driftcli("fixture", "--strcit", "--transcripts", "fixture/transcripts").returncode == 2)
 check("drift: a value-less trailing --transcripts fails cleanly (no IndexError)",
@@ -678,26 +677,28 @@ with tempfile.TemporaryDirectory() as home:
     old_home = os.environ.get("HOME")
     os.environ["HOME"] = home
     try:
-        import importlib, observe as _obs
+        import importlib; from candor_agents import observe as _obs
         importlib.reload(_obs)
         check("transcript slug flattens '_' (underscore project resolves its transcripts)",
               _obs.transcript_dir_for(proj) == pdir, f"{_obs.transcript_dir_for(proj)} != {pdir}")
     finally:
         if old_home is not None:
             os.environ["HOME"] = old_home
-        import importlib, observe as _obs
+        import importlib; from candor_agents import observe as _obs
         importlib.reload(_obs)
 
 print()
 
 
 # ── --agents: the self-describing engine (the contract is an embedded module) ─────────────────────
-import agentsmd
+from candor_agents import agentsmd
 check("embedded contract matches AGENTS.md (drift gate — regen: python3 gen-agentsmd.py)",
       agentsmd.AGENTS_MD == open(os.path.join(HERE, "AGENTS.md")).read())
-check("agentsmd ships in the wheel (py-modules list)",
-      '"agentsmd"' in open(os.path.join(HERE, "pyproject.toml")).read())
-r = subprocess.run([sys.executable, os.path.join(HERE, "cli.py"), "--agents"], capture_output=True, text=True)
+check("the wheel ships the candor_agents package (so agentsmd + the modules are included, no top-level clash)",
+      '"candor_agents"' in open(os.path.join(HERE, "pyproject.toml")).read()
+      and "py-modules" not in open(os.path.join(HERE, "pyproject.toml")).read()
+      and os.path.exists(os.path.join(HERE, "candor_agents", "agentsmd.py")))
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
 check("--agents prints the version header + the exact installed contract",
       r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.7")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
@@ -726,7 +727,7 @@ def build(agents_files=None, settings=None, commands=None, skills=None, mcp=None
     if mcp is not None:
         json.dump({"mcpServers": {s: {} for s in mcp}}, open(os.path.join(d, ".mcp.json"), "w"))
     out = os.path.join(d, "r")
-    r = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out, "--fleet", "t"], capture_output=True, text=True)
     rep = json.load(open(f"{out}.t.Fleet.json")) if r.returncode == 0 else None
     return rep, r
 
@@ -871,7 +872,7 @@ def build_linked(cmds, code_effects):
                               "entryPoint": True, "calls": [], "hash": "code#main"}]},
               open(os.path.join(d, "code.code.Main.json"), "w"))
     out = os.path.join(d, "r")
-    rr = subprocess.run([sys.executable, SCAN, d, "--out", out, "--fleet", "t", "--link", os.path.join(d, "code")],
+    rr = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out, "--fleet", "t", "--link", os.path.join(d, "code")],
                         capture_output=True, text=True)
     return (json.load(open(f"{out}.t.Fleet.json")) if rr.returncode == 0 else None), rr
 
@@ -905,7 +906,7 @@ check("new command head mongo refines to Db",
       "Db" in entry(rep, "command:m")["inferred"], json.dumps(entry(rep, "command:m")))
 
 # ══ guard: compile a deny-policy into RUNTIME enforcement (may→enforced, roadmap #2) ═══════════════
-import guard
+from candor_agents import guard
 g = guard.compile_guard("deny Net")
 check("guard: deny Net compiles to permissions.deny of the Net-producing tools",
       set(g["deny"]) == {"WebFetch", "WebSearch"}, json.dumps(g))
@@ -959,6 +960,56 @@ rep, r = build(agents_files={"net.md": agent("net", "WebFetch")},
                settings={"permissions": {"deny": guard.compile_guard("deny Net")["deny"]}})
 check("guard↔scan dual: the guard's permissions.deny makes scan show the fleet can no longer reach Net",
       entry(rep, "net") is None, json.dumps(rep["functions"]))
+
+print()
+
+# ══ regressions: config/transcript shapes a review found could crash or mis-disclose ═══════════════
+# (1) settings.json that is valid JSON but the WRONG shape (a top-level list/scalar, or a non-dict
+# permissions/hooks) must degrade-and-disclose, never crash the scan — a traceback wrote no report,
+# so the architecture gate then silently did not run.
+for _bad in ([1, 2, 3], {"permissions": [1, 2]}, {"hooks": "oops"}, "a string", 42):
+    rep_b, r_b = build(agents_files={"a.md": agent("a", "WebFetch")}, settings=_bad)
+    check(f"scan: malformed settings.json ({type(_bad).__name__}) degrades, doesn't crash",
+          r_b.returncode == 0 and rep_b is not None and entry(rep_b, "a") is not None,
+          (r_b.stderr or "")[-300:])
+_, r_disc = build(agents_files={"a.md": agent("a", "WebFetch")}, settings=[1, 2, 3])
+check("scan: a non-object settings.json is DISCLOSED (not a JSON object)",
+      "not a JSON object" in (r_disc.stderr or ""), (r_disc.stderr or "")[-300:])
+
+# (2) observe: a NESTED subagent (a subagent that itself spawns one) must be observed, not silently
+# dropped (the cardinal sin); and a MISSING meta sidecar is the normal optional case, NOT an
+# "unreadable file" in the best-effort-coverage receipt.
+def _jl(path, name, inp=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rec = {"message": {"content": [{"type": "tool_use", "id": os.path.basename(path),
+                                    "name": name, "input": inp or {}}]}}
+    open(path, "w").write(json.dumps(rec) + "\n")
+_otd = tempfile.mkdtemp()
+_jl(os.path.join(_otd, "s.jsonl"), "Read", {"file_path": "/a"})                                  # session: Fs
+_sa = os.path.join(_otd, "sess", "subagents")
+_jl(os.path.join(_sa, "w.jsonl"), "WebFetch", {"url": "https://x"})                              # worker: Net
+json.dump({"agentType": "worker"}, open(os.path.join(_sa, "w.meta.json"), "w"))
+_jl(os.path.join(_sa, "w", "subagents", "deep.jsonl"), "Bash", {"command": "curl x"})           # NESTED: Exec
+json.dump({"agentType": "digger"}, open(os.path.join(_sa, "w", "subagents", "deep.meta.json"), "w"))
+_jl(os.path.join(_sa, "nometa.jsonl"), "Read", {"file_path": "/b"})                              # subagent, no sidecar
+_oout = os.path.join(_otd, "o")
+r_o = subprocess.run([sys.executable, "-m", "candor_agents.observe", _otd, "--transcripts", _otd, "--out", _oout, "--fleet", "t"],
+                     capture_output=True, text=True)
+obs_n = json.load(open(f"{_oout}.t.Observed.json"))
+byn = {e["fn"]: e for e in obs_n["functions"]}
+check("observe: a nested subagent (subagents/x/subagents/y) is observed, not dropped",
+      "digger" in byn and "Exec" in byn["digger"]["inferred"], json.dumps(list(byn)))
+check("observe: a missing meta sidecar is not reported as an unreadable file",
+      "unreadable file" not in r_o.stderr, r_o.stderr)
+
+# (3) guard: a miscased effect (`deny net`) enforces nothing — it must WARN, not silently no-op.
+g_lc = guard.compile_guard("deny net")
+check("guard: `deny net` (miscased) warns it's case-sensitive, not the effect `Net` (no silent no-op)",
+      not g_lc["deny"] and any("case-sensitive" in w and "Net" in w for w in g_lc["warnings"]), json.dumps(g_lc))
+# (4) guard: `deny Exec Db` must STILL disclose Db's residual reach — denying Bash doesn't suppress it.
+g_ed = guard.compile_guard("deny Exec Db")
+check("guard: deny Exec Db still discloses Db's residual reach (not suppressed by Bash being denied)",
+      "Bash" in g_ed["deny"] and any("no built-in tool produces Db" in w for w in g_ed["warnings"]), json.dumps(g_ed))
 
 print()
 

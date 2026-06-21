@@ -10,7 +10,7 @@ CANDOR_DIR="$(cd "$(dirname "$Q")/../.." && pwd)"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 
 echo "== scan (fleet → spec §2 report + §2.2 sidecar)"
-python3 "$HERE/scan.py" "$HERE/fixture" --out "$W/r" --fleet demo || exit 1
+PYTHONPATH="$HERE" python3 -m candor_agents.scan "$HERE/fixture" --out "$W/r" --fleet demo || exit 1
 
 echo; echo "== the unmodified candor-query over the fleet report"
 echo "-- where Net:";               "$Q" where   "$W/r" Net 0
@@ -45,7 +45,7 @@ SCAN="$CANDOR_DIR/target/debug/candor-scan"
 if [ -d "$CANDOR_DIR/sample" ] && { [ -x "$SCAN" ] || cargo build -q --manifest-path "$CANDOR_DIR/Cargo.toml" -p candor-scan 2>/dev/null; }; then
   C="$W/combo"; mkdir -p "$C"
   "$SCAN" "$CANDOR_DIR/sample" --out "$C/r" >/dev/null 2>&1
-  python3 "$HERE/scan.py" "$HERE/fixture" --out "$C/r" --fleet fixture --link "$C/r" >/dev/null
+  PYTHONPATH="$HERE" python3 -m candor_agents.scan "$HERE/fixture" --out "$C/r" --fleet fixture --link "$C/r" >/dev/null
   echo "-- show coder (fleet agent inheriting the CODE's measured effects):"
   "$Q" show "$C/r" coder 0
   echo "-- callers now_ms (a CODE fn's blast radius climbs into the FLEET):"
