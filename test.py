@@ -1011,6 +1011,32 @@ g_ed = guard.compile_guard("deny Exec Db")
 check("guard: deny Exec Db still discloses Db's residual reach (not suppressed by Bash being denied)",
       "Bash" in g_ed["deny"] and any("no built-in tool produces Db" in w for w in g_ed["warnings"]), json.dumps(g_ed))
 
+# ---- stats: measured edit-time gate activity over .candor/activity.jsonl (the stop hook's log) ----
+import tempfile as _tf
+_sd = _tf.mkdtemp()
+os.makedirs(os.path.join(_sd, ".candor"), exist_ok=True)
+with open(os.path.join(_sd, ".candor", "activity.jsonl"), "w") as _f:
+    _f.write("\n".join([
+        '{"ts":"2026-06-23T19:40:00Z","sessionId":"s1","engine":"java","edited":["src/A.java"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[]}',
+        '{"ts":"2026-06-23T19:42:00Z","sessionId":"s1","engine":"java","edited":["src/B.java","src/C.java"],"gained":["Db"],"blastRadius":5,"verdict":"blocked","violations":["AS-EFF-006"]}',
+        '{ corrupt — must be skipped, not fatal }',
+        '{"ts":"2026-06-23T20:10:00Z","sessionId":"s2","engine":"ts","edited":["x.ts"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[]}',
+    ]) + "\n")
+def _stats(*a):
+    return subprocess.run([sys.executable, "-m", "candor_agents.cli", "stats", *a], capture_output=True, text=True)
+_sj = json.loads(_stats(_sd, "--json").stdout)
+check("stats: counts turns and skips a corrupt line", _sj["turns"] == 3, json.dumps(_sj))
+check("stats: clean/blocked verdicts counted", _sj["clean"] == 2 and _sj["blocked"] == 1, json.dumps(_sj))
+check("stats: violations counted by AS-EFF code", _sj["violations"].get("AS-EFF-006") == 1, json.dumps(_sj))
+check("stats: distinct files, sessions, max blast radius",
+      _sj["filesTouched"] == 4 and _sj["sessions"] == 2 and _sj["largestBlastRadius"] == 5, json.dumps(_sj))
+check("stats: --session filters to one session",
+      json.loads(_stats(_sd, "--session", "s1", "--json").stdout)["turns"] == 2)
+_rm = _stats("/tmp/candor-no-such-dir-xyz")
+check("stats: missing log is a clean no-op (exit 0)",
+      _rm.returncode == 0 and "no activity log" in _rm.stdout, _rm.stdout + _rm.stderr)
+check("stats: unknown flag exits 2", _stats(_sd, "--bogus").returncode == 2)
+
 print()
 
 
