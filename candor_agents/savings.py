@@ -8,14 +8,17 @@ instead of re-deriving — and prints a comparison against our published benchma
 
 This is a MODEL, not a measurement: we cannot see what the agent would have spent re-deriving the
 answer by hand. So the *count* is measured and the *saving* is clearly labelled as an estimate; the
-two are never blended, and there is no fake-precise total (everything is "on the order of"). A tool
-that sells disclosure-not-fabrication must hold its own ROI number to the same standard.
+two are never blended, and there is no fake-precise total (everything is "on the order of"). The
+benchmark was measured on the BLAST-RADIUS task specifically, so the estimate applies only to the
+blast-radius (callers/where) queries — other candor-query calls are counted but not multiplied at
+that rate. A tool that sells disclosure-not-fabrication must hold its own ROI number to that standard.
 
 Benchmark (candor.poly.io/agents): one blast-radius query ≈ 24k tokens / 1 tool call / ~8 s; an
 unaided agent re-deriving the same answer averages ~17× tokens, ~50× tool calls, ~38× wall-clock.
 """
 import json
 import os
+import re
 import sys
 
 from candor_agents.observe import transcript_dir_for, tool_uses
@@ -23,33 +26,39 @@ from candor_agents.observe import transcript_dir_for, tool_uses
 TOK, CALLS = 17, 50          # benchmark multiples
 QUERY_TOKENS = 24_000        # one candor query, per the benchmark
 
+# candor-query INVOKED at a command position (start of the command or after a shell separator) — not
+# merely mentioned inside an echo/grep/comment/path. Covers `candor-query`, `candor-ts-query`, and
+# `npx [-y] candor-ts-query`.
+_QUERY = re.compile(r"(?:^|[;&|]\s*)(?:npx\s+(?:-y\s+)?)?candor(?:-ts)?-query\b")
+_BLAST = re.compile(r"candor(?:-ts)?-query\s+(?:callers|where)\b")
+
 
 def _is_query(name, inp):
     if name == "Bash" and isinstance(inp, dict) and isinstance(inp.get("command"), str):
-        c = inp["command"]
-        return "candor-query" in c or "candor-ts-query" in c
-    if isinstance(name, str) and "candor" in name.lower() and "quer" in name.lower():
+        return bool(_QUERY.search(inp["command"]))
+    if isinstance(name, str) and re.search(r"candor.*quer", name, re.I):
         return True  # an MCP candor-query tool, if wired that way
     return False
 
 
 def _is_blast(name, inp):
     # callers = reverse reachability (the blast radius); where = "what reaches this effect".
-    if name == "Bash" and isinstance(inp, dict) and isinstance(inp.get("command"), str):
-        c = inp["command"]
-        return _is_query(name, inp) and (" callers" in c or " where" in c)
-    return False
+    return (name == "Bash" and isinstance(inp, dict) and isinstance(inp.get("command"), str)
+            and bool(_QUERY.search(inp["command"])) and bool(_BLAST.search(inp["command"])))
 
 
 def _count(tdir):
     total = blast = 0
-    files = [f for f in os.listdir(tdir) if f.endswith(".jsonl")] if os.path.isdir(tdir) else []
-    for f in files:
-        for _id, name, inp in tool_uses(os.path.join(tdir, f), [0]):
-            if _is_query(name, inp):
-                total += 1
-                if _is_blast(name, inp):
-                    blast += 1
+    bad = {"files": 0, "lines": 0}   # tool_uses MUTATES this as a dict — a list would TypeError on a bad line
+    for root, _dirs, files in os.walk(tdir):   # walk subagents/ subdirs too, as observe.py does
+        for f in files:
+            if not f.endswith(".jsonl"):
+                continue
+            for _id, name, inp in tool_uses(os.path.join(root, f), bad):
+                if _is_query(name, inp):
+                    total += 1
+                    if _is_blast(name, inp):
+                        blast += 1
     return total, blast
 
 
@@ -93,29 +102,34 @@ def main(argv):
             print("  point --transcript at a Claude Code session-transcript directory.")
         return 0
     total, blast = _count(tdir)
-    # the model (kept explicitly separate from the measured count above)
-    saved_tokens = total * QUERY_TOKENS * (TOK - 1)
-    saved_calls = total * (CALLS - 1)
+    # The benchmark was measured on the blast-radius task, so the estimate is based on the blast-radius
+    # queries ONLY; other candor-query calls (show/blindspots/…) are counted but not multiplied at that rate.
+    saved_tokens = blast * QUERY_TOKENS * (TOK - 1)
+    saved_calls = blast * (CALLS - 1)
     if as_json:
         print(json.dumps({
             "measured": {"queries": total, "blastRadiusQueries": blast},
             "modelled": True,
-            "estimate": {"tokensSaved": _h(saved_tokens), "toolCallsSaved": _h(saved_calls)},
+            "estimate": {"basis": "blastRadiusQueries",
+                         "tokensSaved": _h(saved_tokens), "toolCallsSaved": _h(saved_calls)},
             "benchmark": {"tokens": TOK, "toolCalls": CALLS, "queryTokens": QUERY_TOKENS,
                           "source": "candor.poly.io/agents"},
-            "note": "model, not a measurement — we can't see what wasn't spent",
+            "note": "model, not a measurement — applies only to blast-radius (callers/where) queries",
         }, sort_keys=True))
         return 0
     if total == 0:
         print(f"candor — no candor-query calls in {tdir} (nothing to estimate).")
         return 0
-    bl = f", {blast} blast-radius (callers/where)" if blast else ""
-    print(f"candor-query usage (measured): {total} call(s){bl}.")
+    print(f"candor-query usage (measured): {total} call(s), {blast} blast-radius (callers/where).")
     print()
+    if blast == 0:
+        print("No blast-radius (callers/where) queries this session — the benchmark only covers those,")
+        print("so there's nothing to model. (The other queries are counted above.)")
+        return 0
     print("Estimated saving — model, not measured (we can't see what you didn't spend):")
-    print(f"  on our benchmark an unaided agent re-derives each answer at ~{TOK}× the tokens and")
-    print(f"  ~{CALLS}× the tool calls of the one candor query — so {total} call(s) is on the order")
-    print(f"  of {_h(saved_tokens)} tokens and {_h(saved_calls)} tool calls of hand-tracing avoided.")
+    print(f"  on our benchmark an unaided agent re-derives each blast-radius answer at ~{TOK}× the")
+    print(f"  tokens and ~{CALLS}× the tool calls of the one candor query — so {blast} such call(s) is")
+    print(f"  on the order of {_h(saved_tokens)} tokens and {_h(saved_calls)} tool calls of hand-tracing avoided.")
     print("  basis: candor.poly.io/agents (one query ≈ 24k tokens / 1 tool call / ~8 s).")
     return 0
 

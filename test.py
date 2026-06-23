@@ -1011,56 +1011,81 @@ g_ed = guard.compile_guard("deny Exec Db")
 check("guard: deny Exec Db still discloses Db's residual reach (not suppressed by Bash being denied)",
       "Bash" in g_ed["deny"] and any("no built-in tool produces Db" in w for w in g_ed["warnings"]), json.dumps(g_ed))
 
-# ---- stats: measured edit-time gate activity over .candor/activity.jsonl (the stop hook's log) ----
-import tempfile as _tf
-_sd = _tf.mkdtemp()
+# ---- stats + savings: measured gate activity & the labelled savings model. Regression tests for the
+#      max-effort review fixes: non-object/invalid lines, bool-as-int, --since vs null-ts, subagent walk,
+#      crash-safety on corrupt transcripts, blast-based estimate, anchored query matching. ----
+import atexit
+import shutil
+import tempfile
+_tmpdirs = []
+def _mkd():
+    d = tempfile.mkdtemp(); _tmpdirs.append(d); return d
+atexit.register(lambda: [shutil.rmtree(d, ignore_errors=True) for d in _tmpdirs])
+
+_sd = _mkd()
 os.makedirs(os.path.join(_sd, ".candor"), exist_ok=True)
 with open(os.path.join(_sd, ".candor", "activity.jsonl"), "w") as _f:
     _f.write("\n".join([
-        '{"ts":"2026-06-23T19:40:00Z","sessionId":"s1","engine":"java","edited":["src/A.java"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[]}',
-        '{"ts":"2026-06-23T19:42:00Z","sessionId":"s1","engine":"java","edited":["src/B.java","src/C.java"],"gained":["Db"],"blastRadius":5,"verdict":"blocked","violations":["AS-EFF-006"]}',
-        '{ corrupt — must be skipped, not fatal }',
-        '{"ts":"2026-06-23T20:10:00Z","sessionId":"s2","engine":"ts","edited":["x.ts"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[]}',
+        '{"ts":"2026-06-23T19:40:00Z","sessionId":"s1","engine":"java","edited":["src/A.java"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[],"unknowns":6,"reviewMs":1000,"effects":["Db"]}',
+        '{"ts":"2026-06-23T19:42:00Z","sessionId":"s1","engine":"java","edited":["src/B.java","src/C.java"],"gained":["Db"],"blastRadius":5,"verdict":"blocked","violations":["AS-EFF-006"],"unknowns":3,"reviewMs":2000,"effects":["Db"]}',
+        '5',                                   # valid JSON, NOT an object -> skip, never crash (review #3)
+        '{ corrupt — invalid json, skip }',    # invalid JSON -> skip
+        '{"ts":"2026-06-23T20:10:00Z","sessionId":"s2","engine":"ts","edited":["x.ts"],"verdict":"clean","violations":[],"unknowns":0,"reviewMs":0,"effects":[]}',
+        '{"sessionId":"s1","verdict":"clean","violations":[]}',          # null ts -> must NOT be dropped by --since (#8)
+        '{"ts":"2026-06-23T19:50:00Z","sessionId":"s1","verdict":"clean","blastRadius":true,"unknowns":true,"violations":[]}',  # bool, not int (#16)
     ]) + "\n")
 def _stats(*a):
     return subprocess.run([sys.executable, "-m", "candor_agents.cli", "stats", *a], capture_output=True, text=True)
 _sj = json.loads(_stats(_sd, "--json").stdout)
-check("stats: counts turns and skips a corrupt line", _sj["turns"] == 3, json.dumps(_sj))
-check("stats: clean/blocked verdicts counted", _sj["clean"] == 2 and _sj["blocked"] == 1, json.dumps(_sj))
+check("stats: skips invalid AND valid-non-object lines without crashing (#3)", _sj["turns"] == 5, json.dumps(_sj))
+check("stats: clean/blocked verdicts counted", _sj["clean"] == 4 and _sj["blocked"] == 1, json.dumps(_sj))
 check("stats: violations counted by AS-EFF code", _sj["violations"].get("AS-EFF-006") == 1, json.dumps(_sj))
-check("stats: distinct files, sessions, max blast radius",
+check("stats: distinct files/sessions/max-blast; bool blastRadius NOT counted as 1 (#16)",
       _sj["filesTouched"] == 4 and _sj["sessions"] == 2 and _sj["largestBlastRadius"] == 5, json.dumps(_sj))
+check("stats: unknownsMax + candorMs; a 0-reviewMs turn doesn't hide the line (#13)",
+      _sj["unknownsMax"] == 6 and _sj["hasUnknowns"] is True and _sj["candorMs"] == 3000 and _sj["hasReviewMs"] is True, json.dumps(_sj))
+check("stats: effects-present (trailer) surfaced, distinct from effects-introduced (#7)",
+      _sj["effectsPresent"] == ["Db"], json.dumps(_sj))
+check("stats: --since drops older records but KEEPS the null-ts one (#8)",
+      json.loads(_stats(_sd, "--since", "2026-06-23T19:41:00Z", "--json").stdout)["turns"] == 4, "")
 check("stats: --session filters to one session",
-      json.loads(_stats(_sd, "--session", "s1", "--json").stdout)["turns"] == 2)
+      json.loads(_stats(_sd, "--session", "s2", "--json").stdout)["turns"] == 1)
 _rm = _stats("/tmp/candor-no-such-dir-xyz")
 check("stats: missing log is a clean no-op (exit 0)",
       _rm.returncode == 0 and "no activity log" in _rm.stdout, _rm.stdout + _rm.stderr)
 check("stats: unknown flag exits 2", _stats(_sd, "--bogus").returncode == 2)
 
-# ---- savings: MODELLED estimate from candor-query usage in the transcript (labelled, not measured) ----
-_td = _tf.mkdtemp()
+_td = _mkd()
+os.makedirs(os.path.join(_td, "subagents"), exist_ok=True)
 def _ev(i, name, inp):
     return json.dumps({"type": "assistant", "message": {"role": "assistant",
                        "content": [{"type": "tool_use", "id": i, "name": name, "input": inp}]}})
 with open(os.path.join(_td, "s.jsonl"), "w") as _f:
     _f.write("\n".join([
-        _ev("1", "Bash", {"command": "candor-query callers r.json Foo 1"}),
-        _ev("2", "Bash", {"command": "candor-query where r.json Net 1"}),
-        _ev("3", "Bash", {"command": "candor-query show r.json Foo 0"}),
-        _ev("4", "Bash", {"command": "ls"}),
-        _ev("5", "Read", {"file_path": "/x"}),
+        _ev("1", "Bash", {"command": "candor-query callers r.json Foo 1"}),   # blast
+        _ev("2", "Bash", {"command": "candor-query where r.json Net 1"}),     # blast
+        _ev("3", "Bash", {"command": "candor-query show r.json Foo 0"}),      # query, not blast
+        _ev("4", "Bash", {"command": "echo 'see candor-query docs'"}),        # mention only -> NOT a query (#6)
+        _ev("5", "Bash", {"command": "grep callers src/x.rs"}),               # NOT a query (#6)
+        _ev("6", "Read", {"file_path": "/x"}),
+        '{ corrupt half-written tail line }',                                  # must NOT crash savings (#2)
     ]) + "\n")
+with open(os.path.join(_td, "subagents", "sub.jsonl"), "w") as _f:            # subagent transcript (#5)
+    _f.write(_ev("7", "Bash", {"command": "candor-query callers r.json Bar 1"}) + "\n")
 def _sv(*a):
     return subprocess.run([sys.executable, "-m", "candor_agents.cli", "savings", *a], capture_output=True, text=True)
-_vj = json.loads(_sv("--transcript", _td, "--json").stdout)
-check("savings: counts candor-query calls, ignores other tools",
-      _vj["measured"]["queries"] == 3 and _vj["measured"]["blastRadiusQueries"] == 2, json.dumps(_vj))
-check("savings: the estimate is flagged a model, not a measurement",
-      _vj.get("modelled") is True and "tokensSaved" in _vj["estimate"], json.dumps(_vj))
+_svr = _sv("--transcript", _td, "--json")
+check("savings: does NOT crash on a corrupt transcript line (#2)",
+      _svr.returncode == 0 and _svr.stdout.strip().startswith("{"), _svr.stdout + _svr.stderr)
+_vj = json.loads(_svr.stdout)
+check("savings: counts real queries incl. subagent, ignores echo/grep mentions (#5,#6)",
+      _vj["measured"]["queries"] == 4 and _vj["measured"]["blastRadiusQueries"] == 3, json.dumps(_vj))
+check("savings: estimate is blast-based and flagged a model, not a measurement (#4)",
+      _vj.get("modelled") is True and _vj["estimate"]["basis"] == "blastRadiusQueries", json.dumps(_vj))
 _sv_out = _sv("--transcript", _td).stdout
 check("savings: human output labels it a model and cites the benchmark",
       "model, not measured" in _sv_out and "candor.poly.io/agents" in _sv_out, _sv_out)
-check("savings: no candor-query calls → clean no-op (exit 0)", _sv("--transcript", _tf.mkdtemp()).returncode == 0)
+check("savings: no candor-query calls → clean no-op (exit 0)", _sv("--transcript", _mkd()).returncode == 0)
 
 print()
 
