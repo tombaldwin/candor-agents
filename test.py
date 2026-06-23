@@ -1037,6 +1037,31 @@ check("stats: missing log is a clean no-op (exit 0)",
       _rm.returncode == 0 and "no activity log" in _rm.stdout, _rm.stdout + _rm.stderr)
 check("stats: unknown flag exits 2", _stats(_sd, "--bogus").returncode == 2)
 
+# ---- savings: MODELLED estimate from candor-query usage in the transcript (labelled, not measured) ----
+_td = _tf.mkdtemp()
+def _ev(i, name, inp):
+    return json.dumps({"type": "assistant", "message": {"role": "assistant",
+                       "content": [{"type": "tool_use", "id": i, "name": name, "input": inp}]}})
+with open(os.path.join(_td, "s.jsonl"), "w") as _f:
+    _f.write("\n".join([
+        _ev("1", "Bash", {"command": "candor-query callers r.json Foo 1"}),
+        _ev("2", "Bash", {"command": "candor-query where r.json Net 1"}),
+        _ev("3", "Bash", {"command": "candor-query show r.json Foo 0"}),
+        _ev("4", "Bash", {"command": "ls"}),
+        _ev("5", "Read", {"file_path": "/x"}),
+    ]) + "\n")
+def _sv(*a):
+    return subprocess.run([sys.executable, "-m", "candor_agents.cli", "savings", *a], capture_output=True, text=True)
+_vj = json.loads(_sv("--transcript", _td, "--json").stdout)
+check("savings: counts candor-query calls, ignores other tools",
+      _vj["measured"]["queries"] == 3 and _vj["measured"]["blastRadiusQueries"] == 2, json.dumps(_vj))
+check("savings: the estimate is flagged a model, not a measurement",
+      _vj.get("modelled") is True and "tokensSaved" in _vj["estimate"], json.dumps(_vj))
+_sv_out = _sv("--transcript", _td).stdout
+check("savings: human output labels it a model and cites the benchmark",
+      "model, not measured" in _sv_out and "candor.poly.io/agents" in _sv_out, _sv_out)
+check("savings: no candor-query calls → clean no-op (exit 0)", _sv("--transcript", _tf.mkdtemp()).returncode == 0)
+
 print()
 
 
