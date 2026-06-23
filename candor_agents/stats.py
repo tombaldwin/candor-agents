@@ -23,7 +23,7 @@ def _load(path, session, since):
     """Return the records (filtered), or None if the log doesn't exist. Corrupt lines are skipped,
     never fatal — a stats reader must not fall over on a half-written tail line."""
     try:
-        f = open(path)
+        f = open(path, encoding="utf-8")
     except FileNotFoundError:
         return None
     recs = []
@@ -36,48 +36,63 @@ def _load(path, session, since):
                 r = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(r, dict):   # valid JSON but not an object (bare 5/"x"/null/[…]) — skip, never crash
+                continue
             if session is not None and r.get("sessionId") != session:
                 continue
-            if since is not None and (r.get("ts") or "") < since:
+            # only filter records that HAVE a ts; a record without one is never silently dropped by --since
+            if since is not None and r.get("ts") and r["ts"] < since:
                 continue
             recs.append(r)
     return recs
 
 
+def _is_int(x):
+    return isinstance(x, int) and not isinstance(x, bool)   # bool subclasses int; reject True/False as a count
+
+
 def _summary(recs):
     verdict = Counter(r.get("verdict") for r in recs)
     viol = Counter()
-    effects, files, sessions = set(), set(), set()
+    effects, files, sessions, present = set(), set(), set(), set()
     max_blast = unknowns_max = candor_ms = 0
     introduced_turns = 0
-    ts = sorted(r["ts"] for r in recs if r.get("ts"))
+    has_unknowns = has_reviewms = False
+    # only string timestamps are comparable — ignore any non-string ts rather than crash sorted() on mixed types
+    ts = sorted(r["ts"] for r in recs if isinstance(r.get("ts"), str))
     for r in recs:
         for v in r.get("violations") or []:
             viol[v] += 1
-        effects.update(r.get("gained") or [])
+        effects.update(r.get("gained") or [])      # effects INTRODUCED vs baseline this turn
+        present.update(r.get("effects") or [])      # effects PRESENT in the report this turn (from the trailer)
         files.update(r.get("edited") or [])
         if r.get("sessionId"):
             sessions.add(r["sessionId"])
-        b = r.get("blastRadius") or 0
-        if isinstance(b, int):
+        b = r.get("blastRadius")
+        if _is_int(b):
             max_blast = max(max_blast, b)
-        if (r.get("gained") or []) or (isinstance(b, int) and b > 0):
+        if (r.get("gained") or []) or (_is_int(b) and b > 0):
             introduced_turns += 1
         u = r.get("unknowns")
-        if isinstance(u, int):
+        if _is_int(u):
+            has_unknowns = True
             unknowns_max = max(unknowns_max, u)
         m = r.get("reviewMs")
-        if isinstance(m, int):
+        if _is_int(m):
+            has_reviewms = True
             candor_ms += m
     return {
         "unknownsMax": unknowns_max,
+        "hasUnknowns": has_unknowns,
         "candorMs": candor_ms,
+        "hasReviewMs": has_reviewms,
         "turns": len(recs),
         "clean": verdict.get("clean", 0),
         "blocked": verdict.get("blocked", 0),
         "setup": verdict.get("setup", 0),
         "violations": dict(viol),
         "effectsIntroduced": sorted(effects),
+        "effectsPresent": sorted(present),
         "turnsIntroducingEffects": introduced_turns,
         "largestBlastRadius": max_blast,
         "filesTouched": len(files),
@@ -97,13 +112,15 @@ def _print_human(s, path):
         print(f"  blocked by policy: {vs}")
     if s["effectsIntroduced"]:
         print(f"  effects introduced this period: {', '.join(s['effectsIntroduced'])}")
+    if s.get("effectsPresent"):
+        print(f"  effects present in the code: {', '.join(s['effectsPresent'])}")
     if s["largestBlastRadius"]:
         print(f"  largest blast radius seen: {s['largestBlastRadius']} function(s)")
-    if s.get("unknownsMax"):
+    if s.get("hasUnknowns"):   # present-field test, not truthiness — a genuine max of 0 still prints
         print(f"  Unknowns disclosed (max in a turn): {s['unknownsMax']}")
     if s["filesTouched"]:
         print(f"  files touched: {s['filesTouched']}")
-    if s.get("candorMs"):
+    if s.get("hasReviewMs"):   # a sub-second review logs reviewMs=0; still show the line rather than hide it
         print(f"  candor's own time: {s['candorMs'] / 1000:.1f}s across {s['turns']} checks")
 
 
@@ -136,6 +153,9 @@ def main(argv):
         else:
             target = a
             i += 1
+    if since and not since[:4].isdigit():
+        print(f"candor-agents: --since {since!r} doesn't look like an ISO timestamp "
+              f"(e.g. 2026-06-23); the lexical compare may drop everything", file=sys.stderr)
     if path is None:
         path = os.path.join(target, ".candor", "activity.jsonl")
     recs = _load(path, session, since)

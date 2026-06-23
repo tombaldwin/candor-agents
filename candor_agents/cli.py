@@ -5,8 +5,8 @@
   candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: what it DID (transcripts)
   candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege advice)
   candor-agents guard   <policy-file> [<project-dir>]    # ENFORCED: compile a deny-policy to runtime
-  candor-agents stats   [<project-dir>]                  # MEASURED: edit-time gate activity (the stop hook's log)
-  candor-agents savings [<project-dir>] [--transcript <dir>]  # MODELLED: what candor-query saved vs re-deriving
+  candor-agents stats   [<project-dir>] [--since <iso>] [--session <id>] [--json]   # MEASURED: edit-time gate activity (stop hook log)
+  candor-agents savings [<project-dir>] [--transcript <dir>] [--json]               # MODELLED: what candor-query saved vs re-deriving
 
 scan answers "what MAY this fleet do"; observe answers "what DID it do"; drift is the gap between
 them: a grant no session ever used is a least-privilege trim candidate (the AS-EFF-002 analog), an
