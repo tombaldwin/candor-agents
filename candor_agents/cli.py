@@ -5,6 +5,7 @@
   candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: what it DID (transcripts)
   candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege advice)
   candor-agents guard   <policy-file> [<project-dir>]    # ENFORCED: compile a deny-policy to runtime
+  candor-agents stats   [<project-dir>]                  # MEASURED: edit-time gate activity (the stop hook's log)
 
 scan answers "what MAY this fleet do"; observe answers "what DID it do"; drift is the gap between
 them: a grant no session ever used is a least-privilege trim candidate (the AS-EFF-002 analog), an
@@ -151,6 +152,10 @@ def main():
         # harness enforces natively (the dual of scan, which READS permissions.deny to subtract).
         from candor_agents import guard
         return guard.main(rest)
+    if cmd == "stats":
+        # MEASURED edit-time gate activity from the stop hook's .candor/activity.jsonl (counted, not modelled).
+        from candor_agents import stats
+        return stats.main(rest)
     if cmd == "drift":
         # Parse flag/value pairs explicitly so an unknown flag FAILS (never silently runs non-strict
         # or against the wrong transcripts), a trailing value-less flag errors instead of IndexError,
