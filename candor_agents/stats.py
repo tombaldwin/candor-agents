@@ -48,7 +48,7 @@ def _summary(recs):
     verdict = Counter(r.get("verdict") for r in recs)
     viol = Counter()
     effects, files, sessions = set(), set(), set()
-    max_blast = 0
+    max_blast = unknowns_max = candor_ms = 0
     introduced_turns = 0
     ts = sorted(r["ts"] for r in recs if r.get("ts"))
     for r in recs:
@@ -63,7 +63,15 @@ def _summary(recs):
             max_blast = max(max_blast, b)
         if (r.get("gained") or []) or (isinstance(b, int) and b > 0):
             introduced_turns += 1
+        u = r.get("unknowns")
+        if isinstance(u, int):
+            unknowns_max = max(unknowns_max, u)
+        m = r.get("reviewMs")
+        if isinstance(m, int):
+            candor_ms += m
     return {
+        "unknownsMax": unknowns_max,
+        "candorMs": candor_ms,
         "turns": len(recs),
         "clean": verdict.get("clean", 0),
         "blocked": verdict.get("blocked", 0),
@@ -91,8 +99,12 @@ def _print_human(s, path):
         print(f"  effects introduced this period: {', '.join(s['effectsIntroduced'])}")
     if s["largestBlastRadius"]:
         print(f"  largest blast radius seen: {s['largestBlastRadius']} function(s)")
+    if s.get("unknownsMax"):
+        print(f"  Unknowns disclosed (max in a turn): {s['unknownsMax']}")
     if s["filesTouched"]:
         print(f"  files touched: {s['filesTouched']}")
+    if s.get("candorMs"):
+        print(f"  candor's own time: {s['candorMs'] / 1000:.1f}s across {s['turns']} checks")
 
 
 def main(argv):
