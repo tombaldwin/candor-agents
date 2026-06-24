@@ -37,7 +37,7 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 
 - Units are agent types, `command:`/`skill:`/`cron:` units, and the `session` root; the session and
   each scheduled task are `entryPoint: true` (the autonomous roots). `hash` is `<fleet>#<unit>`.
-  Every unit carries `unitKind` (spec ⟨0.5⟩, informative): `agent`, `command`, `skill`, `cron`,
+  Every unit carries `unitKind` (spec ⟨0.7⟩, informative): `agent`, `command`, `skill`, `cron`,
   `session`, or `hooks` — a fleet's units are not functions, and the field keeps a merged prefix
   (fleet + code reports) readable.
 - `inferred` is the transitive effect set (delegation propagates a delegate's effects to its
@@ -46,7 +46,7 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   it did — that is `observe`'s job.
 - **The Bash cliff**: `Bash` classifies as `Exec`, but a shell can do anything — treat any
   Bash-holding agent as having the capability floor, not a tight bound. Two refinements (spec §4
-  ⟨0.5⟩): (1) when a **literal sub-command head** is known — a `Bash(curl:*)` specifier or a `!`curl``
+  ⟨0.7⟩): (1) when a **literal sub-command head** is known — a `Bash(curl:*)` specifier or a `!`curl``
   line — its effect is added (`curl`→`Net`, `candor*`→`Fs`/`Env`, the latter guaranteed by the
   analyzer self-boundary); `Exec` stays (a subprocess still spawned) and an unknown head keeps the
   bare cliff. (2) Combined mode (`scan --link <code-report-prefix>`) edges Bash-holding agents into
@@ -78,7 +78,7 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   `Exec` won't appear in the `hooks` unit (a blind spot in the under-report direction — the report is
   the fleet *as committed*, not as it runs on one machine). If you need the effective runtime surface,
   scan a tree with the global settings merged into its `.claude/`.
-- **`guard` is the dual — may → ENFORCED** (spec §6.2 ⟨0.5⟩): `candor-agents guard <policy>` compiles
+- **`guard` is the dual — may → ENFORCED** (spec §6.2 ⟨0.7⟩): `candor-agents guard <policy>` compiles
   a `deny <Effect>` rule into the `permissions.deny` the harness enforces *natively*, so the boundary
   holds at runtime, not just in CI. scan READS `permissions.deny` to subtract; guard WRITES it. It is
   honest about the §4 cliff — denying the directly-Net tools doesn't bind a `Bash` that can curl, so
