@@ -129,6 +129,13 @@ def drift(target, strict, transcripts=None):
 
 def main():
     args = sys.argv[1:]
+    # Top-level `-V`/`--version` (spec §3.3): the build + the candor-spec version it speaks, offline.
+    # Routed before the help/dispatch so `candor-agents -V` (no subcommand) works like the family.
+    if args and args[0] in ("-V", "--version"):
+        from candor_agents.scan import SPEC, VERSION
+        print(f"candor-agents {VERSION} (candor-spec {SPEC})")
+        print("upgrade: pipx upgrade candor-agents  (or: pip install -U candor-agents)")
+        return 0
     if not args or args[0] in ("-h", "--help"):
         print(__doc__.strip(), file=sys.stderr)
         return 0 if args else 2
