@@ -93,8 +93,11 @@ def compile_guard(policy_text, project_dir=None):
                         eff = MCP_TABLE.get(name, set())
                     if eff:
                         mcp_eff[name] = eff
-            except Exception:
-                pass
+            except Exception as e:
+                # An unreadable/malformed .mcp.json means the server denies CANNOT be compiled — staying
+                # silent would emit an under-protective permissions.deny with no disclosure (a deny rule
+                # against an mcp server would simply be missing). Warn, mirroring scan.py's reader.
+                warnings.append(f".mcp.json unreadable ({e}) — mcp server denies omitted; verify manually")
     rules, suspects = parse_denies(policy_text)
     for tok, proper in suspects:
         warnings.append(f"`deny {tok}`: effects are case-sensitive — `{tok}` was read as a scope name, not "
@@ -143,7 +146,7 @@ def main(args):
     pol = args[0]
     proj = args[1] if len(args) > 1 and not args[1].startswith("--") else None
     try:
-        text = open(pol).read()
+        text = open(pol, encoding="utf-8").read()
     except Exception as e:
         print(f"candor-agents guard: cannot read policy {pol} ({e})", file=sys.stderr)
         return 2

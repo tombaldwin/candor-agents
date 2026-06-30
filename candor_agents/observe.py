@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import urllib.parse
 
 from candor_agents.scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds, propagate  # one source
 
@@ -57,11 +58,13 @@ def surfaces_from(name, inp):
     if name == "Bash" and isinstance(inp.get("command"), str):
         cmds |= bash_cmds(inp["command"])
     if name in ("WebFetch",) and isinstance(inp.get("url"), str):
-        h = inp["url"]
-        for scheme in ("https://", "http://"):
-            if h.startswith(scheme):
-                h = h[len(scheme):]
-        hosts.add(h.split("/", 1)[0])
+        # urlsplit handles every URL form (`user:pass@host`, `host:port`, scheme-relative `//host/…`)
+        # — a naive strip-scheme-then-split misparsed all three, manufacturing a bogus host. `.hostname`
+        # is the registered name only (no userinfo/port). None (a non-URL, a relative path) is SKIPPED:
+        # under-report, never fabricate a host from a string that has none.
+        host = urllib.parse.urlsplit(inp["url"]).hostname
+        if host:
+            hosts.add(host)
     for key in ("file_path", "path", "notebook_path"):
         if isinstance(inp.get(key), str) and inp[key].startswith("/"):
             paths.add(inp[key])
@@ -82,7 +85,16 @@ def tool_uses(jsonl_path, bad):
             except Exception:
                 bad["lines"] += 1
                 continue
-            msg = e.get("message") or {}
+            # Valid JSON of the WRONG shape (a bare scalar `5`/`"x"`, a list, or a `message` that is a
+            # string not an object) must be COUNTED and skipped, never crash on `.get` — one malformed
+            # line otherwise aborted the whole observe(), so no report was written and the OBSERVED gate
+            # silently did not run (the cardinal sin). Mirrors the stats.py reader's isinstance guard.
+            if not isinstance(e, dict):
+                bad["lines"] += 1
+                continue
+            msg = e.get("message")
+            if not isinstance(msg, dict):
+                continue
             content = msg.get("content")
             if not isinstance(content, list):
                 continue
@@ -91,7 +103,31 @@ def tool_uses(jsonl_path, bad):
                     yield b.get("id"), b.get("name") or "?", b.get("input")
 
 
-def observe(tdir, out_prefix, fleet):
+def print_version():
+    """`--version`/`-V` (spec §3.3): the build + the candor-spec version it speaks, offline."""
+    print(f"candor-agents {VERSION} (candor-spec {SPEC})")
+    print("upgrade: pipx upgrade candor-agents  (or: pip install -U candor-agents)")
+
+
+_HELP = f"""candor-agents {VERSION} — OBSERVED fleet effects from session transcripts (candor-spec {SPEC})
+
+USAGE: candor-agents observe <project-dir> [--out <prefix>] [--json] [--policy <file>]
+                             [--transcripts <dir>] [--fleet <name>]
+
+  <project-dir>      the fleet root (its transcripts live in ~/.claude/projects/<slug>/)
+  --out <prefix>     write <prefix>.<fleet>.Observed.json + a .callgraph.json sidecar (default: .candor/report)
+  --json             emit the §2 report envelope as JSON to STDOUT (human/progress goes to stderr)
+  --policy <file>    enforce a §6.2 policy file: exit 1 on a violation, 2 if unreadable; honours
+                     $CANDOR_POLICY when the flag is absent (the flag wins)
+  --transcripts <dir>  read transcripts from here instead of the derived ~/.claude/projects slug
+  --fleet <name>     name the fleet (default: the project dir's basename)
+  -V, --version      print the build + candor-spec version (offline)
+  -h, --help         show this help
+
+See https://github.com/tombaldwin/candor-agents"""
+
+
+def observe(tdir, out_prefix, fleet, as_json=False):
     sessions = sorted(f for f in os.listdir(tdir) if f.endswith(".jsonl"))
     bad = {"lines": 0, "files": 0}
 
@@ -171,7 +207,7 @@ def observe(tdir, out_prefix, fleet):
             "direct": sorted(direct.get(n) or []),
             "declared": [], "undeclared": [], "overdeclared": [],
             "unresolved": "Unknown" in inf,
-            "unitKind": "session" if n == "session" else "agent",  # spec ⟨0.5⟩, informative
+            "unitKind": "session" if n == "session" else "agent",  # spec ⟨0.7⟩, informative
             "hash": f"{fleet}#{n}",
             "calls": sorted(edges.get(n) or []),
         }
@@ -191,27 +227,44 @@ def observe(tdir, out_prefix, fleet):
 
     report = {"candor": {"version": VERSION, "toolchain": "claude-code-transcripts", "spec": SPEC},
               "package": fleet, "mode": "observed", "functions": functions}
+    callgraph = {n: sorted(edges.get(n) or []) for n in sorted(set(unit_of_file.values()) | {"session"})}
     rp = f"{out_prefix}.{fleet}.Observed.json"
     cp = f"{out_prefix}.{fleet}.Observed.callgraph.json"
-    os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
-    json.dump(report, open(rp, "w"), indent=1)
-    json.dump({n: sorted(edges.get(n) or []) for n in sorted(set(unit_of_file.values()) | {"session"})},
-              open(cp, "w"), indent=1)
-    sys.stderr.write(f"candor-agents: observed {len(functions)} effectful unit(s) over "
-                     f"{len(sessions)} session(s) + {len(unit_of_file) - len(sessions)} subagent transcript(s) → {rp}\n")
+    if as_json:
+        # --json: stdout MUST be pure JSON (the §2 envelope); the receipt/progress stays on stderr (it
+        # already does), so a `observe --json | jq` pipe never breaks. No files written.
+        print(json.dumps(report, indent=1))
+        sys.stderr.write(f"candor-agents: observed {len(functions)} effectful unit(s) over "
+                         f"{len(sessions)} session(s) + {len(unit_of_file) - len(sessions)} subagent transcript(s) → stdout (--json)\n")
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
+        json.dump(report, open(rp, "w"), indent=1)
+        json.dump(callgraph, open(cp, "w"), indent=1)
+        sys.stderr.write(f"candor-agents: observed {len(functions)} effectful unit(s) over "
+                         f"{len(sessions)} session(s) + {len(unit_of_file) - len(sessions)} subagent transcript(s) → {rp}\n")
     if bad["lines"] or bad["files"]:
         sys.stderr.write(f"candor-agents: transcript reader skipped {bad['lines']} unparseable line(s) "
                          f"and {bad['files']} unreadable file(s) — the format is Claude Code's internal "
                          f"JSONL; treat the report as best-effort observed coverage\n")
-    return rp
+    return report, callgraph
 
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
+    # `-V`/`--version` and `-h`/`--help` are print-and-exit MODES, routed BEFORE the arg walk so a
+    # single-dash `-h`/`-V` is never captured as the (positional) transcript target below.
+    if "--version" in args or "-V" in args:
+        print_version()
+        return 0
+    if "--help" in args or "-h" in args:
+        sys.stderr.write(_HELP + "\n")
+        return 0
     out = ".candor/report"
     target = "."
     tdir_override = None
     fleet_override = None
+    as_json = False
+    policy_path = os.environ.get("CANDOR_POLICY")  # the flag (below) overrides this
     i = 0
     # A value-taking flag with a missing/flag-shaped value FAILS (never silently consuming the next
     # flag or falling back to a default) — the gateless-ignore class the unknown-flag work forbids.
@@ -226,6 +279,13 @@ def main(argv=None):
             if v is None:
                 return 2
             out = v; i += 2
+        elif args[i] == "--json":
+            as_json = True; i += 1
+        elif args[i] == "--policy":
+            v = value("--policy")
+            if v is None:
+                return 2
+            policy_path = v; i += 2
         elif args[i] == "--transcripts":
             v = value("--transcripts")
             if v is None:
@@ -238,7 +298,8 @@ def main(argv=None):
             fleet_override = v; i += 2
         elif args[i].startswith("--"):
             sys.stderr.write(f"candor-agents: unknown flag {args[i]} "
-                             f"(usage: observe <dir> [--out <prefix>] [--transcripts <dir>] [--fleet <name>])\n")
+                             f"(usage: observe <dir> [--out <prefix>] [--json] [--policy <file>] "
+                             f"[--transcripts <dir>] [--fleet <name>])\n")
             return 2
         else:
             target = args[i]
@@ -262,7 +323,25 @@ def main(argv=None):
         base = os.path.basename(os.path.abspath(target)).lstrip("-")
         if (not os.path.isdir(target)) or base in ("", "null", "dev"):
             base = os.path.basename(os.path.abspath(tdir)).lstrip("-") or "fleet"
-    observe(tdir, out, base)
+    report, callgraph = observe(tdir, out, base, as_json=as_json)
+
+    # ── the standing §6.2 gate (--policy / CANDOR_POLICY, spec §3.3) over the OBSERVED report ─────
+    # A set-but-unreadable policy FAILS (exit 2), a violation exits 1 — never a silent gate-pass.
+    if policy_path:
+        try:
+            ptext = open(policy_path, encoding="utf-8").read()
+        except OSError as e:
+            sys.stderr.write(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT "
+                             f"enforced (exit 2)\n")
+            return 2
+        from candor_agents import policy as _policy
+        violations = _policy.evaluate_policy(_policy.parse_policy(ptext), report["functions"], callgraph)
+        for v in violations:
+            sys.stderr.write(v + "\n")  # keep stdout pure JSON in --json mode
+        if violations:
+            sys.stderr.write(f"candor-agents: {len(violations)} policy violation(s)\n")
+            return 1
+        sys.stderr.write("candor-agents: policy ✓\n")
     return 0
 
 

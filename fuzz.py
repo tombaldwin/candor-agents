@@ -16,6 +16,7 @@ Run: python3 fuzz.py [N]   (default 40 seeds)
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -102,14 +103,67 @@ def run_seed(seed):
     return bad
 
 
+# ── observe/transcript fuzz lane ──────────────────────────────────────────────────────────────────
+# The transcript reader parses Claude Code's INTERNAL JSONL — an undocumented, evolving format. A
+# malformed line (a bare scalar, a list, a `message` that is a string not an object, plain garbage)
+# must be COUNTED and skipped, NEVER crash: a crash aborts observe(), no report is written, and the
+# OBSERVED gate silently does not run (the cardinal sin this lane exists to catch). This generates
+# transcripts that are mostly malformed and asserts (1) observe exits clean, (2) a report is written,
+# (3) the reader's disclosed bad-line count rises with the malformed lines it was fed.
+# Lines that MUST raise the disclosed bad-line counter: unparseable text, AND a bare non-dict JSON
+# value (`5`/`"x"`/`[…]`) — the exact shapes that crashed `.get` before the isinstance guard.
+_BAD_COUNTED = ["5", '"x"', "true", "null", "[1, 2, 3]", "not json at all {", "{unterminated"]
+# Parseable dicts of the WRONG shape: legitimately skipped WITHOUT counting (they parsed, they're
+# just not tool_use lines). Mixed in to prove the reader doesn't crash on them OR over-count them.
+_BAD_UNCOUNTED = ['{"message": "a string, not an object"}', '{"message": 5}',
+                  '{"message": {"content": "not a list"}}',
+                  '{"message": {"content": [42, "x", {"type": "text"}]}}', '{"other": 1}']
+_VALID_USE = '{"message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", ' \
+             '"input": {"command": "curl https://x"}}]}}'
+
+
+def run_observe_seed(seed):
+    rng = random.Random(10_000 + seed)
+    d = tempfile.mkdtemp()
+    n_bad = rng.randint(1, 12)
+    lines = [rng.choice(_BAD_COUNTED) for _ in range(n_bad)]
+    # interleave wrong-shape-but-parseable lines + a few valid tool_use lines: the reader must skip the
+    # former WITHOUT counting them, observe the latter, and survive both past the counted-bad lines.
+    for _ in range(rng.randint(0, 4)):
+        lines.insert(rng.randint(0, len(lines)), rng.choice(_BAD_UNCOUNTED))
+    for _ in range(rng.randint(0, 3)):
+        lines.insert(rng.randint(0, len(lines)), _VALID_USE)
+    rng.shuffle(lines)
+    open(os.path.join(d, "session.jsonl"), "w").write("\n".join(lines) + "\n")
+    out = os.path.join(d, "r")
+    r = subprocess.run([sys.executable, "-m", "candor_agents.observe", "--transcripts", d,
+                        "--out", out, "--fleet", "fz", d], capture_output=True, text=True)
+    bad = []
+    if r.returncode != 0:
+        bad.append(f"oseed {seed}: observe CRASHED on a malformed transcript: {r.stderr.strip()[:200]}")
+        return bad  # nothing else to check if it didn't run
+    if not os.path.exists(f"{out}.fz.Observed.json"):
+        bad.append(f"oseed {seed}: no report written (the OBSERVED gate would silently not run)")
+    # The receipt MUST disclose the unparseable lines — absence of disclosure is the silent under-report.
+    m = re.search(r"skipped (\d+) unparseable line", r.stderr)
+    skipped = int(m.group(1)) if m else 0
+    # EXACT: the wrong-shape-but-parseable lines must NOT inflate the count (they parsed fine) and the
+    # counted-bad lines must ALL be disclosed (no silent drop) — both directions are honesty failures.
+    if skipped != n_bad:
+        bad.append(f"oseed {seed}: reader disclosed {skipped} bad line(s) but {n_bad} were counted-bad "
+                   f"(the unparseable-line count must be exact — no silent drop, no over-count)")
+    return bad
+
+
 def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 40
     fails = []
     for seed in range(1, n + 1):
         fails.extend(run_seed(seed))
+        fails.extend(run_observe_seed(seed))
     for b in fails:
         print(f"  {b}")
-    print(f"fuzz: {n - len(set(f.split(':')[0] for f in fails))} seeds passed, "
+    print(f"fuzz: {2 * n - len(set(f.split(':')[0] for f in fails))} seeds passed, "
           f"{len(set(f.split(':')[0] for f in fails))} failed")
     return 1 if fails else 0
 

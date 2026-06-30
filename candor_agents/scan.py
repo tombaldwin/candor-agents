@@ -21,7 +21,7 @@ import re
 import sys
 
 SPEC = "0.7"
-VERSION = "agents-0.7.1"
+VERSION = "agents-0.7.2"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -413,16 +413,50 @@ def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
     return effs, fs, why
 
 
+def print_version():
+    """`--version`/`-V` (spec §3.3): the installed build + the candor-spec version it speaks, then an
+    upgrade line — fully OFFLINE (candor never phones home; staying current is the agent's job)."""
+    print(f"candor-agents {VERSION} (candor-spec {SPEC})")
+    print("upgrade: pipx upgrade candor-agents  (or: pip install -U candor-agents)")
+
+
+_HELP = f"""candor-agents {VERSION} — effect analysis for Claude Code agent fleets (candor-spec {SPEC})
+
+USAGE: candor-agents scan <project-dir> [--out <prefix>] [--json] [--policy <file>]
+                          [--fleet <name>] [--link <prefix>] [--nested-spawn]
+
+  <project-dir>      the fleet root (.claude/agents, .mcp.json, settings, commands, skills, cron)
+  --out <prefix>     write <prefix>.<fleet>.Fleet.json + a .callgraph.json sidecar (default: report)
+  --json             emit the §2 report envelope as JSON to STDOUT (human/progress goes to stderr)
+  --policy <file>    enforce a §6.2 policy file: exit 1 on a violation, 2 if unreadable; honours
+                     $CANDOR_POLICY when the flag is absent (the flag wins)
+  --fleet <name>     name the fleet (default: the project dir's basename)
+  --link <prefix>    edge Bash-holding units into a linked CODE report's entry points (§4 cliff)
+  --nested-spawn     allow ambient agents to nest-spawn (harnesses that permit it)
+  -V, --version      print the build + candor-spec version (offline)
+  -h, --help         show this help
+
+See https://github.com/tombaldwin/candor-agents"""
+
+
 def main():
     args = sys.argv[1:]
-    if not args:
-        print(__doc__.strip(), file=sys.stderr)
-        return 2
+    # `-V`/`--version` and `-h`/`--help` are print-and-exit MODES, handled BEFORE the arg walk so a
+    # single-dash `-h`/`-V` is never mistaken for a flag-value or swallowed by the positional capture.
+    if "--version" in args or "-V" in args:
+        print_version()
+        return 0
+    if not args or "--help" in args or "-h" in args:
+        print(_HELP, file=sys.stderr)
+        return 0 if args else 2
     # ONE flag pass (was four, with a skip-set the validator both built and read). An unknown flag,
     # a flag-shaped or missing value, or a second positional all FAIL with exit 2 — never silently
     # ignored or read as the project dir. The first positional is the scan root.
-    usage = ("usage: scan <dir> [--out <prefix>] [--fleet <name>] [--link <prefix>] [--nested-spawn]")
+    usage = ("usage: scan <dir> [--out <prefix>] [--json] [--policy <file>] [--fleet <name>] "
+             "[--link <prefix>] [--nested-spawn]")
     out, fleet, link, nested, root = "report", None, None, False, None
+    as_json = False
+    policy_path = os.environ.get("CANDOR_POLICY")  # the flag (below) overrides this
     i = 0
 
     def value(flag):
@@ -438,6 +472,13 @@ def main():
             if v is None:
                 return 2
             out = v; i += 2
+        elif a == "--json":
+            as_json = True; i += 1
+        elif a == "--policy":
+            v = value("--policy")
+            if v is None:
+                return 2
+            policy_path = v; i += 2
         elif a == "--fleet":
             v = value("--fleet")
             if v is None:
@@ -1020,18 +1061,44 @@ def main():
     report = {"candor": {"version": VERSION, "toolchain": "claude-code", "spec": SPEC},
               "package": fleet,
               "functions": functions}
+    callgraph = {n: calls[n] for n in sorted(calls)}
     rp = f"{out}.{fleet}.Fleet.json"
     cp = f"{out}.{fleet}.Fleet.callgraph.json"
-    os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
-    json.dump(report, open(rp, "w"), indent=1)
-    json.dump({n: calls[n] for n in sorted(calls)}, open(cp, "w"), indent=1)
-    print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → {rp} (+ callgraph sidecar)")
+    if as_json:
+        # --json: stdout MUST be pure JSON (the §2 envelope) so it pipes cleanly — every human/progress
+        # line goes to stderr (the sidecar need not go to stdout, per §3.3). No files are written.
+        print(json.dumps(report, indent=1))
+        print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → stdout (--json)", file=sys.stderr)
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
+        json.dump(report, open(rp, "w"), indent=1)
+        json.dump(callgraph, open(cp, "w"), indent=1)
+        print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → {rp} (+ callgraph sidecar)")
     if unreadable:
         print(f"candor-agents: {len(unreadable)} .md file(s) could not be read — NOT analyzed (permission/"
               f"encoding): {', '.join(unreadable[:5])}{'…' if len(unreadable) > 5 else ''}", file=sys.stderr)
     if has_hooks:
         print(f"candor-agents: hooks run AUTOMATICALLY on tool events — {', '.join(hook_events) or 'unreadable settings'}"
               f"{'; cmds: ' + ', '.join(sorted(hook_cmds)) if hook_cmds else ''}", file=sys.stderr)
+
+    # ── the standing §6.2 gate (--policy / CANDOR_POLICY, spec §3.3) ──────────────────────────────
+    # A set-but-unreadable policy FAILS the run (exit 2) — never silently gate-passes; a violation
+    # exits 1. The gate runs IN-PROCESS over this report (see policy.py for why not candor-query).
+    if policy_path:
+        try:
+            ptext = open(policy_path, encoding="utf-8").read()
+        except OSError as e:
+            print(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT enforced "
+                  f"(exit 2)", file=sys.stderr)
+            return 2
+        from candor_agents import policy as _policy
+        violations = _policy.evaluate_policy(_policy.parse_policy(ptext), functions, callgraph)
+        for v in violations:
+            print(v, file=sys.stderr)  # keep stdout pure JSON in --json mode
+        if violations:
+            print(f"candor-agents: {len(violations)} policy violation(s)", file=sys.stderr)
+            return 1
+        print("candor-agents: policy ✓", file=sys.stderr)
     return 0
 
 
