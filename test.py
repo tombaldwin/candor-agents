@@ -10,6 +10,7 @@ Run: python3 test.py
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1086,6 +1087,312 @@ _sv_out = _sv("--transcript", _td).stdout
 check("savings: human output labels it a model and cites the benchmark",
       "model, not measured" in _sv_out and "candor.poly.io/agents" in _sv_out, _sv_out)
 check("savings: no candor-query calls → clean no-op (exit 0)", _sv("--transcript", _mkd()).returncode == 0)
+
+print()
+
+
+# ══ CLI / gate behaviour matrix (spawn the engine; assert stdout/stderr/exit) ══════════════════════
+# A Critical bug shipped because the CLI surface (--version/-V/--json/--policy/subcommand -h) was
+# UNTESTED. These spawn `python3 -m candor_agents.cli` (the same entry the console_script `candor-agents`
+# resolves to) and assert the contract the README/spec §3.3 promise: exit codes, that --json is the §2
+# envelope on stdout with NO files written, that --policy gates with the right code, and that a
+# subcommand's `-h` is a usage exit 0 — never swallowed as a scan target.
+def cli(*a, env=None):
+    e = dict(os.environ); e.update(env or {})
+    return subprocess.run([sys.executable, "-m", "candor_agents.cli", *a],
+                          capture_output=True, text=True, cwd=HERE, env=e)
+
+# A minimal real fleet (one Net leaf) the matrix gates over, in a dir that holds NO pre-existing report.
+_cd = _mkd()
+os.makedirs(os.path.join(_cd, ".claude", "agents"))
+open(os.path.join(_cd, ".claude", "agents", "leaf.md"), "w").write(agent("leaf", "WebFetch"))
+_viol = _mkd(); _pv = os.path.join(_viol, "p"); open(_pv, "w").write("deny Net\n")          # leaf performs Net → violation
+_clean = _mkd(); _pc = os.path.join(_clean, "p"); open(_pc, "w").write("deny Db\n")          # leaf has no Db → clean
+_missing = os.path.join(_mkd(), "no-such-policy")                                            # never created
+
+# --version / -V (spec §3.3): `candor-agents <ver> (candor-spec <X>)`, offline, exit 0. Top-level AND
+# as a subcommand flag (scan/observe route -V/--version before their arg walk).
+from candor_agents.scan import VERSION as _VER, SPEC as _SPEC
+_vline = f"candor-agents {_VER} (candor-spec {_SPEC})"
+for _form in (["--version"], ["-V"], ["scan", "--version"], ["observe", "-V"]):
+    rv = cli(*_form)
+    check(f"cli {' '.join(_form)}: prints `candor-agents <ver> (candor-spec <X>)`, exit 0",
+          rv.returncode == 0 and rv.stdout.startswith(_vline), f"rc={rv.returncode} out={rv.stdout[:80]!r}")
+
+# bare scan → a report to disk, exit 0 (the static default)
+rb = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--fleet", "t")
+check("cli scan (bare) → report written, exit 0", rb.returncode == 0, rb.stderr[-200:])
+
+# `scan -h` / `scan --help` is a USAGE exit 0 — NOT consumed as a scan target (the swallow bug class)
+for _h in ("-h", "--help"):
+    rh = cli("scan", _h)
+    check(f"cli scan {_h}: usage to stderr, exit 0 (not swallowed as a target)",
+          rh.returncode == 0 and "USAGE" in rh.stderr and "scan" in rh.stderr, f"rc={rh.returncode}")
+rho = cli("observe", "-h")
+check("cli observe -h: usage exit 0", rho.returncode == 0 and "USAGE" in rho.stderr, f"rc={rho.returncode}")
+# top-level bare `-h` is exit 0 (asked for help); NO args is exit 2 (usage error) — the §3.3 split
+check("cli -h (top-level): help to stderr, exit 0", cli("-h").returncode == 0)
+check("cli (no args): usage error, exit 2", cli().returncode == 2)
+
+# an unknown flag FAILS with exit 2 — never silently ignored (the gateless-ignore class)
+ru = cli("scan", _cd, "--bogus")
+check("cli scan --bogus: unknown flag exits 2 (not silently ignored)",
+      ru.returncode == 2 and "unknown flag" in ru.stderr, f"rc={ru.returncode}")
+check("cli observe --bogus: unknown flag exits 2", cli("observe", _cd, "--transcripts", _cd, "--bogus").returncode == 2)
+
+# --json: stdout PARSES as the §2 envelope, human/progress on stderr, NO files written, exit 0
+_jdir = _mkd(); os.makedirs(os.path.join(_jdir, ".claude", "agents"))
+open(os.path.join(_jdir, ".claude", "agents", "leaf.md"), "w").write(agent("leaf", "WebFetch"))
+rj = cli("scan", _jdir, "--json")
+try:
+    _jrep = json.loads(rj.stdout)
+    _ok_json = (rj.returncode == 0 and _jrep["candor"]["spec"] == _SPEC
+                and isinstance(_jrep["functions"], list) and _jrep["package"]
+                and any(f["fn"] == "leaf" and f["inferred"] == ["Net"] for f in _jrep["functions"]))
+except Exception as _e:
+    _ok_json = False; _jrep = str(_e)
+check("cli scan --json: stdout parses as the §2 envelope, exit 0", _ok_json, str(_jrep)[:160])
+check("cli scan --json: writes NO report files (stdout-only)",
+      not any(f.endswith(".json") for f in os.listdir(_jdir)), os.listdir(_jdir))
+check("cli scan --json: the receipt/progress is on stderr (stdout stays pure JSON)",
+      "stdout (--json)" in rj.stderr, rj.stderr[-160:])
+
+# --policy: clean → exit 0; violating → exit 1; missing/unreadable → exit 2 (never a silent gate-pass)
+check("cli scan --policy <clean>: exit 0",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc).returncode == 0)
+rpv = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv)
+check("cli scan --policy <violating>: exit 1 with the AS-EFF-006 line on stderr",
+      rpv.returncode == 1 and "AS-EFF-006" in rpv.stderr, f"rc={rpv.returncode} err={rpv.stderr[-160:]!r}")
+check("cli scan --policy <missing>: exit 2 (gate NOT enforced, never a silent pass)",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _missing).returncode == 2)
+# $CANDOR_POLICY is honoured when the flag is absent (the flag wins); a violation via the env exits 1
+check("cli scan: $CANDOR_POLICY (no flag) gates too — a violation exits 1",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--fleet", "t",
+          env={"CANDOR_POLICY": _pv}).returncode == 1)
+
+# --json --policy <violating>: stdout is PURE JSON (violations go to stderr), exit 1 — a clean `| jq` pipe
+rjp = cli("scan", _jdir, "--json", "--policy", _pv)
+try:
+    json.loads(rjp.stdout); _pure = True
+except Exception:
+    _pure = False
+check("cli scan --json --policy <violating>: stdout stays pure JSON, violation on stderr, exit 1",
+      rjp.returncode == 1 and _pure and "AS-EFF-006" in rjp.stderr, f"rc={rjp.returncode} out={rjp.stdout[:80]!r}")
+
+# observe mirrors the same gate surface (the OBSERVED path — the one that shipped the crash). A tiny
+# transcript with a single Net tool_use, gated by `deny Net`.
+_otdir = _mkd()
+open(os.path.join(_otdir, "s.jsonl"), "w").write(
+    '{"message": {"content": [{"type": "tool_use", "id": "t1", "name": "WebFetch", '
+    '"input": {"url": "https://x.test"}}]}}\n')
+check("cli observe (bare) → report written, exit 0",
+      cli("observe", _otdir, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"), "--fleet", "t").returncode == 0)
+roj = cli("observe", _otdir, "--transcripts", _otdir, "--json", "--fleet", "t")
+try:
+    _orep = json.loads(roj.stdout); _ojson_ok = roj.returncode == 0 and _orep.get("mode") == "observed"
+except Exception:
+    _ojson_ok = False
+check("cli observe --json: stdout parses as the §2 observed envelope, exit 0", _ojson_ok, roj.stdout[:120])
+rop = cli("observe", _otdir, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"), "--fleet", "t", "--policy", _pv)
+check("cli observe --policy <violating>: exit 1 (the OBSERVED gate enforces)",
+      rop.returncode == 1 and "AS-EFF-006" in rop.stderr, f"rc={rop.returncode}")
+check("cli observe --policy <missing>: exit 2 (set-but-unreadable never silently passes)",
+      cli("observe", _otdir, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"), "--policy", _missing).returncode == 2)
+rojp = cli("observe", _otdir, "--transcripts", _otdir, "--json", "--fleet", "t", "--policy", _pv)
+try:
+    json.loads(rojp.stdout); _opure = True
+except Exception:
+    _opure = False
+check("cli observe --json --policy <violating>: pure JSON stdout, violation on stderr, exit 1",
+      rojp.returncode == 1 and _opure, f"rc={rojp.returncode}")
+
+print()
+
+
+# ══ policy.py: the in-process §6.2 gate, unit-tested + verdict PARITY with candor-query ════════════
+# The new in-process gate (policy.py) is the property that lets ONE policy file gate code AND fleets
+# identically — so it must (1) implement AS-EFF-006/008/009 exactly, and (2) AGREE with the unmodified
+# candor-query (candor-rust) on the same report. A divergence here is the silent-disagreement bug the
+# "no candor tool changed" design exists to prevent.
+from candor_agents import policy as _pol
+
+def _gate(policy_text, functions, callgraph):
+    return _pol.evaluate_policy(_pol.parse_policy(policy_text), functions, callgraph)
+
+# --- AS-EFF-006 (deny / pure) over transitive `inferred` ---
+_f006 = [{"fn": "boss", "inferred": ["Net", "Unknown"], "calls": ["leaf"]},
+         {"fn": "leaf", "inferred": ["Net"], "calls": []},
+         {"fn": "quiet", "inferred": ["Fs"], "calls": []}]
+_v = _gate("deny Net", _f006, {"boss": ["leaf"], "leaf": [], "quiet": []})
+check("policy AS-EFF-006: `deny Net` flags every unit that REACHES Net (boss+leaf), not the Fs unit",
+      sorted(re.search(r'`([^`]+)`', l).group(1) for l in _v if "AS-EFF-006" in l) == ["boss", "leaf"]
+      and all("[AS-EFF-006]" in l for l in _v), _v)
+check("policy AS-EFF-006: a clean policy (`deny Db`) over a Net/Fs fleet yields no violations",
+      _gate("deny Db", _f006, {}) == [])
+# `pure <scope>` is a deny with NO effects → ANY inferred effect on the scope is a violation
+_vp = _gate("pure leaf", _f006, {})
+check("policy AS-EFF-006: `pure leaf` (deny with no effects) flags leaf for performing Net",
+      len(_vp) == 1 and "leaf" in _vp[0] and "[AS-EFF-006]" in _vp[0], _vp)
+
+# --- AS-EFF-008 (allowlist, FAIL-CLOSED) over the literal surfaces ---
+# A unit reaches Net to two hosts; the allowlist clears only one → the other is a violation.
+_f008 = [{"fn": "fetcher", "inferred": ["Net"], "hosts": ["api.good.test", "evil.test"], "calls": []}]
+_va = _gate("allow Net api.good.test", _f008, {})
+# the violation names the BAD host in the `reaches { … }` list; the allowed host appears only in the
+# echoed rule (`allow Net api.good.test`), never in the reached-bad set.
+_va_bad = re.search(r"reaches \{ ([^}]*) \}", _va[0]).group(1) if _va else ""
+check("policy AS-EFF-008: a host OUTSIDE the allowlist is flagged (the cleared host is not)",
+      len(_va) == 1 and "[AS-EFF-008]" in _va[0]
+      and "evil.test" in _va_bad and "api.good.test" not in _va_bad, _va)
+check("policy AS-EFF-008: an allowlist covering every reached host clears it (no violation)",
+      _gate("allow Net api.good.test evil.test", _f008, {}) == [])
+# FAIL-CLOSED: the effect is reached but NO literal is visible (e.g. Db has no surface) → the surface
+# CANNOT be certified, so the allowlist must NOT clear it — a clean pass here would hide an invisible
+# forbidden endpoint behind the allowlist (the cardinal under-report).
+_f008b = [{"fn": "dbuser", "inferred": ["Db"], "calls": []}]   # Db reached, no `tables` surface
+_vc = _gate("allow Db public.users", _f008b, {})
+check("policy AS-EFF-008 FAIL-CLOSED: an effect reached with NO visible literal is uncertifiable, flagged",
+      len(_vc) == 1 and "no visible literal" in _vc[0] and "[AS-EFF-008]" in _vc[0], _vc)
+
+# --- AS-EFF-009 (forbid A -> B by callgraph reachability) ---
+_f009 = [{"fn": "web", "inferred": ["Net"], "calls": ["svc"]},
+         {"fn": "svc", "inferred": ["Fs"], "calls": ["db"]},
+         {"fn": "db", "inferred": ["Db"], "calls": []}]
+_cg009 = {"web": ["svc"], "svc": ["db"], "db": []}
+_vf = _gate("forbid web -> db", _f009, _cg009)
+check("policy AS-EFF-009: `forbid web -> db` fires on TRANSITIVE reachability (web→svc→db)",
+      len(_vf) == 1 and "[AS-EFF-009]" in _vf[0] and "web" in _vf[0] and "db" in _vf[0], _vf)
+check("policy AS-EFF-009: no path from the `from` layer → no violation (the reverse direction is clean)",
+      _gate("forbid db -> web", _f009, _cg009) == [])
+
+# --- VERDICT PARITY with the UNMODIFIED candor-query (the property that makes ONE gate code+fleets) ---
+# Parser parity: policy.parse_policy must agree with `candor-query parsepolicy` (the canonical shared
+# parser) on each rule kind — same drops, same scopes, same values. Then VERDICT parity: the violating
+# FUNCTION SET this gate produces over a real report must equal the set candor-query's gate (via
+# `whatif`, which shares the Rust matcher) reports for the same effect+policy.
+_fq2 = subprocess.run(["bash", os.path.join(HERE, "find-query.sh")], capture_output=True, text=True)
+_Q = _fq2.stdout.strip() if _fq2.returncode == 0 else ""
+if _Q and os.path.exists(_Q):
+    def _canon(text):
+        _t = os.path.join(_mkd(), "pol"); open(_t, "w").write(text + "\n")
+        out = subprocess.run([_Q, "parsepolicy", _t], capture_output=True, text=True).stdout
+        return json.loads(out)
+    def _norm(p):  # compare structure only (mine carries an extra `raw`; canon does not)
+        return {"deny": sorted((tuple(d["effects"]), d["scope"]) for d in p.get("deny", [])),
+                "allow": sorted((a["effect"], a["scope"], tuple(a["values"])) for a in p.get("allow", [])),
+                "forbid": sorted((f["from"], f["to"]) for f in p.get("forbid", []))}
+    _parser_ok = True
+    for _rule in ("deny Net", "pure helper", "deny Net api", "allow Net in api example.com",
+                  "allow Net example.com api.test", "forbid web -> db", "deny Exec Db tool",
+                  "allow Db in svc users orders", "allow", "deny", "bogus rule", "deny Net Db"):
+        if _norm(_pol.parse_policy(_rule)) != _norm(_canon(_rule)):
+            _parser_ok = False
+            print(f"  parser DIFF on {_rule!r}: mine={_pol.parse_policy(_rule)} canon={_canon(_rule)}")
+    check("policy parser parity: policy.parse_policy agrees with `candor-query parsepolicy` (canonical, "
+          "all rule kinds incl. malformed drops)", _parser_ok)
+
+    # Verdict parity: scan a real fleet, then for each effect compare this gate's AS-EFF-006 fn-set with
+    # candor-query `whatif <prefix> <fn> <Effect> <deny-policy>` (its gate fires the same matcher set).
+    _pd = _mkd(); os.makedirs(os.path.join(_pd, ".claude", "agents"))
+    open(os.path.join(_pd, ".claude", "agents", "boss.md"), "w").write(agent("boss", "Agent", body="Use `leaf`."))
+    open(os.path.join(_pd, ".claude", "agents", "leaf.md"), "w").write(agent("leaf", "WebFetch"))
+    _pre = os.path.join(_pd, "r")
+    subprocess.run([sys.executable, "-m", "candor_agents.scan", _pd, "--out", _pre, "--fleet", "t"],
+                   capture_output=True, text=True, cwd=HERE)
+    _prep = json.load(open(f"{_pre}.t.Fleet.json"))
+    _pcg = json.load(open(f"{_pre}.t.Fleet.callgraph.json"))
+    _polf = os.path.join(_pd, "denynet"); open(_polf, "w").write("deny Net\n")
+    # MINE: the AS-EFF-006 violating function set for `deny Net`.
+    _mine_fns = sorted(re.search(r'`([^`]+)`', l).group(1)
+                       for l in _gate("deny Net", _prep["functions"], _pcg) if "AS-EFF-006" in l)
+    # candor-query: `whatif <prefix> leaf Net <deny Net>` lists every fn the (already-present) Net would
+    # violate the policy on — the same Rust matcher candor's gate uses. Parse its `[AS-EFF-006] \`fn\`` lines.
+    _wi = subprocess.run([_Q, "whatif", f"{_pre}.t", "leaf", "Net", _polf], capture_output=True, text=True)
+    _q_fns = sorted(set(re.findall(r"\[AS-EFF-006\]\s+`([^`]+)`", _wi.stdout)))
+    check("policy VERDICT parity: this in-process gate flags the SAME function set as candor-query's "
+          "whatif for `deny Net` (one gate, code & fleets identically)",
+          _mine_fns == _q_fns and _mine_fns == ["boss", "leaf", "session"],
+          f"mine={_mine_fns} candor-query={_q_fns}")
+else:
+    print("  SKIP policy parity (candor-query not located/built)")
+
+print()
+
+
+# ══ adversarial input on EVERY parse path (the observe-crash lesson) ═══════════════════════════════
+# A malformed/oversized/binary file on ANY parse path must DEGRADE-and-DISCLOSE, never crash: a crash
+# aborts the run, no report is written, and the gate then silently does not run (the bug that shipped).
+# settings.json + scheduled_tasks.json are already covered above; this closes the remaining paths:
+# the agent `.md` readers, `.mcp.json` (scan AND guard), and asserts the disclosed bad-COUNT is exact.
+
+# (a) a non-UTF-8 / unreadable agent .md is DISCLOSED with a count, the rest of the fleet still scans
+_amd = _mkd(); os.makedirs(os.path.join(_amd, ".claude", "agents"))
+open(os.path.join(_amd, ".claude", "agents", "good.md"), "w").write(agent("good", "Read"))
+open(os.path.join(_amd, ".claude", "agents", "bad.md"), "wb").write(b"\xff\xfe\x00\x80 ---\nname: x\n--- not utf8")
+_ar = subprocess.run([sys.executable, "-m", "candor_agents.scan", _amd, "--out", os.path.join(_amd, "r"),
+                      "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+_arep = json.load(open(os.path.join(_amd, "r.t.Fleet.json"))) if _ar.returncode == 0 else None
+check("scan: a non-UTF-8 agent .md is disclosed by COUNT (not analyzed), never crashes the scan",
+      _ar.returncode == 0 and "1 .md file(s) could not be read" in _ar.stderr and "bad.md" in _ar.stderr,
+      (_ar.stderr or "")[-200:])
+check("scan: the readable agent beside the poison .md still produces its unit (no silent total loss)",
+      _arep is not None and entry(_arep, "good") is not None)
+
+# (b) an oversized agent .md (lots of garbage frontmatter-ish lines) must parse without crashing or
+# hanging — the frontmatter regex/line walk handles a big malformed body, disclosing nothing it shouldn't.
+_big = _mkd(); os.makedirs(os.path.join(_big, ".claude", "agents"))
+open(os.path.join(_big, ".claude", "agents", "huge.md"), "w").write(
+    "---\nname: huge\ntools: Read\n" + "junk-key: " + ("x," * 50000) + "\n---\n" + ("body line\n" * 20000))
+_bigr = subprocess.run([sys.executable, "-m", "candor_agents.scan", _big, "--out", os.path.join(_big, "r"),
+                        "--fleet", "t"], capture_output=True, text=True, cwd=HERE, timeout=60)
+check("scan: an oversized/garbage-laden agent .md parses without crashing or hanging",
+      _bigr.returncode == 0 and entry(json.load(open(os.path.join(_big, "r.t.Fleet.json"))), "huge") is not None,
+      (_bigr.stderr or "")[-160:])
+
+# (c) malformed .mcp.json (scan): both invalid-JSON and a valid-but-WRONG-shape file must DISCLOSE
+# (servers unknown), never crash — a crash kills the report and the gate. Mirrors the settings reader.
+for _label, _content in (("invalid-json", "{ this is not json"), ("wrong-shape-list", "[1, 2, 3]"),
+                         ("wrong-shape-scalar", "42")):
+    _md = _mkd(); os.makedirs(os.path.join(_md, ".claude", "agents"))
+    open(os.path.join(_md, ".claude", "agents", "a.md"), "w").write(agent("a", "WebFetch"))
+    open(os.path.join(_md, ".mcp.json"), "w").write(_content)
+    _mr = subprocess.run([sys.executable, "-m", "candor_agents.scan", _md, "--out", os.path.join(_md, "r"),
+                          "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+    _mrep = json.load(open(os.path.join(_md, "r.t.Fleet.json"))) if _mr.returncode == 0 else None
+    check(f"scan: malformed .mcp.json ({_label}) is DISCLOSED (servers unknown), never crashes",
+          _mr.returncode == 0 and "unreadable .mcp.json" in _mr.stderr and _mrep is not None
+          and entry(_mrep, "a") is not None, (_mr.stderr or "")[-160:])
+
+# (d) malformed .mcp.json (guard): guard must DISCLOSE the omission, not silently UNDER-PROTECT (emit a
+# permissions.deny that quietly leaves a server un-denied). It warns and proceeds.
+_gmd = _mkd(); open(os.path.join(_gmd, ".mcp.json"), "w").write("{ not json")
+_gg = guard.compile_guard("deny Net", project_dir=_gmd)
+check("guard: malformed .mcp.json is DISCLOSED (mcp server denies omitted — verify manually), not a "
+      "silent under-protect", any("unreadable" in w and "omitted" in w for w in _gg["warnings"]), _gg["warnings"])
+
+# (e) the observe-transcript lane (the path that shipped the crash): assert the disclosed bad-line count
+# is EXACT — counted-bad lines all disclosed (no silent drop), wrong-shape-but-parseable lines NOT
+# over-counted. (The fuzzer asserts this over random mixes; this is a pinned, readable case.)
+_otl = _mkd()
+_counted = ["5", '"x"', "true", "null", "[1, 2]", "not json {", "{unterminated"]              # 7 → all counted bad
+_uncounted = ['{"message": "a string"}', '{"message": 5}', '{"message": {"content": "nope"}}',  # parse OK, skipped
+              '{"other": 1}']
+_valid = ['{"message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", '
+          '"input": {"command": "curl https://x.test"}}]}}']
+open(os.path.join(_otl, "s.jsonl"), "w").write("\n".join(_counted + _uncounted + _valid) + "\n")
+_olr = subprocess.run([sys.executable, "-m", "candor_agents.observe", _otl, "--transcripts", _otl,
+                       "--out", os.path.join(_otl, "o"), "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+_om = re.search(r"skipped (\d+) unparseable line", _olr.stderr)
+check("observe: the disclosed bad-line count is EXACT — every counted-bad line disclosed, no wrong-shape "
+      "over-count, no silent drop",
+      _olr.returncode == 0 and _om is not None and int(_om.group(1)) == len(_counted),
+      f"rc={_olr.returncode} stderr={_olr.stderr[-160:]!r}")
+check("observe: a report IS written despite the malformed lines (the OBSERVED gate still runs)",
+      os.path.exists(os.path.join(_otl, "o.t.Observed.json")))
+# the valid tool_use was still observed past the bad lines (the reader recovered, didn't bail at line 1)
+_oob = json.load(open(os.path.join(_otl, "o.t.Observed.json")))
+check("observe: the one VALID tool_use is observed past the malformed lines (Exec from the curl)",
+      any("Exec" in f["inferred"] for f in _oob["functions"]), json.dumps([f["fn"] for f in _oob["functions"]]))
 
 print()
 
