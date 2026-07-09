@@ -183,6 +183,47 @@ check("ambient agent carries Unknown + the big set",
 check("ambient why names the cause", "ambient:tools-unrestricted" in e.get("unknownWhy", []))
 check("ambient reaches the uncurated MCP server", "mcp-uncurated:billing" in e.get("unknownWhy", []))
 
+# ── 3b. --nested-spawn: ambient agents as delegators (harnesses that allow nested spawning) ──────
+# Stock Claude Code subagents cannot nest-spawn, so an AMBIENT agent (no `tools:` line) gets NO
+# delegation edges by default — with `Agent` ambient, a real 182-agent public fleet produced a
+# ~20k-edge all-reaches-all smear (the wshobson/agents find). --nested-spawn opts back in for
+# harnesses that DO allow it. Both behaviors are pinned here (the flag had zero coverage and it
+# flips the whole delegation model for ambient agents).
+def scan_flags(files, *flags):
+    d = tempfile.mkdtemp()
+    adir = os.path.join(d, ".claude", "agents")
+    os.makedirs(adir)
+    for fname, content in files.items():
+        open(os.path.join(adir, fname), "w").write(content)
+    out = os.path.join(d, "r")
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out, "--fleet", "t", *flags],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return (json.load(open(f"{out}.t.Fleet.json")), json.load(open(f"{out}.t.Fleet.callgraph.json")))
+
+_nsfleet = {
+    "amb.md": agent("amb", None, body="Do whatever it takes."),   # ambient: no tools line
+    "worker.md": agent("worker", "WebFetch"),
+    "off.md": agent("off", "Bash"),
+    "scoped.md": agent("scoped", "Read"),                          # confined: never a delegator
+}
+rep, cg = scan_flags(_nsfleet)
+check("--nested-spawn OFF (default): an ambient agent gets NO delegation edges (stock harness: "
+      "subagents cannot nest-spawn — the honest graph, no all-reaches-all smear)",
+      cg["amb"] == [], f"got {cg['amb']}")
+rep, cg = scan_flags(_nsfleet, "--nested-spawn")
+check("--nested-spawn ON: an ambient agent becomes a bare-Agent delegator (CHA over the fleet)",
+      cg["amb"] == ["off", "scoped", "worker"], f"got {cg['amb']}")
+check("--nested-spawn ON: a CONFINED agent (Read, no Agent grant) still gets no edges",
+      cg["scoped"] == [], f"got {cg['scoped']}")
+# a prompt mention narrows the nested-spawn ambient delegator like any bare-Agent holder (rung 2)
+_nsnamed = dict(_nsfleet, **{"amb.md": agent("amb", None, body="Delegate to `worker` only.")})
+rep, cg = scan_flags(_nsnamed, "--nested-spawn")
+check("--nested-spawn ON: a prompt mention narrows the ambient delegator's edges (worker only), "
+      "with the ambient Unknown residual still disclosed",
+      cg["amb"] == ["worker"] and "Unknown" in entry(rep, "amb")["inferred"], f"got {cg['amb']}")
+
+
 # ── 4. MCP: curated vs Unknown ────────────────────────────────────────────────────────────────────
 rep, _ = scan({
     "m.md": agent("m", "mcp__gmail__send, Read"),

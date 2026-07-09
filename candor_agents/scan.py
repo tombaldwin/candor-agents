@@ -835,24 +835,6 @@ def main():
     # from `allowed-tools` (specifiers stripped to the base tool — `Bash(git:*)` is still Exec, the
     # cliff) plus, for a command, the heads of any `!` shell line. An ABSENT `allowed-tools` is PURE
     # (a prompt-only command), NOT ambient — the opposite of an agent's absent `tools:`.
-    def _split_tools(s):
-        """Comma-split a tool list, respecting parens so `Bash(a, b), Read` keeps the specifier whole."""
-        out, buf, depth = [], "", 0
-        for ch in s:
-            if ch == "(":
-                depth += 1; buf += ch
-            elif ch == ")":
-                depth = max(0, depth - 1); buf += ch
-            elif ch == "," and depth == 0:
-                out.append(buf); buf = ""
-            else:
-                buf += ch
-        out.append(buf)
-        # _unquote each item: a quoted `"Bash(git:*)"` specifier must keep its meaning, not become a
-        # `"Bash` base that classifies as Unknown and slips an effect-specific deny gate (the parens/
-        # colon/star in a Bash specifier are exactly what invites YAML quoting).
-        return [u for x in out if (u := _unquote(x))]
-
     def _raw_tools(meta):
         """The raw `allowed-tools` items (specifiers intact), or [] if absent."""
         v = meta.get("allowed-tools")
@@ -863,7 +845,7 @@ def main():
         s = _unquote(str(v).strip())  # a whole-value quote around an inline list / single specifier
         if s.startswith("[") and s.endswith("]"):
             s = s[1:-1]
-        return _split_tools(s)
+        return split_tools(s)  # the ONE paren-aware splitter (shared with the agent `tools:` path)
 
     def _bash_spec_head(spec):
         """The command word a `Bash(...)` specifier scopes to (`git diff:*`→git, `*candor-run.sh*`
