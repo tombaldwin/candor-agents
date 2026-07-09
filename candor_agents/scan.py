@@ -570,8 +570,10 @@ USAGE: candor-agents scan <project-dir> [--out <prefix>] [--json] [--policy <fil
 See https://github.com/tombaldwin/candor-agents"""
 
 
-def main():
-    args = sys.argv[1:]
+def parse_args(args):
+    """The scan CLI surface (spec §3.3) in ONE pass — returns the parsed options tuple
+    (root, out, fleet, link, nested, as_json, gate_json, policy_path), or an int EXIT CODE for the
+    print-and-exit modes (--version/--help) and argument errors, which the caller returns unchanged."""
     # `-V`/`--version` and `-h`/`--help` are print-and-exit MODES, handled BEFORE the arg walk so a
     # single-dash `-h`/`-V` is never mistaken for a flag-value or swallowed by the positional capture.
     if "--version" in args or "-V" in args:
@@ -641,23 +643,19 @@ def main():
         return 2
     if fleet is None:
         fleet = os.path.basename(os.path.abspath(root)) or "fleet"
-    # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-
-    # unusable config fails the run up front (exit 2) and a checked-in `policy` becomes the gate floor.
-    # drift's internal scan/observe run GATE-FREE (cli._run scrubs the env + sets the marker): drift
-    # compares declared vs observed — a standing gate firing inside the comparison aborted it.
-    if os.environ.get("_CANDOR_AGENTS_NO_GATE") == "1":
-        policy_path = None
-    else:
-        policy_path = config_policy(policy_path, root)
+    return root, out, fleet, link, nested, as_json, gate_json, policy_path
 
-    # MCP servers configured for the project — plus any DECLARED capabilities: a `candorEffects`
-    # array on a server's entry ("candorEffects": ["Net","Ipc"]) classifies that server exactly like
-    # a curated-table entry, killing its Unknown. Two-tier trust, mirroring the code engines:
-    # the curated MCP_TABLE is candor's own claim; a declaration is the PROJECT's claim (the
-    # classify_extra / CANDOR_DEPS analog) — accepted as stated, so the report is only as true as
-    # the declaration (declared, not verified). An effect name outside the vocabulary is NEVER
-    # silently accepted: the server stays Unknown with `mcp-decl-invalid:<server>:<name>` so a typo
-    # ("net") can't silently narrow the surface. `"candorEffects": []` declares a PURE server.
+
+def read_mcp(root):
+    """MCP servers configured for the project (`.mcp.json`) — plus any DECLARED capabilities: a
+    `candorEffects` array on a server's entry ("candorEffects": ["Net","Ipc"]) classifies that
+    server exactly like a curated-table entry, killing its Unknown. Two-tier trust, mirroring the
+    code engines: the curated MCP_TABLE is candor's own claim; a declaration is the PROJECT's claim
+    (the classify_extra / CANDOR_DEPS analog) — accepted as stated, so the report is only as true as
+    the declaration (declared, not verified). An effect name outside the vocabulary is NEVER
+    silently accepted: the server stays Unknown with `mcp-decl-invalid:<server>:<name>` so a typo
+    ("net") can't silently narrow the surface. `"candorEffects": []` declares a PURE server.
+    Returns (server names, server -> declared effect set, server -> the invalid voiding name)."""
     mcp_servers = []
     declared_mcp = {}  # server -> declared effect set (validated)
     declared_bad = {}  # server -> the invalid name that voided its declaration
@@ -678,11 +676,14 @@ def main():
                     declared_mcp[name] = set(decl)  # [] = declared PURE (maximally confined)
         except Exception as e:
             print(f"candor-agents: unreadable .mcp.json ({e}) — servers unknown", file=sys.stderr)
+    return mcp_servers, declared_mcp, declared_bad
 
-    # Agent definitions.
-    agents = {}  # name -> {tools: list|None, body, desc}
+
+def read_agents(root, unreadable):
+    """Agent definitions (`.claude/agents/*.md`): name -> {tools: list|None, body, desc, file}.
+    Unreadable files are collected in `unreadable` (disclosed, never fatal)."""
+    agents = {}
     dup_names = set()  # agent `name:`s declared by >1 file — disambiguated below, NEVER silently clobbered
-    unreadable = []  # .md files that couldn't be read (permission/encoding) — disclosed, never fatal
     adir = os.path.join(root, ".claude", "agents")
     if os.path.isdir(adir):
         skipped = []
@@ -725,23 +726,31 @@ def main():
             print(f"candor-agents: skipped {len(skipped)} .md file(s) with no frontmatter "
                   f"(not agent definitions): {', '.join(skipped[:5])}{'…' if len(skipped) > 5 else ''}",
                   file=sys.stderr)
-    # ── hooks: commands the harness runs AUTOMATICALLY on tool events ─────────────────────────
-    # `.claude/settings.json` / `settings.local.json` hook entries are fleet capability surface:
-    # a PreToolUse/PostToolUse/Stop hook executes a shell command on every matching event with no
-    # agent deciding anything. One `hooks` unit carries them — Exec (the Bash cliff applies) plus
-    # the command heads as the literal surface; the session root edges to it. A hook type this
-    # scanner doesn't know reads Unknown, never silence. User-level (~/.claude) hooks are out of
-    # scope: the scan describes the PROJECT.
+    return agents
+
+
+def read_settings(root):
+    """`.claude/settings.json` / `settings.local.json` — the two capability surfaces they carry.
+
+    HOOKS: commands the harness runs AUTOMATICALLY on tool events. A PreToolUse/PostToolUse/Stop
+    hook executes a shell command on every matching event with no agent deciding anything. One
+    `hooks` unit carries them — Exec (the Bash cliff applies) plus the command heads as the literal
+    surface; the session root edges to it. A hook type this scanner doesn't know reads Unknown,
+    never silence. User-level (~/.claude) hooks are out of scope: the scan describes the PROJECT.
+
+    PERMISSIONS: `permissions.deny` is HARD-ENFORCED by the harness (precedence deny > ask >
+    allow), so a WHOLLY-denied tool/server is genuinely unreachable — candor SUBTRACTS it. This is
+    the one place the may-analysis tightens on sound data. A SCOPED deny (`Bash(curl:*)`, one mcp
+    tool `mcp__s__t`, a path glob) removes only a SUBSET of a tool's uses — the tool stays usable,
+    so it is recorded as informative but NOT subtracted (the Bash cliff: Exec survives one denied
+    command). `allow`/`ask` don't expand capability and are ignored (candor stays an upper bound).
+    Hooks BYPASS the permission system (the harness runs them directly), so a `deny Bash` never
+    strips the hooks unit's Exec.
+
+    Returns (hook_cmds, hook_events, hook_why, tool_hook_matchers — matchers of TOOL-event hooks
+    that run a command, the per-agent reach —, denied_tools, denied_servers, scoped_denies)."""
     hook_cmds, hook_events, hook_why = set(), [], set()
-    tool_hook_matchers = []  # matchers of TOOL-event hooks that run a command — the per-agent reach
-    # `permissions.deny` (settings.json) is HARD-ENFORCED by the harness (precedence deny > ask >
-    # allow), so a WHOLLY-denied tool/server is genuinely unreachable — candor SUBTRACTS it. This is
-    # the one place the may-analysis tightens on sound data. A SCOPED deny (`Bash(curl:*)`, one mcp
-    # tool `mcp__s__t`, a path glob) removes only a SUBSET of a tool's uses — the tool stays usable,
-    # so it is recorded as informative but NOT subtracted (the Bash cliff: Exec survives one denied
-    # command). `allow`/`ask` don't expand capability and are ignored (candor stays an upper bound).
-    # Hooks BYPASS the permission system (the harness runs them directly), so a `deny Bash` never
-    # strips the hooks unit's Exec.
+    tool_hook_matchers = []
     denied_tools, denied_servers, scoped_denies = set(), set(), set()
     for sf in ("settings.json", "settings.local.json"):
         sp = os.path.join(root, ".claude", sf)
@@ -803,70 +812,74 @@ def main():
                     tool_hook_matchers.append(ent.get("matcher", "") if isinstance(ent.get("matcher"), str) else "")
             if n_cmds:
                 hook_events.append(f"{event}({n_cmds})")
-    has_hooks = bool(hook_events or hook_why)
+    return (hook_cmds, hook_events, hook_why, tool_hook_matchers,
+            denied_tools, denied_servers, scoped_denies)
 
-    # Apply the harness-enforced denials: drop a wholly-denied tool/server from any grant list. A
-    # specifier (`Bash(curl:*)`) is left in place — base tool stays usable, so its effect stays.
-    def live(tools):
-        """A grant list with the wholly-denied tools/servers removed (None stays ambient)."""
-        if tools is None:
-            return None
-        out = []
-        for t in tools:
-            b = t.split("(", 1)[0].strip()
-            if b in denied_tools:
+
+def live(tools, denied_tools, denied_servers):
+    """Apply the harness-enforced denials: a grant list with the wholly-denied tools/servers removed
+    (None stays ambient). A specifier (`Bash(curl:*)`) is left in place — base tool stays usable, so
+    its effect stays."""
+    if tools is None:
+        return None
+    out = []
+    for t in tools:
+        b = t.split("(", 1)[0].strip()
+        if b in denied_tools:
+            continue
+        if b.startswith("mcp__"):
+            seg = b.split("__")
+            if len(seg) >= 2 and seg[1] in denied_servers:
                 continue
-            if b.startswith("mcp__"):
-                seg = b.split("__")
-                if len(seg) >= 2 and seg[1] in denied_servers:
-                    continue
-            out.append(t)
-        return out
-    ambient_live = [t for t in AMBIENT if t not in denied_tools]
-    live_servers = [s for s in mcp_servers if s not in denied_servers]
-    for a in agents.values():
-        a["lt"] = live(a["tools"])  # deny-filtered grants, used for effects/edges/link
+        out.append(t)
+    return out
 
-    # ── slash commands + skills: in-session capability/entry units ────────────────────────────────
-    # `.claude/commands/**/*.md` (a `/command`) and `.claude/skills/*/SKILL.md` (a model-invoked
-    # skill) each carry their OWN `allowed-tools` frontmatter and a command may run `!`-prefixed
-    # shell — a capability surface distinct from the agents. The session root invokes them; they hold
-    # tools (so a tool-event hook can fire on their use) but do not themselves delegate. Effects come
-    # from `allowed-tools` (specifiers stripped to the base tool — `Bash(git:*)` is still Exec, the
-    # cliff) plus, for a command, the heads of any `!` shell line. An ABSENT `allowed-tools` is PURE
-    # (a prompt-only command), NOT ambient — the opposite of an agent's absent `tools:`.
-    def _raw_tools(meta):
-        """The raw `allowed-tools` items (specifiers intact), or [] if absent."""
-        v = meta.get("allowed-tools")
-        if v is None:
-            return []
-        if isinstance(v, list):
-            return [u for x in v if (u := _unquote(str(x)))]
-        s = _unquote(str(v).strip())  # a whole-value quote around an inline list / single specifier
-        if s.startswith("[") and s.endswith("]"):
-            s = s[1:-1]
-        return split_tools(s)  # the ONE paren-aware splitter (shared with the agent `tools:` path)
 
-    def _bash_spec_head(spec):
-        """The command word a `Bash(...)` specifier scopes to (`git diff:*`→git, `*candor-run.sh*`
-        →candor-run.sh) — a literal subprocess surface like a `!`-shell line. '' if not a plain word."""
-        s = spec.split(":", 1)[0].strip().strip("*")  # drop the :args tail, surrounding globs
-        s = (s.split() or [""])[0].rsplit("/", 1)[-1]  # the command word, basenamed
-        return s if _CMD_NAME.match(s) else ""
+def _raw_tools(meta):
+    """The raw `allowed-tools` items (specifiers intact), or [] if absent."""
+    v = meta.get("allowed-tools")
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return [u for x in v if (u := _unquote(str(x)))]
+    s = _unquote(str(v).strip())  # a whole-value quote around an inline list / single specifier
+    if s.startswith("[") and s.endswith("]"):
+        s = s[1:-1]
+    return split_tools(s)  # the ONE paren-aware splitter (shared with the agent `tools:` path)
 
-    def _heads(raw, body):
-        """Literal subprocess heads of a command: `!`-shell lines + `Bash(...)` allowed-tools specifiers."""
-        heads = set()
-        for line in body.splitlines():
-            if line.lstrip().startswith("!"):
-                heads |= bash_cmds(line.lstrip()[1:])
-        for item in raw:
-            if item.split("(", 1)[0].strip() == "Bash" and "(" in item and item.endswith(")"):
-                h = _bash_spec_head(item[item.index("(") + 1:-1])
-                if h:
-                    heads.add(h)
-        return heads
 
+def _bash_spec_head(spec):
+    """The command word a `Bash(...)` specifier scopes to (`git diff:*`→git, `*candor-run.sh*`
+    →candor-run.sh) — a literal subprocess surface like a `!`-shell line. '' if not a plain word."""
+    s = spec.split(":", 1)[0].strip().strip("*")  # drop the :args tail, surrounding globs
+    s = (s.split() or [""])[0].rsplit("/", 1)[-1]  # the command word, basenamed
+    return s if _CMD_NAME.match(s) else ""
+
+
+def _heads(raw, body):
+    """Literal subprocess heads of a command: `!`-shell lines + `Bash(...)` allowed-tools specifiers."""
+    heads = set()
+    for line in body.splitlines():
+        if line.lstrip().startswith("!"):
+            heads |= bash_cmds(line.lstrip()[1:])
+    for item in raw:
+        if item.split("(", 1)[0].strip() == "Bash" and "(" in item and item.endswith(")"):
+            h = _bash_spec_head(item[item.index("(") + 1:-1])
+            if h:
+                heads.add(h)
+    return heads
+
+
+def read_commands_skills(root, unreadable):
+    """Slash commands + skills: in-session capability/entry units.
+
+    `.claude/commands/**/*.md` (a `/command`) and `.claude/skills/*/SKILL.md` (a model-invoked
+    skill) each carry their OWN `allowed-tools` frontmatter and a command may run `!`-prefixed
+    shell — a capability surface distinct from the agents. The session root invokes them; they hold
+    tools (so a tool-event hook can fire on their use) but do not themselves delegate. Effects come
+    from `allowed-tools` (specifiers stripped to the base tool — `Bash(git:*)` is still Exec, the
+    cliff) plus, for a command, the heads of any `!` shell line. An ABSENT `allowed-tools` is PURE
+    (a prompt-only command), NOT ambient — the opposite of an agent's absent `tools:`."""
     commands, skills = {}, {}
     cdir = os.path.join(root, ".claude", "commands")
     if os.path.isdir(cdir):
@@ -896,15 +909,18 @@ def main():
             raw = _raw_tools(meta)
             skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
                                     "file": os.path.relpath(sm, root), "heads": _heads(raw, body)}
+    return commands, skills
 
-    # ── scheduled tasks: autonomous entry points ──────────────────────────────────────────────────
-    # A DURABLE cron job (CronCreate `durable: true`) persists to .claude/scheduled_tasks.json and
-    # fires on its own wall-clock schedule — no human, no caller. Each enqueues a prompt into a fresh
-    # session, so its reach is the WHOLE session's capability (it can drive any agent/command/skill):
-    # a `cron:<id>` entry-point unit that edges to the session root. Non-durable cron is in-memory only
-    # (never on disk) and correctly invisible to a static scan — the report describes what's DECLARED
-    # to persist. This is the fleet's autonomous-trigger surface: `deny Net cron:x` gates it.
-    crons = {}  # unit name -> {cron, prompt}
+
+def read_crons(root):
+    """Scheduled tasks: autonomous entry points. A DURABLE cron job (CronCreate `durable: true`)
+    persists to .claude/scheduled_tasks.json and fires on its own wall-clock schedule — no human,
+    no caller. Each enqueues a prompt into a fresh session, so its reach is the WHOLE session's
+    capability (it can drive any agent/command/skill): a `cron:<id>` entry-point unit that edges to
+    the session root. Non-durable cron is in-memory only (never on disk) and correctly invisible to
+    a static scan — the report describes what's DECLARED to persist. This is the fleet's
+    autonomous-trigger surface: `deny Net cron:x` gates it. Returns unit name -> {cron, prompt}."""
+    crons = {}
     spath = os.path.join(root, ".claude", "scheduled_tasks.json")
     if os.path.exists(spath):
         try:
@@ -924,9 +940,43 @@ def main():
             if ckey in crons:  # two scheduled tasks sharing an explicit id/name — keep both (the same
                 ckey = f"cron:{tid}#{i}"  # silent-clobber class as duplicate agent names above)
             crons[ckey] = {"cron": str(t.get("cron", "")), "prompt": str(t.get("prompt", ""))}
+    return crons
+
+
+def main():
+    opts = parse_args(sys.argv[1:])
+    if isinstance(opts, int):
+        return opts
+    root, out, fleet, link, nested, as_json, gate_json, policy_path = opts
+    # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-
+    # unusable config fails the run up front (exit 2) and a checked-in `policy` becomes the gate floor.
+    # drift's internal scan/observe run GATE-FREE (cli._run scrubs the env + sets the marker): drift
+    # compares declared vs observed — a standing gate firing inside the comparison aborted it.
+    if os.environ.get("_CANDOR_AGENTS_NO_GATE") == "1":
+        policy_path = None
+    else:
+        policy_path = config_policy(policy_path, root)
+
+    mcp_servers, declared_mcp, declared_bad = read_mcp(root)
+
+    unreadable = []  # .md files that couldn't be read (permission/encoding) — disclosed, never fatal
+    agents = read_agents(root, unreadable)
+    (hook_cmds, hook_events, hook_why, tool_hook_matchers,
+     denied_tools, denied_servers, scoped_denies) = read_settings(root)
+    has_hooks = bool(hook_events or hook_why)
+
+    # Apply the harness-enforced denials (see live()).
+    ambient_live = [t for t in AMBIENT if t not in denied_tools]
+    live_servers = [s for s in mcp_servers if s not in denied_servers]
+    for a in agents.values():
+        a["lt"] = live(a["tools"], denied_tools, denied_servers)  # deny-filtered grants, used for effects/edges/link
+
+    commands, skills = read_commands_skills(root, unreadable)
+    crons = read_crons(root)
 
     if not agents and not has_hooks and not commands and not skills and not crons:
-        print(f"candor-agents: no agent definitions under {adir}, no commands/skills, no hooks, and no "
+        print(f"candor-agents: no agent definitions under {os.path.join(root, '.claude', 'agents')}, "
+              f"no commands/skills, no hooks, and no "
               f"scheduled tasks — nothing to analyze.", file=sys.stderr)
         return 2
     if denied_tools or denied_servers or scoped_denies:
@@ -1019,8 +1069,8 @@ def main():
         # Lifecycle hooks (Stop/SessionStart/…) stay session-only. Conservative: an unparseable
         # matcher edges no unit (under-report, never fabricate). Holders carry deny-filtered tools.
         holders = {n: a["lt"] for n, a in agents.items()}
-        holders.update({n: live(c["tools"]) for n, c in commands.items()})
-        holders.update({n: live(s["tools"]) for n, s in skills.items()})
+        holders.update({n: live(c["tools"], denied_tools, denied_servers) for n, c in commands.items()})
+        holders.update({n: live(s["tools"], denied_tools, denied_servers) for n, s in skills.items()})
         for name, tools in holders.items():
             if any(tools_match_matcher(tools, m) for m in tool_hook_matchers):
                 calls[name] = sorted(set(calls[name]) | {HOOKS})
@@ -1074,11 +1124,11 @@ def main():
                 effs |= COMMAND_HEAD.get(h, set())
         return effs
     for u, c in commands.items():
-        effs, fs, why = classify(live(c["tools"]), live_servers, declared_mcp, declared_bad)
+        effs, fs, why = classify(live(c["tools"], denied_tools, denied_servers), live_servers, declared_mcp, declared_bad)
         direct[u], fs_detail[u], why_map[u] = with_heads(c, effs), fs, why
         unresolved_direct[u] = "Unknown" in direct[u]
     for u, sk in skills.items():
-        effs, fs, why = classify(live(sk["tools"]), live_servers, declared_mcp, declared_bad)
+        effs, fs, why = classify(live(sk["tools"], denied_tools, denied_servers), live_servers, declared_mcp, declared_bad)
         direct[u], fs_detail[u], why_map[u] = with_heads(sk, effs), fs, why
         unresolved_direct[u] = "Unknown" in direct[u]
     me, mf, mw = classify(ambient_live, live_servers, declared_mcp, declared_bad)
@@ -1125,7 +1175,7 @@ def main():
         # known external tools (spec §4 transitive bound: e.g. one that only runs candor *over* the code
         # reads Fs, it doesn't perform the code's Net/Db). Bare-Bash or any unknown head keeps the link.
         for u, unit in {**commands, **skills}.items():
-            if "Bash" in live(unit["tools"]) and not (unit["heads"] and all(h in COMMAND_HEAD for h in unit["heads"])):
+            if "Bash" in live(unit["tools"], denied_tools, denied_servers) and not (unit["heads"] and all(h in COMMAND_HEAD for h in unit["heads"])):
                 calls[u] = sorted(set(calls[u]) | set(linked))
         calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
 
