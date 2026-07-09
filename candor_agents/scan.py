@@ -20,8 +20,8 @@ import os
 import re
 import sys
 
-SPEC = "0.7"
-VERSION = "agents-0.7.2"
+SPEC = "0.8"
+VERSION = "agents-0.8.0"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -96,6 +96,91 @@ AMBIENT = sorted(TOOL_EFFECTS)
 # Hook events that fire on a TOOL USE (so they reach back into the agent that triggered them) vs
 # session-lifecycle events (Stop/SessionStart/…) which fire at the session level only.
 TOOL_HOOK_EVENTS = {"PreToolUse", "PostToolUse"}
+
+# ── .candor/config (spec §3.4, amended within 0.8): the checked-in alternative to CANDOR_* env ────
+# The shared cross-engine key vocabulary. candor-agents implements `policy` only; the other keys
+# drive modes this engine does not have (baseline ratchet, JVM conformance, …) — a config carrying
+# one is warned LOUDLY (below), because a reader of the checked-in file could otherwise believe a
+# gate is active here that is not.
+CONFIG_KEYS = {"policy", "baseline", "strict", "no-ambient", "closed-world", "taint", "deps"}
+CONFIG_IMPLEMENTED = {"policy"}
+
+
+def load_candor_config(target):
+    """Locate + parse `.candor/config` for a scan of `target` (spec §3.4). Returns (cfg, base_dir).
+
+    Discovery is anchored to the SCAN TARGET, never the CWD: walk UP from the target to the nearest
+    `.candor/config`, so the config that travels with the scanned fleet applies regardless of where
+    the process was launched. A set `$CANDOR_CONFIG` overrides discovery entirely. FAIL-CLOSED: a
+    configured-but-unusable file (a set CANDOR_CONFIG naming a missing path; a discovered file that
+    exists but cannot be read) exits 2 — the file may carry the `policy` gate, and a silently-dropped
+    config is a silently-dropped gate (the §6.2 unreadable-policy posture). Only genuine absence is
+    an empty config. A key outside the vocabulary warns (a misspelt `policy` must never silently
+    drop the gate); a family key this engine does not implement warns that its gate is NOT active
+    here. `base_dir` is what RELATIVE path values resolve against (the family decision — the config
+    file's location, not the CWD): the directory holding `.candor/` for the canonical layout, the
+    override file's own directory otherwise."""
+    file = os.environ.get("CANDOR_CONFIG")
+    if file is not None:
+        if not os.path.isfile(file):
+            print(f"candor-agents: CANDOR_CONFIG set but {file or '(empty)'} is not a readable file "
+                  f"— failing (exit 2)", file=sys.stderr)
+            raise SystemExit(2)
+    else:
+        d = os.path.abspath(target)
+        if not os.path.isdir(d):
+            d = os.path.dirname(d)
+        while True:
+            cand = os.path.join(d, ".candor", "config")
+            if os.path.isfile(cand):
+                file = cand
+                break
+            parent = os.path.dirname(d)
+            if parent == d:
+                break  # filesystem root — genuine absence (no CWD fallback: target-anchored only)
+            d = parent
+        if file is None:
+            return {}, None
+    try:
+        text = open(file, encoding="utf-8").read()
+    except OSError as e:
+        print(f"candor-agents: config {file} exists but could not be read ({e}) — failing (exit 2), "
+              f"a configured gate source must not vanish silently", file=sys.stderr)
+        raise SystemExit(2)
+    cfg = {}
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()  # `#` begins a comment, inline too (§6.2 lexical)
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        key = parts[0].lower()
+        val = parts[1].strip() if len(parts) > 1 else ""  # a bare key = enabled with the empty value
+        if key not in CONFIG_KEYS:
+            print(f"candor-agents: ignoring unknown config key '{key}' in {file}", file=sys.stderr)
+            continue
+        if key not in CONFIG_IMPLEMENTED:
+            print(f"candor-agents: config key '{key}' is recognized by the candor family but not "
+                  f"implemented by candor-agents — this gate is NOT active here ({file})", file=sys.stderr)
+        cfg[key] = val
+    base = os.path.dirname(os.path.abspath(file))
+    if os.path.basename(base) == ".candor":
+        base = os.path.dirname(base)  # the canonical <root>/.candor/config: values are root-relative
+    return cfg, base
+
+
+def config_policy(policy_path, target):
+    """Resolve the policy source through the config layer (spec §3.4 precedence: the --policy flag →
+    $CANDOR_POLICY → `.candor/config` `policy` → none). `policy_path` is the flag/env resolution so
+    far (None = unset; '' = set-but-empty, which stays and fails loud on open). The config is always
+    LOADED (fail-closed + key warnings apply even when the policy came from the flag/env); its
+    `policy` value applies only as the floor, a relative value resolved against the config's own
+    directory — never the CWD."""
+    cfg, base = load_candor_config(target)
+    if policy_path is None and "policy" in cfg:
+        policy_path = cfg["policy"]
+        if policy_path and not os.path.isabs(policy_path):
+            policy_path = os.path.join(base, policy_path)
+    return policy_path
 
 
 def tools_match_matcher(tools, matcher):
@@ -423,13 +508,15 @@ def print_version():
 _HELP = f"""candor-agents {VERSION} — effect analysis for Claude Code agent fleets (candor-spec {SPEC})
 
 USAGE: candor-agents scan <project-dir> [--out <prefix>] [--json] [--policy <file>]
-                          [--fleet <name>] [--link <prefix>] [--nested-spawn]
+                          [--gate-json <file>] [--fleet <name>] [--link <prefix>] [--nested-spawn]
 
   <project-dir>      the fleet root (.claude/agents, .mcp.json, settings, commands, skills, cron)
   --out <prefix>     write <prefix>.<fleet>.Fleet.json + a .callgraph.json sidecar (default: report)
   --json             emit the §2 report envelope as JSON to STDOUT (human/progress goes to stderr)
   --policy <file>    enforce a §6.2 policy file: exit 1 on a violation, 2 if unreadable; honours
-                     $CANDOR_POLICY when the flag is absent (the flag wins)
+                     $CANDOR_POLICY, then a discovered .candor/config `policy`, when absent
+  --gate-json <file> write the structured gate verdict {{spec, ok, violations}} as JSON (§3.3 ⟨0.8⟩;
+                     `-` = stdout); written whenever the flag is given, exit code unchanged
   --fleet <name>     name the fleet (default: the project dir's basename)
   --link <prefix>    edge Bash-holding units into a linked CODE report's entry points (§4 cliff)
   --nested-spawn     allow ambient agents to nest-spawn (harnesses that permit it)
@@ -452,11 +539,12 @@ def main():
     # ONE flag pass (was four, with a skip-set the validator both built and read). An unknown flag,
     # a flag-shaped or missing value, or a second positional all FAIL with exit 2 — never silently
     # ignored or read as the project dir. The first positional is the scan root.
-    usage = ("usage: scan <dir> [--out <prefix>] [--json] [--policy <file>] [--fleet <name>] "
-             "[--link <prefix>] [--nested-spawn]")
+    usage = ("usage: scan <dir> [--out <prefix>] [--json] [--policy <file>] [--gate-json <file>] "
+             "[--fleet <name>] [--link <prefix>] [--nested-spawn]")
     out, fleet, link, nested, root = "report", None, None, False, None
     as_json = False
-    policy_path = os.environ.get("CANDOR_POLICY")  # the flag (below) overrides this
+    gate_json = None
+    policy_path = os.environ.get("CANDOR_POLICY")  # the flag (below) overrides this; config is the floor
     i = 0
 
     def value(flag):
@@ -479,6 +567,11 @@ def main():
             if v is None:
                 return 2
             policy_path = v; i += 2
+        elif a == "--gate-json":
+            v = value("--gate-json")
+            if v is None:
+                return 2
+            gate_json = v; i += 2
         elif a == "--fleet":
             v = value("--fleet")
             if v is None:
@@ -504,6 +597,9 @@ def main():
         return 2
     if fleet is None:
         fleet = os.path.basename(os.path.abspath(root)) or "fleet"
+    # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-
+    # unusable config fails the run up front (exit 2) and a checked-in `policy` becomes the gate floor.
+    policy_path = config_policy(policy_path, root)
 
     # MCP servers configured for the project — plus any DECLARED capabilities: a `candorEffects`
     # array on a server's entry ("candorEffects": ["Net","Ipc"]) classifies that server exactly like
@@ -1073,7 +1169,10 @@ def main():
         os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
         json.dump(report, open(rp, "w"), indent=1)
         json.dump(callgraph, open(cp, "w"), indent=1)
-        print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → {rp} (+ callgraph sidecar)")
+        # `--gate-json -` puts the VERDICT on stdout — the receipt then moves to stderr so stdout
+        # stays one pure JSON document (the same rule --json already applies).
+        print(f"candor-agents: {len(functions)} effectful unit(s) of {len(calls)} → {rp} (+ callgraph sidecar)",
+              file=sys.stderr if gate_json == "-" else sys.stdout)
     if unreadable:
         print(f"candor-agents: {len(unreadable)} .md file(s) could not be read — NOT analyzed (permission/"
               f"encoding): {', '.join(unreadable[:5])}{'…' if len(unreadable) > 5 else ''}", file=sys.stderr)
@@ -1081,20 +1180,29 @@ def main():
         print(f"candor-agents: hooks run AUTOMATICALLY on tool events — {', '.join(hook_events) or 'unreadable settings'}"
               f"{'; cmds: ' + ', '.join(sorted(hook_cmds)) if hook_cmds else ''}", file=sys.stderr)
 
-    # ── the standing §6.2 gate (--policy / CANDOR_POLICY, spec §3.3) ──────────────────────────────
-    # A set-but-unreadable policy FAILS the run (exit 2) — never silently gate-passes; a violation
-    # exits 1. The gate runs IN-PROCESS over this report (see policy.py for why not candor-query).
-    if policy_path:
+    # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`, spec §3.3) ───────────
+    # A set-but-unreadable policy FAILS the run (exit 2) — never silently gate-passes (that includes
+    # a set-but-EMPTY $CANDOR_POLICY / a bare config `policy` line: enabled-with-empty fails loud on
+    # the open, never a silent skip); a violation exits 1. The gate runs IN-PROCESS over this report
+    # (see policy.py for why not candor-query). --gate-json (spec §3.3 ⟨0.8⟩) re-emits the SAME
+    # violation records as the machine verdict — written whenever the flag is given (ok:true, []
+    # with no gate configured), and an unwritable verdict path exits 2, never a silent drop.
+    from candor_agents import policy as _policy
+    violations = []
+    if policy_path is not None:
         try:
             ptext = open(policy_path, encoding="utf-8").read()
         except OSError as e:
             print(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT enforced "
                   f"(exit 2)", file=sys.stderr)
             return 2
-        from candor_agents import policy as _policy
         violations = _policy.evaluate_policy(_policy.parse_policy(ptext), functions, callgraph)
         for v in violations:
             print(_policy.render(v), file=sys.stderr)  # keep stdout pure JSON in --json mode
+    if gate_json is not None:
+        if not _policy.write_gate_json(gate_json, violations, SPEC, stdout_is_json=as_json):
+            return 2
+    if policy_path is not None:
         if violations:
             print(f"candor-agents: {len(violations)} policy violation(s)", file=sys.stderr)
             return 1
