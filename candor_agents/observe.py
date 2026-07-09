@@ -337,7 +337,7 @@ def main(argv=None):
         from candor_agents import policy as _policy
         violations = _policy.evaluate_policy(_policy.parse_policy(ptext), report["functions"], callgraph)
         for v in violations:
-            sys.stderr.write(v + "\n")  # keep stdout pure JSON in --json mode
+            sys.stderr.write(_policy.render(v) + "\n")  # keep stdout pure JSON in --json mode
         if violations:
             sys.stderr.write(f"candor-agents: {len(violations)} policy violation(s)\n")
             return 1

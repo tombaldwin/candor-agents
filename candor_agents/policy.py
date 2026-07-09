@@ -139,11 +139,26 @@ def _literal_allowed(effect, reached, values):
     return reached in values
 
 
-def evaluate_policy(pol, functions, callgraph):
-    """The standing §6.2 gate over a report + callgraph. Returns one violation line per breach
-    (AS-EFF-006 deny/pure, AS-EFF-008 allowlist, AS-EFF-009 forbid). Empty = clean."""
+def evaluate_policy(pol, functions, callgraph, incomplete=None):
+    """The standing §6.2 gate over a report + callgraph. Returns one STRUCTURED violation record
+    {rule, fn, effects, detail} per breach (candor-spec §3.3 ⟨0.8⟩ — the --gate-json shape, shared
+    with candor-ts policy.mjs): `effects` is the specific effect set the violation concerns per the
+    rule's semantics (the denied intersection for 006, the allow rule's effect for 008, [] for the
+    009 layer-flow); `detail` is the message BODY (no `[AS-EFF-00x]` prefix — `rule` carries the
+    code; render() rebuilds the console line). Empty list = clean.
+
+    `incomplete` (optional): fn -> set of effects whose literal surface is INCOMPLETE (e.g. an
+    observed `paths` list truncated at the emit bound). An allowlist over an incomplete surface is
+    uncertifiable even when literals are visible — a benign visible literal must not mask the
+    dropped remainder (the AS-EFF-008 fail-closed posture, matching the code engines' internal
+    masking-incompleteness map)."""
     out = []
+    incomplete = incomplete or {}
     surfaces = {"Net": "hosts", "Exec": "cmds", "Fs": "paths", "Db": "tables"}
+
+    def push(rule, fn, effects, detail):
+        out.append({"rule": rule, "fn": fn, "effects": list(effects), "detail": detail})
+
     for f in functions:
         inferred = f.get("inferred", [])
         for r in pol["deny"]:
@@ -151,8 +166,8 @@ def evaluate_policy(pol, functions, callgraph):
                 continue
             hits = inferred if not r["effects"] else [e for e in inferred if e in r["effects"]]
             if hits:
-                out.append(f"[AS-EFF-006] `{f['fn']}` performs {{ {', '.join(hits)} }}, "
-                           f"forbidden by policy: `{r['raw']}`")
+                push("AS-EFF-006", f["fn"], hits,
+                     f"`{f['fn']}` performs {{ {', '.join(hits)} }}, forbidden by policy: `{r['raw']}`")
         for r in pol["allow"]:
             if r["scope"] and not scope_matches(f["fn"], r["scope"]):
                 continue
@@ -163,14 +178,21 @@ def evaluate_policy(pol, functions, callgraph):
                 # The effect is reached but NO literal is visible (e.g. Db has no surface, or a dynamic
                 # host) — the surface cannot be certified, so the allowlist can't clear it. Fail closed:
                 # a clean pass here would let an invisible forbidden endpoint hide behind the allowlist.
-                out.append(f"[AS-EFF-008] `{f['fn']}` performs {r['effect']} with no visible literal — "
-                           f"the surface cannot be certified: `{r['raw']}`")
+                push("AS-EFF-008", f["fn"], [r["effect"]],
+                     f"`{f['fn']}` performs {r['effect']} with no visible literal — "
+                     f"the surface cannot be certified: `{r['raw']}`")
+            elif r["effect"] in incomplete.get(f["fn"], ()):
+                # Literals ARE visible but the surface is INCOMPLETE (truncated) — the invisible
+                # remainder could hold the forbidden value, so a clean pass would be fabricated.
+                push("AS-EFF-008", f["fn"], [r["effect"]],
+                     f"`{f['fn']}` performs {r['effect']} but its literal surface is INCOMPLETE "
+                     f"(truncated) — the surface cannot be certified: `{r['raw']}`")
             else:
                 bad = [v for v in reached if not _literal_allowed(r["effect"], v, r["values"])]
                 if bad:
-                    out.append(f"[AS-EFF-008] `{f['fn']}` reaches {{ {', '.join(bad)} }} outside the "
-                               f"allowlist: `{r['raw']}`")
-    # AS-EFF-009: forbid A -> B by reachability over the callgraph.
+                    push("AS-EFF-008", f["fn"], [r["effect"]],
+                         f"`{f['fn']}` reaches {{ {', '.join(bad)} }} outside the allowlist: `{r['raw']}`")
+    # AS-EFF-009: forbid A -> B by reachability over the callgraph. No single effect → effects: [].
     for r in pol["forbid"]:
         for fn in callgraph:
             if not scope_matches(fn, r["from"]):
@@ -185,23 +207,40 @@ def evaluate_policy(pol, functions, callgraph):
                         hit = c; break
                     queue.append(c)
             if hit:
-                out.append(f"[AS-EFF-009] `{fn}` reaches into a forbidden layer (via `{hit}`), "
-                           f"violating policy: `{r['raw']}`")
+                push("AS-EFF-009", fn, [],
+                     f"`{fn}` reaches into a forbidden layer (via `{hit}`), violating policy: `{r['raw']}`")
     return out
 
 
-def gate_reports(report_path, callgraph_path, policy_text):
-    """Load a written report + sidecar and run the gate. Returns (violation_lines, ok). A report that
-    won't load is treated as no functions (the caller already wrote it, so this is defensive)."""
+def render(v):
+    """The console line for one structured violation: `[AS-EFF-00x] <detail>` — the same record
+    --gate-json emits verbatim, so the human and machine surfaces can never disagree."""
+    return f"[{v['rule']}] {v['detail']}"
+
+
+def write_gate_json(path, violations, spec, stdout_is_json=False):
+    """`--gate-json <file>` (spec §3.3 ⟨0.8⟩): write the structured gate verdict
+    {spec, ok, violations:[{rule, fn, effects, detail}]} from the SAME violation records that set
+    the exit code — a consumer can never see a verdict that disagrees with the gate. Written
+    whenever the flag is given (ok:true, [] when no gate is configured). `-` streams the verdict
+    to stdout (refused when stdout already carries the §2 report — two JSON documents don't pipe).
+    Returns True on success; the CALLER exits 2 on False — an unwritable verdict path must fail
+    the run, never silently drop the machine surface a CI consumer is reading."""
     import json
+    import sys
+    verdict = json.dumps({"spec": spec, "ok": not violations, "violations": violations}, indent=1)
+    if path == "-":
+        if stdout_is_json:
+            sys.stderr.write("candor-agents: --gate-json - conflicts with --json "
+                             "(stdout already carries the report envelope)\n")
+            return False
+        print(verdict)
+        return True
     try:
-        rep = json.load(open(report_path, encoding="utf-8"))
-        functions = rep.get("functions", [])
-    except Exception:
-        functions = []
-    try:
-        cg = json.load(open(callgraph_path, encoding="utf-8"))
-    except Exception:
-        cg = {}
-    pol = parse_policy(policy_text)
-    return evaluate_policy(pol, functions, cg), True
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(verdict + "\n")
+        return True
+    except OSError as e:
+        sys.stderr.write(f"candor-agents: could not write --gate-json {path} ({e}) — "
+                         f"failing (exit 2), the verdict surface must not vanish silently\n")
+        return False

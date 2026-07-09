@@ -1220,19 +1220,25 @@ def _gate(policy_text, functions, callgraph):
     return _pol.evaluate_policy(_pol.parse_policy(policy_text), functions, callgraph)
 
 # --- AS-EFF-006 (deny / pure) over transitive `inferred` ---
+# evaluate_policy returns STRUCTURED records {rule, fn, effects, detail} (spec §3.3 ⟨0.8⟩ — the
+# --gate-json shape); render() rebuilds the console `[AS-EFF-00x] …` line from the same record.
 _f006 = [{"fn": "boss", "inferred": ["Net", "Unknown"], "calls": ["leaf"]},
          {"fn": "leaf", "inferred": ["Net"], "calls": []},
          {"fn": "quiet", "inferred": ["Fs"], "calls": []}]
 _v = _gate("deny Net", _f006, {"boss": ["leaf"], "leaf": [], "quiet": []})
 check("policy AS-EFF-006: `deny Net` flags every unit that REACHES Net (boss+leaf), not the Fs unit",
-      sorted(re.search(r'`([^`]+)`', l).group(1) for l in _v if "AS-EFF-006" in l) == ["boss", "leaf"]
-      and all("[AS-EFF-006]" in l for l in _v), _v)
+      sorted(v["fn"] for v in _v if v["rule"] == "AS-EFF-006") == ["boss", "leaf"]
+      and all(v["rule"] == "AS-EFF-006" for v in _v), _v)
+check("policy AS-EFF-006: `effects` carries the DENIED INTERSECTION (Net), never the unit's full set",
+      all(v["effects"] == ["Net"] for v in _v), _v)
+check("policy render(): the console line is `[rule] detail` from the same record --gate-json emits",
+      _pol.render(_v[0]) == f"[AS-EFF-006] {_v[0]['detail']}" and "forbidden by policy" in _pol.render(_v[0]), _v)
 check("policy AS-EFF-006: a clean policy (`deny Db`) over a Net/Fs fleet yields no violations",
       _gate("deny Db", _f006, {}) == [])
 # `pure <scope>` is a deny with NO effects → ANY inferred effect on the scope is a violation
 _vp = _gate("pure leaf", _f006, {})
 check("policy AS-EFF-006: `pure leaf` (deny with no effects) flags leaf for performing Net",
-      len(_vp) == 1 and "leaf" in _vp[0] and "[AS-EFF-006]" in _vp[0], _vp)
+      len(_vp) == 1 and _vp[0]["fn"] == "leaf" and _vp[0]["rule"] == "AS-EFF-006", _vp)
 
 # --- AS-EFF-008 (allowlist, FAIL-CLOSED) over the literal surfaces ---
 # A unit reaches Net to two hosts; the allowlist clears only one → the other is a violation.
@@ -1240,9 +1246,9 @@ _f008 = [{"fn": "fetcher", "inferred": ["Net"], "hosts": ["api.good.test", "evil
 _va = _gate("allow Net api.good.test", _f008, {})
 # the violation names the BAD host in the `reaches { … }` list; the allowed host appears only in the
 # echoed rule (`allow Net api.good.test`), never in the reached-bad set.
-_va_bad = re.search(r"reaches \{ ([^}]*) \}", _va[0]).group(1) if _va else ""
+_va_bad = re.search(r"reaches \{ ([^}]*) \}", _va[0]["detail"]).group(1) if _va else ""
 check("policy AS-EFF-008: a host OUTSIDE the allowlist is flagged (the cleared host is not)",
-      len(_va) == 1 and "[AS-EFF-008]" in _va[0]
+      len(_va) == 1 and _va[0]["rule"] == "AS-EFF-008" and _va[0]["effects"] == ["Net"]
       and "evil.test" in _va_bad and "api.good.test" not in _va_bad, _va)
 check("policy AS-EFF-008: an allowlist covering every reached host clears it (no violation)",
       _gate("allow Net api.good.test evil.test", _f008, {}) == [])
@@ -1252,7 +1258,18 @@ check("policy AS-EFF-008: an allowlist covering every reached host clears it (no
 _f008b = [{"fn": "dbuser", "inferred": ["Db"], "calls": []}]   # Db reached, no `tables` surface
 _vc = _gate("allow Db public.users", _f008b, {})
 check("policy AS-EFF-008 FAIL-CLOSED: an effect reached with NO visible literal is uncertifiable, flagged",
-      len(_vc) == 1 and "no visible literal" in _vc[0] and "[AS-EFF-008]" in _vc[0], _vc)
+      len(_vc) == 1 and "no visible literal" in _vc[0]["detail"] and _vc[0]["rule"] == "AS-EFF-008", _vc)
+# FAIL-CLOSED on an INCOMPLETE surface: literals visible, all inside the allowlist — but the surface
+# was truncated (observe's paths emit bound), so the invisible remainder could hold the forbidden
+# value. The incomplete map must make the allowlist uncertifiable (a benign visible literal must not
+# MASK the dropped remainder — the masking evasion the code engines fail closed on).
+_f008c = [{"fn": "walker", "inferred": ["Fs"], "paths": ["/repo/a", "/repo/b"], "calls": []}]
+_vi = _pol.evaluate_policy(_pol.parse_policy("allow Fs /repo"), _f008c, {}, incomplete={"walker": {"Fs"}})
+check("policy AS-EFF-008 FAIL-CLOSED: an INCOMPLETE (truncated) surface is uncertifiable even when "
+      "every visible literal is allowed",
+      len(_vi) == 1 and _vi[0]["rule"] == "AS-EFF-008" and "INCOMPLETE" in _vi[0]["detail"], _vi)
+check("policy AS-EFF-008: the same allowlist over the same COMPLETE surface passes clean (control)",
+      _pol.evaluate_policy(_pol.parse_policy("allow Fs /repo"), _f008c, {}) == [])
 
 # --- AS-EFF-009 (forbid A -> B by callgraph reachability) ---
 _f009 = [{"fn": "web", "inferred": ["Net"], "calls": ["svc"]},
@@ -1261,7 +1278,8 @@ _f009 = [{"fn": "web", "inferred": ["Net"], "calls": ["svc"]},
 _cg009 = {"web": ["svc"], "svc": ["db"], "db": []}
 _vf = _gate("forbid web -> db", _f009, _cg009)
 check("policy AS-EFF-009: `forbid web -> db` fires on TRANSITIVE reachability (web→svc→db)",
-      len(_vf) == 1 and "[AS-EFF-009]" in _vf[0] and "web" in _vf[0] and "db" in _vf[0], _vf)
+      len(_vf) == 1 and _vf[0]["rule"] == "AS-EFF-009" and _vf[0]["fn"] == "web"
+      and "db" in _vf[0]["detail"] and _vf[0]["effects"] == [], _vf)
 check("policy AS-EFF-009: no path from the `from` layer → no violation (the reverse direction is clean)",
       _gate("forbid db -> web", _f009, _cg009) == [])
 
@@ -1303,8 +1321,8 @@ if _Q and os.path.exists(_Q):
     _pcg = json.load(open(f"{_pre}.t.Fleet.callgraph.json"))
     _polf = os.path.join(_pd, "denynet"); open(_polf, "w").write("deny Net\n")
     # MINE: the AS-EFF-006 violating function set for `deny Net`.
-    _mine_fns = sorted(re.search(r'`([^`]+)`', l).group(1)
-                       for l in _gate("deny Net", _prep["functions"], _pcg) if "AS-EFF-006" in l)
+    _mine_fns = sorted(v["fn"] for v in _gate("deny Net", _prep["functions"], _pcg)
+                       if v["rule"] == "AS-EFF-006")
     # candor-query: `whatif <prefix> leaf Net <deny Net>` lists every fn the (already-present) Net would
     # violate the policy on — the same Rust matcher candor's gate uses. Parse its `[AS-EFF-006] \`fn\`` lines.
     _wi = subprocess.run([_Q, "whatif", f"{_pre}.t", "leaf", "Net", _polf], capture_output=True, text=True)
