@@ -943,51 +943,12 @@ def read_crons(root):
     return crons
 
 
-def main():
-    opts = parse_args(sys.argv[1:])
-    if isinstance(opts, int):
-        return opts
-    root, out, fleet, link, nested, as_json, gate_json, policy_path = opts
-    # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-
-    # unusable config fails the run up front (exit 2) and a checked-in `policy` becomes the gate floor.
-    # drift's internal scan/observe run GATE-FREE (cli._run scrubs the env + sets the marker): drift
-    # compares declared vs observed — a standing gate firing inside the comparison aborted it.
-    if os.environ.get("_CANDOR_AGENTS_NO_GATE") == "1":
-        policy_path = None
-    else:
-        policy_path = config_policy(policy_path, root)
-
-    mcp_servers, declared_mcp, declared_bad = read_mcp(root)
-
-    unreadable = []  # .md files that couldn't be read (permission/encoding) — disclosed, never fatal
-    agents = read_agents(root, unreadable)
-    (hook_cmds, hook_events, hook_why, tool_hook_matchers,
-     denied_tools, denied_servers, scoped_denies) = read_settings(root)
-    has_hooks = bool(hook_events or hook_why)
-
-    # Apply the harness-enforced denials (see live()).
-    ambient_live = [t for t in AMBIENT if t not in denied_tools]
-    live_servers = [s for s in mcp_servers if s not in denied_servers]
-    for a in agents.values():
-        a["lt"] = live(a["tools"], denied_tools, denied_servers)  # deny-filtered grants, used for effects/edges/link
-
-    commands, skills = read_commands_skills(root, unreadable)
-    crons = read_crons(root)
-
-    if not agents and not has_hooks and not commands and not skills and not crons:
-        print(f"candor-agents: no agent definitions under {os.path.join(root, '.claude', 'agents')}, "
-              f"no commands/skills, no hooks, and no "
-              f"scheduled tasks — nothing to analyze.", file=sys.stderr)
-        return 2
-    if denied_tools or denied_servers or scoped_denies:
-        sub = sorted(denied_tools | {f"mcp:{s}" for s in denied_servers})
-        msg = f"candor-agents: permissions.deny removed {{{', '.join(sub) or '—'}}} from the fleet surface"
-        if scoped_denies:
-            msg += f"; scoped (not subtracted — tool stays usable): {', '.join(sorted(scoped_denies))}"
-        print(msg, file=sys.stderr)
-
-    # ── edges (delegation) ────────────────────────────────────────────────────────────────────
-    # Ladder mirrors the code engine: named-delegation narrowing (devirt) > CHA over all agents.
+def build_edges(agents, commands, skills, crons, nested, denied_tools, denied_servers,
+                has_hooks, tool_hook_matchers):
+    """The delegation graph (spec §2.2): unit -> sorted callee list, plus the synthetic ROOT/HOOKS
+    unit names and the bare-`Agent` units whose spawn set was narrowed by a prompt mention (their
+    residual is disclosed as Unknown by classify_units). The resolution ladder mirrors the code
+    engine: named-delegation narrowing (devirt) > CHA over all agents."""
     names = sorted(agents)
     # Reserved synthetic-unit names. If a real agent claims one, DISAMBIGUATE the synthetic unit —
     # never clobber the user's declared agent (that silently dropped its grants/edges and made drift
@@ -1074,8 +1035,16 @@ def main():
         for name, tools in holders.items():
             if any(tools_match_matcher(tools, m) for m in tool_hook_matchers):
                 calls[name] = sorted(set(calls[name]) | {HOOKS})
+    return calls, ROOT, HOOKS, unresolved_spawn
 
-    # ── per-agent direct effects ──────────────────────────────────────────────────────────────
+
+def classify_units(agents, commands, skills, crons, ROOT, HOOKS, has_hooks, hook_cmds, hook_why,
+                   unresolved_spawn, ambient_live, live_servers, declared_mcp, declared_bad,
+                   denied_tools, denied_servers):
+    """Per-unit DIRECT effects: (direct, fs_detail, why_map), each unit name -> set. Grants
+    classify through the curated tables; ambient authority takes every live tool + server; the
+    hooks unit is Exec + its command heads; a cron unit is a pure trigger (its reach arrives via
+    the cron->root edge in the fixpoint)."""
     # The MCP reach of an ambient unit (every CONFIGURED, non-denied server): one helper, used by
     # the ambient agents and the session root (was copy-pasted three ways).
     def mcp_effects(servers):
@@ -1091,7 +1060,7 @@ def main():
                 e.add("Unknown"); w.add(f"mcp-uncurated:{s}")
         return e, w
 
-    direct, fs_detail, why_map, unresolved_direct = {}, {}, {}, {}
+    direct, fs_detail, why_map = {}, {}, {}
     for name, a in agents.items():
         if a["tools"] is None:
             # Ambient authority: every built-in + every configured MCP server's tools (minus denials).
@@ -1103,7 +1072,6 @@ def main():
         else:
             effs, fs, why = classify(a["lt"], live_servers, declared_mcp, declared_bad)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
-        unresolved_direct[name] = "Unknown" in effs
     # Disclose the unprovable spawn residual on bare-`Agent` agents narrowed by a prompt mention (ladder
     # rung 2 above): they CAN spawn an unmentioned, possibly effectful agent at runtime, so a narrowed
     # reach that omits it would be a silent under-report — Unknown blocks a false `deny` certification
@@ -1112,7 +1080,6 @@ def main():
     for name in unresolved_spawn:
         direct[name].add("Unknown")
         why_map[name].add("agent-spawn:bare `Agent` narrowed by prompt mention (can spawn an unmentioned agent)")
-        unresolved_direct[name] = True
     # Commands / skills: effects from their (deny-filtered) allowed-tools; a command's shell heads add
     # Exec + the heads' REFINED effects (spec §4 ⟨0.5⟩: a known head classifies — `curl`→Net,
     # `candor*`→Fs/Env; an unknown head keeps the bare Exec cliff), unless Bash is denied (the shell
@@ -1123,31 +1090,30 @@ def main():
             for h in unit["heads"]:
                 effs |= COMMAND_HEAD.get(h, set())
         return effs
-    for u, c in commands.items():
-        effs, fs, why = classify(live(c["tools"], denied_tools, denied_servers), live_servers, declared_mcp, declared_bad)
-        direct[u], fs_detail[u], why_map[u] = with_heads(c, effs), fs, why
-        unresolved_direct[u] = "Unknown" in direct[u]
+    for u, cu in commands.items():
+        effs, fs, why = classify(live(cu["tools"], denied_tools, denied_servers), live_servers, declared_mcp, declared_bad)
+        direct[u], fs_detail[u], why_map[u] = with_heads(cu, effs), fs, why
     for u, sk in skills.items():
         effs, fs, why = classify(live(sk["tools"], denied_tools, denied_servers), live_servers, declared_mcp, declared_bad)
         direct[u], fs_detail[u], why_map[u] = with_heads(sk, effs), fs, why
-        unresolved_direct[u] = "Unknown" in direct[u]
     me, mf, mw = classify(ambient_live, live_servers, declared_mcp, declared_bad)
     me_, mw_ = mcp_effects(live_servers)
     me |= me_; mw |= mw_
     direct[ROOT], fs_detail[ROOT], why_map[ROOT] = me, mf, mw
-    unresolved_direct[ROOT] = "Unknown" in me
     if has_hooks:
         # The hook commands' heads refine the Exec the same way (a Stop hook running `curl` reaches Net).
         head_effs = set().union(*(COMMAND_HEAD.get(h, set()) for h in hook_cmds)) if hook_cmds else set()
         direct[HOOKS] = {"Exec"} | head_effs | ({"Unknown"} if hook_why else set())
         fs_detail[HOOKS], why_map[HOOKS] = set(), set(hook_why)
-        unresolved_direct[HOOKS] = bool(hook_why)
     # A scheduled task has no DIRECT effect of its own — it just triggers; its reach is the session's,
     # inherited via the cron→root edge in the fixpoint below.
     for u in crons:
-        direct[u], fs_detail[u], why_map[u], unresolved_direct[u] = set(), set(), set(), False
+        direct[u], fs_detail[u], why_map[u] = set(), set(), set()
+    return direct, fs_detail, why_map
 
-    # ── --link: the Exec-boundary refinement ─────────────────────────────────────────────────
+
+def link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, denied_servers):
+    """--link: the Exec-boundary refinement (spec §4)."""
     # Edge every Bash-holding (or ambient) agent to each entryPoint of the linked CODE report, and
     # seed the entry as a pseudo-node carrying its recorded transitive effects. The pseudo-node is
     # NOT re-emitted (it lives in the code report); under a merged prefix the cross edge makes
@@ -1178,15 +1144,12 @@ def main():
             if "Bash" in live(unit["tools"], denied_tools, denied_servers) and not (unit["heads"] and all(h in COMMAND_HEAD for h in unit["heads"])):
                 calls[u] = sorted(set(calls[u]) | set(linked))
         calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
+    return linked
 
-    # ── transitive fixpoint (spec §5a) — one shared propagate(), used by observe.py too ─────────
-    seed = {n: set(direct[n]) for n in calls}
-    for fn_, effs_ in linked.items():
-        seed.setdefault(fn_, set(effs_))
-    inferred = propagate(seed, calls)
-    fs_tr = propagate({n: set(fs_detail.get(n, set())) for n in calls}, calls)
 
-    # ── emit the spec §2 envelope + §2.2 sidecar ─────────────────────────────────────────────
+def build_functions(fleet, calls, inferred, fs_tr, direct, why_map, agents, commands, skills,
+                    crons, HOOKS, hook_events, hook_cmds, linked, denied_tools):
+    """The spec §2 envelope's `functions` array — one entry per effectful unit."""
     functions = []
     for n in sorted(calls):
         if n in linked and n not in agents:
@@ -1234,6 +1197,88 @@ def main():
         # chainable like any sibling (`<fleet>#<agent>`, the pkg#LocalName shape).
         entry["hash"] = f"{fleet}#{n}"
         functions.append(entry)
+    return functions
+
+
+def collect_kappa(agents, commands, skills, hook_cmds, HOOKS):
+    """The κ-coverage ledger's inputs (spec §7 item 14): (unit_heads — every unit's literal shell
+    heads —, pure_used — the reviewed-pure grants the verdict relies on). kappa_ledger() renders
+    them; the per-scan print keeps the ledger evidence, not a doc footnote."""
+    pure_used = set()
+    for a in agents.values():
+        for t in (a["lt"] or []):
+            if base_tool(t) in PURE_TOOLS:
+                pure_used.add(base_tool(t))
+    for unit in list(commands.values()) + list(skills.values()):
+        for t in (unit["tools"] or []):  # already base-stripped at parse
+            if t in PURE_TOOLS:
+                pure_used.add(t)
+    unit_heads = {u: c["heads"] for u, c in {**commands, **skills}.items()}
+    if hook_cmds:
+        unit_heads[HOOKS] = hook_cmds
+    return unit_heads, pure_used
+
+
+def main():
+    opts = parse_args(sys.argv[1:])
+    if isinstance(opts, int):
+        return opts
+    root, out, fleet, link, nested, as_json, gate_json, policy_path = opts
+    # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-
+    # unusable config fails the run up front (exit 2) and a checked-in `policy` becomes the gate floor.
+    # drift's internal scan/observe run GATE-FREE (cli._run scrubs the env + sets the marker): drift
+    # compares declared vs observed — a standing gate firing inside the comparison aborted it.
+    if os.environ.get("_CANDOR_AGENTS_NO_GATE") == "1":
+        policy_path = None
+    else:
+        policy_path = config_policy(policy_path, root)
+
+    mcp_servers, declared_mcp, declared_bad = read_mcp(root)
+
+    unreadable = []  # .md files that couldn't be read (permission/encoding) — disclosed, never fatal
+    agents = read_agents(root, unreadable)
+    (hook_cmds, hook_events, hook_why, tool_hook_matchers,
+     denied_tools, denied_servers, scoped_denies) = read_settings(root)
+    has_hooks = bool(hook_events or hook_why)
+
+    # Apply the harness-enforced denials (see live()).
+    ambient_live = [t for t in AMBIENT if t not in denied_tools]
+    live_servers = [s for s in mcp_servers if s not in denied_servers]
+    for a in agents.values():
+        a["lt"] = live(a["tools"], denied_tools, denied_servers)  # deny-filtered grants, used for effects/edges/link
+
+    commands, skills = read_commands_skills(root, unreadable)
+    crons = read_crons(root)
+
+    if not agents and not has_hooks and not commands and not skills and not crons:
+        print(f"candor-agents: no agent definitions under {os.path.join(root, '.claude', 'agents')}, "
+              f"no commands/skills, no hooks, and no scheduled tasks — nothing to analyze.", file=sys.stderr)
+        return 2
+    if denied_tools or denied_servers or scoped_denies:
+        sub = sorted(denied_tools | {f"mcp:{s}" for s in denied_servers})
+        msg = f"candor-agents: permissions.deny removed {{{', '.join(sub) or '—'}}} from the fleet surface"
+        if scoped_denies:
+            msg += f"; scoped (not subtracted — tool stays usable): {', '.join(sorted(scoped_denies))}"
+        print(msg, file=sys.stderr)
+
+    calls, ROOT, HOOKS, unresolved_spawn = build_edges(agents, commands, skills, crons, nested,
+                                                       denied_tools, denied_servers, has_hooks,
+                                                       tool_hook_matchers)
+    direct, fs_detail, why_map = classify_units(agents, commands, skills, crons, ROOT, HOOKS,
+                                                has_hooks, hook_cmds, hook_why, unresolved_spawn,
+                                                ambient_live, live_servers, declared_mcp,
+                                                declared_bad, denied_tools, denied_servers)
+    linked = link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, denied_servers)
+
+    # ── transitive fixpoint (spec §5a) — one shared propagate(), used by observe.py too ─────────
+    seed = {n: set(direct[n]) for n in calls}
+    for fn_, effs_ in linked.items():
+        seed.setdefault(fn_, set(effs_))
+    inferred = propagate(seed, calls)
+    fs_tr = propagate({n: set(fs_detail.get(n, set())) for n in calls}, calls)
+
+    functions = build_functions(fleet, calls, inferred, fs_tr, direct, why_map, agents, commands,
+                                skills, crons, HOOKS, hook_events, hook_cmds, linked, denied_tools)
 
     report = {"candor": {"version": VERSION, "toolchain": "claude-code", "spec": SPEC},
               "package": fleet,
@@ -1262,18 +1307,7 @@ def main():
               f"{'; cmds: ' + ', '.join(sorted(hook_cmds)) if hook_cmds else ''}", file=sys.stderr)
 
     # ── the κ-coverage ledger (spec §7 item 14) — per-scan evidence, not a doc footnote ─────────
-    pure_used = set()
-    for a in agents.values():
-        for t in (a["lt"] or []):
-            if base_tool(t) in PURE_TOOLS:
-                pure_used.add(base_tool(t))
-    for unit in list(commands.values()) + list(skills.values()):
-        for t in (unit["tools"] or []):  # already base-stripped at parse
-            if t in PURE_TOOLS:
-                pure_used.add(t)
-    unit_heads = {u: c["heads"] for u, c in {**commands, **skills}.items()}
-    if hook_cmds:
-        unit_heads[HOOKS] = hook_cmds
+    unit_heads, pure_used = collect_kappa(agents, commands, skills, hook_cmds, HOOKS)
     for line in kappa_ledger(why_map, unit_heads, pure_used):
         print(line, file=sys.stderr)
 
