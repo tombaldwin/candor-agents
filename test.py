@@ -1938,5 +1938,74 @@ check("observe: the one VALID tool_use is observed past the malformed lines (Exe
 print()
 
 
+# ══ unreadable-config disclosure (chmod 000) + the observed curated-MCP split + small surfaces ═════
+# A config file that EXISTS but cannot be read must be DISCLOSED (Unknown in the report where a unit
+# carries it, a loud stderr warning otherwise) and the scan must complete — never silently dropped
+# (a dropped settings.json is dropped hooks/permissions; a dropped scheduled_tasks.json is a dropped
+# autonomous-trigger surface).
+if os.geteuid() != 0:   # root reads through chmod 000; the config battery above skips the same way
+    _ud = _mkd(); os.makedirs(os.path.join(_ud, ".claude", "agents"))
+    open(os.path.join(_ud, ".claude", "agents", "a.md"), "w").write(agent("a", "WebFetch"))
+    open(os.path.join(_ud, ".claude", "settings.json"), "w").write('{"hooks": {}}')
+    os.chmod(os.path.join(_ud, ".claude", "settings.json"), 0)
+    open(os.path.join(_ud, ".claude", "scheduled_tasks.json"), "w").write("{}")
+    os.chmod(os.path.join(_ud, ".claude", "scheduled_tasks.json"), 0)
+    _ur = subprocess.run([sys.executable, "-m", "candor_agents.scan", _ud, "--out",
+                          os.path.join(_ud, "r"), "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+    os.chmod(os.path.join(_ud, ".claude", "settings.json"), 0o644)
+    os.chmod(os.path.join(_ud, ".claude", "scheduled_tasks.json"), 0o644)
+    check("scan: an unreadable settings.json warns AND the hooks unit carries Unknown + unknownWhy "
+          "in the REPORT (machine-visible, not stderr-only)",
+          _ur.returncode == 0 and "unreadable .claude/settings.json" in _ur.stderr
+          and (lambda _e: _e is not None and "Unknown" in _e["inferred"]
+               and "hooks-unreadable:settings.json" in _e.get("unknownWhy", []))(
+                   entry(json.load(open(os.path.join(_ud, "r.t.Fleet.json"))), "hooks")),
+          _ur.stderr[-240:])
+    check("scan: an unreadable scheduled_tasks.json is DISCLOSED on stderr (scheduled tasks UNKNOWN) "
+          "and the scan still completes",
+          _ur.returncode == 0 and "unreadable .claude/scheduled_tasks.json" in _ur.stderr
+          and "scheduled tasks UNKNOWN" in _ur.stderr, _ur.stderr[-240:])
+else:
+    print("  SKIP unreadable-config disclosure (running as root — chmod 000 is readable)")
+
+# observe: a CURATED MCP server's tool classifies by MCP_TABLE (github → Net) with NO Unknown/why —
+# the observed-side twin of the scan-side curated/uncurated split (an uncurated one reads Unknown).
+_omc = _mkd()
+open(os.path.join(_omc, "s.jsonl"), "w").write("\n".join([
+    '{"message": {"content": [{"type": "tool_use", "id": "t1", "name": "mcp__github__create_issue", "input": {}}]}}',
+    '{"message": {"content": [{"type": "tool_use", "id": "t2", "name": "mcp__mystery__op", "input": {}}]}}',
+]) + "\n")
+_omr = subprocess.run([sys.executable, "-m", "candor_agents.observe", _omc, "--transcripts", _omc,
+                       "--out", os.path.join(_omc, "o"), "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+_oms = entry(json.load(open(os.path.join(_omc, "o.t.Observed.json"))), "session")
+check("observe: a curated MCP server (github) classifies by MCP_TABLE → Net; the uncurated one beside "
+      "it reads Unknown with mcp-uncurated:<server> (never silence)",
+      _omr.returncode == 0 and "Net" in _oms["inferred"] and "Unknown" in _oms["inferred"]
+      and _oms.get("unknownWhy") == ["mcp-uncurated:mystery"], json.dumps(_oms))
+
+# bare `candor-agents <dir>` = scan, the static default (cli.py's fall-through dispatch)
+_bd2 = _mkd(); os.makedirs(os.path.join(_bd2, ".claude", "agents"))
+open(os.path.join(_bd2, ".claude", "agents", "leaf.md"), "w").write(agent("leaf", "WebFetch"))
+_benv = dict(os.environ); _benv["PYTHONPATH"] = HERE + os.pathsep + _benv.get("PYTHONPATH", "")
+_rbd = subprocess.run([sys.executable, "-m", "candor_agents.cli", _bd2],
+                      capture_output=True, text=True, cwd=_bd2, env=_benv)
+check("cli: bare `candor-agents <dir>` dispatches to scan (the static default) and writes the report",
+      _rbd.returncode == 0 and any(f.endswith(".Fleet.json") for f in os.listdir(_bd2)),
+      f"rc={_rbd.returncode} ls={os.listdir(_bd2)}")
+
+# __init__: VERSION/SPEC are exposed lazily (PEP 562) for embedders; unknown attrs still AttributeError
+import candor_agents as _ca
+check("__init__: lazy VERSION/SPEC match the scan module's (the embedder surface)",
+      _ca.VERSION == _VER and _ca.SPEC == _SPEC, f"{_ca.VERSION} {_ca.SPEC}")
+try:
+    _ca.NOPE
+    _lazy_ok = False
+except AttributeError:
+    _lazy_ok = True
+check("__init__: an unknown attribute raises AttributeError (the lazy hook doesn't swallow typos)", _lazy_ok)
+
+print()
+
+
 print(f"test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
