@@ -1078,6 +1078,50 @@ g_ed = guard.compile_guard("deny Exec Db")
 check("guard: deny Exec Db still discloses Db's residual reach (not suppressed by Bash being denied)",
       "Bash" in g_ed["deny"] and any("no built-in tool produces Db" in w for w in g_ed["warnings"]), json.dumps(g_ed))
 
+# ── guard as a PROCESS surface (`candor-agents guard …` — cli.py dispatch + guard.main) ──────────
+# The compile_guard logic above is unit-covered; this is the user-facing CLI contract (exit codes,
+# the stdout fragment, stderr notes) — the exact CLI class that shipped a Critical bug untested.
+def _guard_cli(*a):
+    return subprocess.run([sys.executable, "-m", "candor_agents.cli", "guard", *a],
+                          capture_output=True, text=True, cwd=HERE)
+
+_gpd = tempfile.mkdtemp(); _gpol = os.path.join(_gpd, "p"); open(_gpol, "w").write("deny Net\n")
+_rg = _guard_cli(_gpol)
+try:
+    _gfrag = json.loads(_rg.stdout)
+except Exception:
+    _gfrag = None
+check("guard CLI: `deny Net` → the settings.json fragment on STDOUT, shape {permissions:{deny:[…]}}, exit 0",
+      _rg.returncode == 0 and _gfrag == {"permissions": {"deny": ["WebFetch", "WebSearch"]}},
+      f"rc={_rg.returncode} out={_rg.stdout[:120]!r}")
+check("guard CLI: the merge instruction + cliff warning go to STDERR (stdout stays pure JSON)",
+      "merge into .claude/settings.json" in _rg.stderr and "Exec cliff" in _rg.stderr, _rg.stderr[-200:])
+check("guard CLI: no args → usage to stderr, exit 2", _guard_cli().returncode == 2
+      and "candor-agents guard" in _guard_cli().stderr)
+check("guard CLI: -h → usage, exit 0 (asked for help)", _guard_cli("-h").returncode == 0)
+_rgm = _guard_cli(os.path.join(tempfile.mkdtemp(), "no-such-policy"))
+check("guard CLI: an unreadable policy exits 2 with the one-line diagnostic (never a silent empty fragment)",
+      _rgm.returncode == 2 and "cannot read policy" in _rgm.stderr and _rgm.stdout == "",
+      f"rc={_rgm.returncode} err={_rgm.stderr[-160:]!r}")
+_gsc = os.path.join(_gpd, "scoped"); open(_gsc, "w").write("deny Net researcher\n")
+_rgs2 = _guard_cli(_gsc)
+check("guard CLI: a scoped-only policy → the no-fleet-deny note, NO fragment on stdout, exit 0",
+      _rgs2.returncode == 0 and "no fleet-wide deny rule" in _rgs2.stderr and _rgs2.stdout == "",
+      f"rc={_rgs2.returncode} out={_rgs2.stdout!r}")
+# the project-dir positional flows through the cli dispatch to compile_guard (.mcp.json denies)
+_gmp = tempfile.mkdtemp(); json.dump({"mcpServers": {"github": {}}}, open(os.path.join(_gmp, ".mcp.json"), "w"))
+_rgp = _guard_cli(_gpol, _gmp)
+check("guard CLI: the <project-dir> positional reaches compile_guard — mcp__github lands in the fragment",
+      _rgp.returncode == 0 and "mcp__github" in json.loads(_rgp.stdout)["permissions"]["deny"], _rgp.stdout)
+# guard takes NO flags: an unknown flag or an extra positional must exit 2, never be silently ignored
+# (the gateless-ignore class — guard previously dropped both on the floor and emitted the fragment).
+_rgf = _guard_cli(_gpol, "--bogus")
+check("guard CLI: an unknown flag exits 2 (was silently ignored — the gateless-ignore class)",
+      _rgf.returncode == 2 and "unknown flag" in _rgf.stderr, f"rc={_rgf.returncode} err={_rgf.stderr[-120:]!r}")
+_rge = _guard_cli(_gpol, _gmp, "extra-arg")
+check("guard CLI: an unexpected extra argument exits 2 (was silently ignored)",
+      _rge.returncode == 2 and "unexpected extra argument" in _rge.stderr, f"rc={_rge.returncode}")
+
 # ---- stats + savings: measured gate activity & the labelled savings model. Regression tests for the
 #      max-effort review fixes: non-object/invalid lines, bool-as-int, --since vs null-ts, subagent walk,
 #      crash-safety on corrupt transcripts, blast-based estimate, anchored query matching. ----
