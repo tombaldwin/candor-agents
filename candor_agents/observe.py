@@ -23,6 +23,12 @@ import urllib.parse
 from candor_agents.scan import (SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION,
                                 bash_cmds, config_policy, propagate)  # one source
 
+# The emit bound on a unit's observed `paths` literal surface. A unit past it is TRUNCATED — which
+# must be (a) disclosed on the receipt and (b) fail-closed under an `allow Fs` gate: the dropped
+# remainder could hold the disallowed path, so certifying the visible prefix would let it pass clean
+# (the AS-EFF-008 masking evasion). Sorted-lexicographic truncation is a bound, never a sample.
+PATHS_CAP = 200
+
 
 def transcript_dir_for(path):
     """A project dir maps to ~/.claude/projects/<slug>; a dir already holding *.jsonl is used as-is."""
@@ -199,6 +205,8 @@ def observe(tdir, out_prefix, fleet, as_json=False):
     fs_t = propagate(fs_kinds, edges)
 
     functions = []
+    incomplete = {}   # unit -> effects whose literal surface is INCOMPLETE (internal, like the code engines)
+    truncated = []    # (unit, total) for the receipt disclosure
     for n in sorted(set(unit_of_file.values()) | {"session"}):
         inf = inferred.get(n) or set()
         if not inf:
@@ -223,7 +231,14 @@ def observe(tdir, out_prefix, fleet, as_json=False):
         if cmds_t.get(n):
             entry["cmds"] = sorted(cmds_t[n])
         if paths_t.get(n):
-            entry["paths"] = sorted(p for p in paths_t[n])[:200]
+            allp = sorted(paths_t[n])
+            entry["paths"] = allp[:PATHS_CAP]
+            if len(allp) > PATHS_CAP:
+                # Truncation makes the Fs surface INCOMPLETE: disclosed below, and fed to the gate so
+                # an `allow Fs` over this unit reads uncertifiable — a disallowed path sorted past the
+                # cap must not pass clean behind the visible (allowed) prefix.
+                incomplete.setdefault(n, set()).add("Fs")
+                truncated.append((n, len(allp)))
         if n == "session":
             entry["entryPoint"] = True
         functions.append(entry)
@@ -249,7 +264,12 @@ def observe(tdir, out_prefix, fleet, as_json=False):
         sys.stderr.write(f"candor-agents: transcript reader skipped {bad['lines']} unparseable line(s) "
                          f"and {bad['files']} unreadable file(s) — the format is Claude Code's internal "
                          f"JSONL; treat the report as best-effort observed coverage\n")
-    return report, callgraph
+    if truncated:
+        sys.stderr.write(f"candor-agents: observed `paths` TRUNCATED at {PATHS_CAP} for "
+                         f"{', '.join(f'{n} ({total} paths)' for n, total in truncated)} — the Fs "
+                         f"literal surface is INCOMPLETE; an `allow Fs` over these units fails closed "
+                         f"(uncertifiable)\n")
+    return report, callgraph, incomplete
 
 
 def main(argv=None):
@@ -336,7 +356,7 @@ def main(argv=None):
         base = os.path.basename(os.path.abspath(target)).lstrip("-")
         if (not os.path.isdir(target)) or base in ("", "null", "dev"):
             base = os.path.basename(os.path.abspath(tdir)).lstrip("-") or "fleet"
-    report, callgraph = observe(tdir, out, base, as_json=as_json)
+    report, callgraph, incomplete = observe(tdir, out, base, as_json=as_json)
 
     # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`) over the OBSERVED ────
     # report. A set-but-unreadable policy FAILS (exit 2), a violation exits 1 — never a silent
@@ -351,7 +371,8 @@ def main(argv=None):
             sys.stderr.write(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT "
                              f"enforced (exit 2)\n")
             return 2
-        violations = _policy.evaluate_policy(_policy.parse_policy(ptext), report["functions"], callgraph)
+        violations = _policy.evaluate_policy(_policy.parse_policy(ptext), report["functions"], callgraph,
+                                             incomplete=incomplete)
         for v in violations:
             sys.stderr.write(_policy.render(v) + "\n")  # keep stdout pure JSON in --json mode
     if gate_json is not None:
