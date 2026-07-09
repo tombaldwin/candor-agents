@@ -125,8 +125,9 @@ def _print_human(s, path):
 
 
 def main(argv):
-    path = target = session = since = None
+    path = session = since = None
     target = "."
+    target_set = False
     as_json = False
     i = 0
     while i < len(argv):
@@ -150,8 +151,13 @@ def main(argv):
             print(f"candor-agents: unknown flag {a} (usage: stats [<dir>] [--log <path>] "
                   f"[--session <id>] [--since <iso>] [--json])", file=sys.stderr)
             return 2
+        elif target_set:
+            # a second positional FAILS like scan/drift — it silently replaced the target before
+            print(f"candor-agents: unexpected extra argument {a}", file=sys.stderr)
+            return 2
         else:
             target = a
+            target_set = True
             i += 1
     if since and not since[:4].isdigit():
         print(f"candor-agents: --since {since!r} doesn't look like an ISO timestamp "
