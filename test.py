@@ -1362,6 +1362,44 @@ check("κ ledger: a VOIDED candorEffects declaration aggregates as a κ gap (mcp
 print()
 
 
+# ══ observed `paths` truncation: disclosed + fail-closed (the position-201 evasion) ════════════════
+# The emit bound (200) sorted lexicographically meant an `allow Fs` gate evaluated only the first 200
+# paths — a disallowed path sorted past position 200 passed CLEAN with no disclosure. Now: the receipt
+# discloses the truncation, and the unit's Fs surface reads INCOMPLETE to the gate (uncertifiable —
+# the AS-EFF-008 fail-closed posture on an incomplete literal surface).
+_ptd = _mkd()
+with open(os.path.join(_ptd, "s.jsonl"), "w") as _pf:
+    for _i in range(201):  # /repo/f000 … /repo/f200 — ALL inside the allowlist below
+        _pf.write(json.dumps({"message": {"content": [{"type": "tool_use", "id": f"t{_i}",
+                  "name": "Read", "input": {"file_path": f"/repo/f{_i:03d}"}}]}}) + "\n")
+_pallow = os.path.join(_mkd(), "p"); open(_pallow, "w").write("allow Fs /repo\n")
+_pout = os.path.join(_mkd(), "o")
+rpt = cli("observe", _ptd, "--transcripts", _ptd, "--out", _pout, "--fleet", "t", "--policy", _pallow)
+_prep = json.load(open(f"{_pout}.t.Observed.json"))
+_psess = next(f for f in _prep["functions"] if f["fn"] == "session")
+check("observe: >200 observed paths are truncated at the emit bound (200 in the report)",
+      len(_psess["paths"]) == 200, len(_psess.get("paths", [])))
+check("observe: the truncation is DISCLOSED on the receipt (unit + total, INCOMPLETE, fail-closed note)",
+      "TRUNCATED at 200" in rpt.stderr and "session (201 paths)" in rpt.stderr
+      and "INCOMPLETE" in rpt.stderr, rpt.stderr[-300:])
+check("observe: `allow Fs` over a TRUNCATED surface fails closed (exit 1, uncertifiable) even though "
+      "every VISIBLE path is allowed",
+      rpt.returncode == 1 and "AS-EFF-008" in rpt.stderr and "INCOMPLETE" in rpt.stderr,
+      f"rc={rpt.returncode} err={rpt.stderr[-240:]!r}")
+# control: the same fleet under the cap certifies clean — fail-closed bites ONLY on truncation
+_ptc = _mkd()
+with open(os.path.join(_ptc, "s.jsonl"), "w") as _pf:
+    for _i in range(3):
+        _pf.write(json.dumps({"message": {"content": [{"type": "tool_use", "id": f"t{_i}",
+                  "name": "Read", "input": {"file_path": f"/repo/f{_i}"}}]}}) + "\n")
+rptc = cli("observe", _ptc, "--transcripts", _ptc, "--out", os.path.join(_mkd(), "o"),
+           "--fleet", "t", "--policy", _pallow)
+check("observe: the same `allow Fs` over a COMPLETE (untruncated) surface passes clean (control)",
+      rptc.returncode == 0 and "TRUNCATED" not in rptc.stderr, f"rc={rptc.returncode}")
+
+print()
+
+
 # ══ policy.py: the in-process §6.2 gate, unit-tested + verdict PARITY with candor-query ════════════
 # The new in-process gate (policy.py) is the property that lets ONE policy file gate code AND fleets
 # identically — so it must (1) implement AS-EFF-006/008/009 exactly, and (2) AGREE with the unmodified
