@@ -1322,6 +1322,46 @@ check("config: a BARE `policy` line fails loud on the empty path (exit 2), never
 print()
 
 
+# ══ the κ-coverage ledger (spec §7 item 14 — a conformance MUST) ═══════════════════════════════════
+# Per-scan receipt evidence of what the curated classifier does NOT cover, canonical marker
+# `κ doesn't know` (the cross-engine grep target): uncurated MCP servers + unknown tools (Unknown per
+# unit, aggregated here) and UNLISTED command heads (the bare Exec cliff — the head's own effects are
+# INVISIBLE, item 14's silent-purity concern), plus the reviewed-pure grants the verdict relies on.
+rep, r = build(agents_files={"u.md": agent("u", "mcp__billing__charge"),
+                             "x.md": agent("x", "FrobnicateDisk"),
+                             "p.md": agent("p", "TodoWrite, WebFetch")},
+               commands={"mk.md": "---\nallowed-tools: Bash(make:*), Bash(curl:*)\n---\nBuild.\n"},
+               mcp=["billing"])
+check("κ ledger: the receipt line starts with the canonical `κ doesn't know` marker",
+      "κ doesn't know" in r.stderr, r.stderr[-400:])
+check("κ ledger: an uncurated MCP server is named with its unit count (agent + session root)",
+      "mcp:billing (2 units)" in r.stderr, r.stderr[-400:])
+check("κ ledger: an unknown tool is named", "tool:FrobnicateDisk (1 unit)" in r.stderr, r.stderr[-400:])
+check("κ ledger: an UNLISTED command head (make — the bare Exec cliff) is named; a listed head (curl) is not",
+      "head:make (1 unit)" in r.stderr and "head:curl" not in r.stderr, r.stderr[-400:])
+check("κ ledger: the reviewed-pure grants the verdict relies on are disclosed as a CLAIM",
+      "reviewed-pure" in r.stderr and "TodoWrite" in r.stderr and "claim, not a measurement" in r.stderr,
+      r.stderr[-400:])
+# control: a fleet κ covers verb-precisely emits NO ledger line (item 14's exemption — zero gaps)
+rep, r = build(agents_files={"a.md": agent("a", "Read, WebFetch")},
+               commands={"c.md": "---\nallowed-tools: Bash(curl:*)\n---\nFetch.\n"})
+check("κ ledger: a fully-covered fleet (curated tools, listed heads, no pure grants) emits NO κ line",
+      "κ" not in r.stderr, r.stderr[-300:])
+# a voided candorEffects declaration is a κ gap too (the server is back to unclassifiable)
+import subprocess as _sp
+_kd = tempfile.mkdtemp()
+os.makedirs(os.path.join(_kd, ".claude", "agents"))
+open(os.path.join(_kd, ".claude", "agents", "t.md"), "w").write(agent("t", "mcp__typoed__op"))
+json.dump({"mcpServers": {"typoed": {"command": "x", "candorEffects": ["net"]}}},
+          open(os.path.join(_kd, ".mcp.json"), "w"))
+_kr = _sp.run([sys.executable, "-m", "candor_agents.scan", _kd, "--out", os.path.join(_kd, "r"),
+               "--fleet", "t"], capture_output=True, text=True)
+check("κ ledger: a VOIDED candorEffects declaration aggregates as a κ gap (mcp:typoed)",
+      "κ doesn't know" in _kr.stderr and "mcp:typoed" in _kr.stderr, _kr.stderr[-300:])
+
+print()
+
+
 # ══ policy.py: the in-process §6.2 gate, unit-tested + verdict PARITY with candor-query ════════════
 # The new in-process gate (policy.py) is the property that lets ONE policy file gate code AND fleets
 # identically — so it must (1) implement AS-EFF-006/008/009 exactly, and (2) AGREE with the unmodified

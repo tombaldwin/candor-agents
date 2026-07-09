@@ -498,6 +498,50 @@ def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
     return effs, fs, why
 
 
+def kappa_ledger(why_map, unit_heads, pure_used):
+    """The κ-coverage ledger (spec §7 item 14, a conformance MUST) — the fleet analog of the code
+    engines' per-scan receipt, canonical marker `κ doesn't know`. What the fleet's curated classifier
+    (κ = TOOL_EFFECTS/MCP_TABLE/COMMAND_HEAD/PURE_TOOLS) does NOT cover, named with unit counts:
+      - `mcp:<server>`  an uncurated / voided-declaration MCP server (reads Unknown per unit — the
+                        fleet domain DISCLOSES these already; the ledger is the per-scan aggregate)
+      - `tool:<name>`   a tool name outside every table (reads Unknown per unit)
+      - `head:<name>`   a literal sub-command head COMMAND_HEAD doesn't list — the unit keeps only
+                        the bare Exec cliff, so the head's own effects are INVISIBLE (not Unknown):
+                        the sharpest edge, exactly item 14's silent-purity concern
+    plus the curated PURE claims the verdict RELIES on: a PURE_TOOLS grant contributes nothing by
+    candor's own review — a claim, not a measurement — so it is disclosed rather than silent.
+    Exempt (item 14): tools TOOL_EFFECTS/MCP_TABLE/COMMAND_HEAD cover verb-precisely, and the
+    structural origins (`ambient:`, `agent-spawn:`, `hooks-*`) — indeterminacy, not curation gaps."""
+    counts = {}
+    for whys in why_map.values():
+        for w in whys:
+            if w.startswith("mcp-uncurated:") or w.startswith("mcp-decl-invalid:"):
+                key = "mcp:" + w.split(":")[1]
+            elif w.startswith("tool-unknown:"):
+                key = "tool:" + w.split(":", 1)[1]
+            else:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+    for heads in unit_heads.values():
+        for h in heads:
+            if h not in COMMAND_HEAD:
+                counts["head:" + h] = counts.get("head:" + h, 0) + 1
+    lines = []
+    if counts:
+        top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        shown = ", ".join(f"{k} ({n} unit{'s' if n != 1 else ''})" for k, n in top[:8])
+        more = f" + {len(top) - 8} more" if len(top) > 8 else ""
+        lines.append(f"candor-agents: κ doesn't know {len(top)} "
+                     f"capabilit{'y' if len(top) == 1 else 'ies'} this fleet declares — an uncurated "
+                     f"MCP server / unknown tool reads Unknown (disclosed per unit); an unlisted "
+                     f"command head keeps only the bare Exec cliff (its own effects INVISIBLE): "
+                     f"{shown}{more}")
+    if pure_used:
+        lines.append(f"candor-agents: κ relies on {len(pure_used)} reviewed-pure tool grant(s) — a "
+                     f"curated claim, not a measurement: {', '.join(sorted(pure_used))}")
+    return lines
+
+
 def print_version():
     """`--version`/`-V` (spec §3.3): the installed build + the candor-spec version it speaks, then an
     upgrade line — fully OFFLINE (candor never phones home; staying current is the agent's job)."""
@@ -1179,6 +1223,22 @@ def main():
     if has_hooks:
         print(f"candor-agents: hooks run AUTOMATICALLY on tool events — {', '.join(hook_events) or 'unreadable settings'}"
               f"{'; cmds: ' + ', '.join(sorted(hook_cmds)) if hook_cmds else ''}", file=sys.stderr)
+
+    # ── the κ-coverage ledger (spec §7 item 14) — per-scan evidence, not a doc footnote ─────────
+    pure_used = set()
+    for a in agents.values():
+        for t in (a["lt"] or []):
+            if base_tool(t) in PURE_TOOLS:
+                pure_used.add(base_tool(t))
+    for unit in list(commands.values()) + list(skills.values()):
+        for t in (unit["tools"] or []):  # already base-stripped at parse
+            if t in PURE_TOOLS:
+                pure_used.add(t)
+    unit_heads = {u: c["heads"] for u, c in {**commands, **skills}.items()}
+    if hook_cmds:
+        unit_heads[HOOKS] = hook_cmds
+    for line in kappa_ledger(why_map, unit_heads, pure_used):
+        print(line, file=sys.stderr)
 
     # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`, spec §3.3) ───────────
     # A set-but-unreadable policy FAILS the run (exit 2) — never silently gate-passes (that includes
