@@ -143,8 +143,20 @@ def main(args):
     if not args or args[0] in ("-h", "--help"):
         print(__doc__.strip(), file=sys.stderr)
         return 0 if args else 2
-    pol = args[0]
-    proj = args[1] if len(args) > 1 and not args[1].startswith("--") else None
+    # guard takes NO flags and at most two positionals. An unknown flag or an extra argument FAILS
+    # (exit 2) — it was silently dropped before (the gateless-ignore class the family forbids:
+    # `guard pol --bogus` emitted the fragment as if nothing was wrong), diverging from every other
+    # subcommand's arg contract.
+    usage = "usage: guard <policy-file> [<project-dir>]"
+    pol, proj = args[0], None
+    for a in args[1:]:
+        if a.startswith("--"):
+            print(f"candor-agents guard: unknown flag {a} ({usage})", file=sys.stderr)
+            return 2
+        if proj is not None:
+            print(f"candor-agents guard: unexpected extra argument {a} ({usage})", file=sys.stderr)
+            return 2
+        proj = a
     try:
         text = open(pol, encoding="utf-8").read()
     except Exception as e:
