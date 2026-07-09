@@ -1540,6 +1540,114 @@ check("policy AS-EFF-009: `forbid web -> db` fires on TRANSITIVE reachability (w
 check("policy AS-EFF-009: no path from the `from` layer → no violation (the reverse direction is clean)",
       _gate("forbid db -> web", _f009, _cg009) == [])
 
+# --- the effect-specific literal matchers (§6.2) — table-driven, verified against the family ------
+# These arms (Exec basename, Db qualified-name + schema.*, Net IPv6) had NEVER executed before these
+# pins. Each vector below was checked against SPEC §6.2 (host by name port-ignored; exec by basename;
+# db case-insensitive qualified name, `schema.*` boundary-respecting, a bare name never widening to a
+# qualified one) AND against the sibling matchers (candor-rust policy.rs, candor-ts policy.mjs,
+# candor-java Literals.cmdBase) — all agree. NOTE on _cmd_base's whitespace split: Java/TS split the
+# first whitespace token before the basename (a command-LINE literal), Rust does not (its literals
+# are bare programs); here both coincide — policy values are ASCII-WS-split tokens (never contain a
+# space) and reached cmds are bash_cmds heads (bare names) — so this port follows Java/TS.
+for _c, _want in [("/usr/bin/git", "git"), ("git", "git"), ("C:\\tools\\git.exe", "git.exe"),
+                  ("git status", "git"), ("  /usr/bin/curl https://x  ", "curl"), ("", "")]:
+    check(f"policy _cmd_base({_c!r}) == {_want!r} (§6.2 exec-by-basename, Rust/Java/TS parity)",
+          _pol._cmd_base(_c) == _want, repr(_pol._cmd_base(_c)))
+for _h, _want in [("[2001:db8::aa]:443", "2001:db8::aa"), ("[2001:db8::aa]", "2001:db8::aa"),
+                  ("2001:db8::aa", "2001:db8::aa"), ("::1", "::1"),
+                  ("api.stripe.com:443", "api.stripe.com"), ("api.stripe.com", "api.stripe.com")]:
+    check(f"policy _host_part({_h!r}) == {_want!r} (§6.2 host-by-name; IPv6 bracket + bare branches)",
+          _pol._host_part(_h) == _want, repr(_pol._host_part(_h)))
+for _a, _r, _want in [("ledger.*", "ledger.entries", True),
+                      ("ledger.*", "ledgerx.entries", False),   # the schema-wildcard BOUNDARY
+                      ("ledger.*", "ledger", False),            # the bare schema name is not a table in it
+                      ("LEDGER.ENTRIES", "ledger.entries", True),  # case-insensitive
+                      ("entries", "ledger.entries", False),     # a bare name never widens to qualified
+                      ("ledger.entries", "ledger.entries", True)]:
+    check(f"policy _table_covered({_a!r}, {_r!r}) is {_want} (§6.2 db qualified-name + schema.*)",
+          _pol._table_covered(_a, _r) is _want)
+
+# gate-level: the Exec and Db arms through evaluate_policy (allow Exec git clears /usr/bin/git, flags
+# /usr/bin/curl; allow Db ledger.* clears ledger.entries, flags ledgerx.entries)
+_fex = [{"fn": "runner", "inferred": ["Exec"], "cmds": ["/usr/bin/git", "/usr/bin/curl"], "calls": []}]
+_vex = _gate("allow Exec git", _fex, {})
+check("policy AS-EFF-008 Exec arm: `allow Exec git` clears /usr/bin/git (basename) and flags /usr/bin/curl",
+      len(_vex) == 1 and "curl" in _vex[0]["detail"] and "git" not in
+      re.search(r"reaches \{ ([^}]*) \}", _vex[0]["detail"]).group(1), _vex)
+check("policy AS-EFF-008 Exec arm: an allowlist covering both heads clears the unit",
+      _gate("allow Exec git curl", _fex, {}) == [])
+_fdb = [{"fn": "dbuser", "inferred": ["Db"], "tables": ["ledger.entries"], "calls": []}]
+check("policy AS-EFF-008 Db arm: `allow Db ledger.*` clears ledger.entries",
+      _gate("allow Db ledger.*", _fdb, {}) == [])
+_fdbx = [{"fn": "dbuser", "inferred": ["Db"], "tables": ["ledgerx.entries"], "calls": []}]
+_vdbx = _gate("allow Db ledger.*", _fdbx, {})
+check("policy AS-EFF-008 Db arm: `allow Db ledger.*` does NOT cover ledgerx.entries (the wildcard boundary)",
+      len(_vdbx) == 1 and _vdbx[0]["rule"] == "AS-EFF-008" and "ledgerx.entries" in _vdbx[0]["detail"], _vdbx)
+# Net IPv6: one allowed IPv6 (with port) clears that address only — the naive first-colon split once
+# collapsed every 2001:db8::* to `2001`, so one allowed IPv6 accepted the whole block (the Rust
+# /code-review find; pin the class here too).
+_f6a = [{"fn": "netter", "inferred": ["Net"], "hosts": ["2001:db8::aa"], "calls": []}]
+_f6b = [{"fn": "netter", "inferred": ["Net"], "hosts": ["2001:db8::bb"], "calls": []}]
+check("policy AS-EFF-008 Net IPv6: `allow Net [2001:db8::aa]:443` clears the bare reached 2001:db8::aa",
+      _gate("allow Net [2001:db8::aa]:443", _f6a, {}) == [])
+check("policy AS-EFF-008 Net IPv6: a DIFFERENT address in the same block is flagged (no first-colon collapse)",
+      len(_gate("allow Net 2001:db8::aa", _f6b, {})) == 1)
+# process-level (the layer that owns the exit code): the Exec arm end to end through observe —
+# a transcript running /usr/bin/git under `allow Exec git` passes 0; under `allow Exec rsync` exits 1.
+_exd = _mkd()
+open(os.path.join(_exd, "s.jsonl"), "w").write(
+    '{"message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", '
+    '"input": {"command": "/usr/bin/git status"}}]}}\n')
+_pex_ok = os.path.join(_mkd(), "p"); open(_pex_ok, "w").write("allow Exec git\n")
+_pex_no = os.path.join(_mkd(), "p"); open(_pex_no, "w").write("allow Exec rsync\n")
+check("cli observe --policy `allow Exec git`: a /usr/bin/git run certifies clean (basename), exit 0",
+      cli("observe", _exd, "--transcripts", _exd, "--out", os.path.join(_mkd(), "o"),
+          "--fleet", "t", "--policy", _pex_ok).returncode == 0)
+_rex = cli("observe", _exd, "--transcripts", _exd, "--out", os.path.join(_mkd(), "o"),
+           "--fleet", "t", "--policy", _pex_no)
+check("cli observe --policy `allow Exec rsync`: the git head is outside the allowlist → AS-EFF-008, exit 1",
+      _rex.returncode == 1 and "AS-EFF-008" in _rex.stderr, f"rc={_rex.returncode} err={_rex.stderr[-160:]!r}")
+# the default arm (unreachable via parse_policy — kept for Rust/TS parity + embedders): exact match
+check("policy _literal_allowed default arm (embedder surface): unknown effect exact-matches, never crashes",
+      _pol._literal_allowed("Env", "HOME", ["HOME"]) is True
+      and _pol._literal_allowed("Env", "PATH", ["HOME"]) is False)
+
+# --- the §6.2 parse-warning contract (drop-with-warning; mirrors candor-java's PolicyParserTest) ---
+import contextlib, io
+
+def _parse_warn(text):
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        p = _pol.parse_policy(text)
+    return p, buf.getvalue()
+
+_pp, _w = _parse_warn("deny Exec   # this is a comment, not a scope")
+check("policy parse: an inline `#` comment is stripped, never taken as the scope",
+      _pp["deny"] == [{"effects": ["Exec"], "scope": "", "raw": "deny Exec"}], _pp)
+_pp, _w = _parse_warn("deny notaneffect")
+check("policy parse: a deny naming NO known effect is DROPPED with a warning — never reinterpreted "
+      "as `pure` (which would forbid everything)",
+      _pp["deny"] == [] and "deny names no known effect" in _w, (_pp, _w))
+_pp, _w = _parse_warn("pure com.acme.domain")
+check("policy parse: `pure <scope>` IS the empty-effect deny",
+      _pp["deny"] == [{"effects": [], "scope": "com.acme.domain", "raw": "pure com.acme.domain"}], _pp)
+_pp, _w = _parse_warn("forbid com.acme.web->com.acme.db")
+check("policy parse: an UNSPACED `a->b` forbid is malformed → dropped with a warning",
+      _pp["forbid"] == [] and "malformed forbid" in _w, (_pp, _w))
+_pp, _w = _parse_warn("allow Net in")
+check("policy parse: a value-less `allow Net in` is dropped with a warning (`in` not kept as a value)",
+      _pp["allow"] == [] and "allow names no values" in _w, (_pp, _w))
+_pp, _w = _parse_warn("allow Log com.acme.x")
+check("policy parse: an allow on a non-literal-surface effect (Log) is dropped with a warning",
+      _pp["allow"] == [] and "allow supports only Net hosts" in _w, (_pp, _w))
+_pp, _w = _parse_warn("bogus rule here")
+check("policy parse: an unknown rule kind is dropped with a warning",
+      _pp == {"deny": [], "allow": [], "forbid": []} and "unknown rule kind" in _w, (_pp, _w))
+_pp, _w = _parse_warn("deny Db Net   com.acme.domain")
+check("policy parse: multi-effect deny — the first non-effect token is the scope and ENDS the rule",
+      _pp["deny"] == [{"effects": ["Db", "Net"], "scope": "com.acme.domain",
+                       "raw": "deny Db Net   com.acme.domain"}], _pp)
+
 # --- VERDICT PARITY with the UNMODIFIED candor-query (the property that makes ONE gate code+fleets) ---
 # Parser parity: policy.parse_policy must agree with `candor-query parsepolicy` (the canonical shared
 # parser) on each rule kind — same drops, same scopes, same values. Then VERDICT parity: the violating
