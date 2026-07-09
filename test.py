@@ -664,6 +664,31 @@ r = driftcli("fixture", "--transcripts", "fixture")  # target == transcripts val
 check("drift: a target equal to the transcripts value is not dropped to '.'",
       "fleet `fixture`" in r.stdout or "no agent definitions under fixture" in (r.stdout + r.stderr), r.stdout + r.stderr)
 
+# drift is a COMPARISON, not a gate run: a standing CANDOR_POLICY (or a checked-in .candor/config
+# policy) must NOT gate drift's INTERNAL scan/observe — it made the internal scan exit 1 on any
+# violation, and drift aborted as a scan error before comparing anything (review find). The child
+# env is scrubbed + marked gate-free.
+_dpol = os.path.join(tempfile.mkdtemp(), "deny-net"); open(_dpol, "w").write("deny Net\n")
+_denv = dict(os.environ); _denv["CANDOR_POLICY"] = _dpol
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture",
+                    "--transcripts", "fixture/transcripts"], capture_output=True, text=True, env=_denv)
+check("drift: a standing $CANDOR_POLICY does NOT abort drift's internal scan (the comparison runs, exit 0)",
+      r.returncode == 0 and "drift — declared" in r.stdout and "AS-EFF-006" not in r.stderr,
+      f"rc={r.returncode} err={r.stderr[-200:]!r}")
+_dcd = tempfile.mkdtemp()
+os.makedirs(os.path.join(_dcd, ".claude", "agents")); os.makedirs(os.path.join(_dcd, ".candor"))
+open(os.path.join(_dcd, ".claude", "agents", "n.md"), "w").write(agent("n", "WebFetch"))
+open(os.path.join(_dcd, ".candor", "config"), "w").write("policy fleet.policy\n")
+open(os.path.join(_dcd, "fleet.policy"), "w").write("deny Net\n")
+_dtd = tempfile.mkdtemp(); open(os.path.join(_dtd, "s.jsonl"), "w").write("")
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", _dcd, "--transcripts", _dtd],
+                   capture_output=True, text=True)
+check("drift: a checked-in .candor/config policy does not abort drift either (gate-free children)",
+      r.returncode == 0 and "drift — declared" in r.stdout, f"rc={r.returncode} err={r.stderr[-200:]!r}")
+check("drift: the SAME config still gates a direct scan (only drift's children are gate-free)",
+      subprocess.run([sys.executable, "-m", "candor_agents.scan", _dcd, "--out",
+                      os.path.join(_dcd, "r")], capture_output=True, text=True).returncode == 1)
+
 # transcript slug flattens ALL non-alphanumerics (not just / and .) — verify by planting a fake
 # project transcript dir under a temp HOME for an underscore-named target and confirming it resolves.
 with tempfile.TemporaryDirectory() as home:

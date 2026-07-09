@@ -33,16 +33,25 @@ BUILTIN_AGENTS = {
 }
 
 
-def _run(mod, args):
+def _run(mod, args, gate_free=False):
     # Dispatch a sibling module as its own process via `-m candor_agents.<mod>` so the package
     # resolves wherever it's installed (pipx/venv/site-packages) — not by a fragile file path.
-    return subprocess.call([sys.executable, "-m", f"candor_agents.{mod}"] + args)
+    # `gate_free` (drift's internal scan/observe): the child env is SCRUBBED of CANDOR_POLICY and
+    # CANDOR_CONFIG and marked no-gate — drift COMPARES declared vs observed; with a standing policy
+    # in the env (or a checked-in .candor/config the child would discover), the internal scan exited
+    # 1 on any violation and drift ABORTED as a scan error. The user-facing gate surfaces are
+    # scan/observe themselves; drift's verdict is --strict over its anomalies.
+    env = None
+    if gate_free:
+        env = {k: v for k, v in os.environ.items() if k not in ("CANDOR_POLICY", "CANDOR_CONFIG")}
+        env["_CANDOR_AGENTS_NO_GATE"] = "1"
+    return subprocess.call([sys.executable, "-m", f"candor_agents.{mod}"] + args, env=env)
 
 
 def drift(target, strict, transcripts=None):
     fleet = os.path.basename(os.path.abspath(target)).lstrip("-") or "fleet"
     with tempfile.TemporaryDirectory() as td:
-        rc = _run("scan", [target, "--out", os.path.join(td, "d"), "--fleet", fleet])
+        rc = _run("scan", [target, "--out", os.path.join(td, "d"), "--fleet", fleet], gate_free=True)
         if rc != 0:
             return rc
         # Pass the SAME --fleet to observe so both halves write `{d,o}.<fleet>.*.json` — without it
@@ -51,7 +60,7 @@ def drift(target, strict, transcripts=None):
         obs_args = [target, "--out", os.path.join(td, "o"), "--fleet", fleet]
         if transcripts:
             obs_args += ["--transcripts", transcripts]
-        rc = _run("observe", obs_args)
+        rc = _run("observe", obs_args, gate_free=True)
         if rc != 0:
             return rc
         declared = json.load(open(os.path.join(td, f"d.{fleet}.Fleet.json")))
