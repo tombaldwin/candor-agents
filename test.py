@@ -1166,6 +1166,41 @@ check("stats: missing log is a clean no-op (exit 0)",
       _rm.returncode == 0 and "no activity log" in _rm.stdout, _rm.stdout + _rm.stderr)
 check("stats: unknown flag exits 2", _stats(_sd, "--bogus").returncode == 2)
 
+# ── the DEFAULT human output (_print_human) over the same real-shaped log — the path every user
+# without --json hits; it had never executed. Pin the key lines, incl. the presence-gated ones.
+_rh = _stats(_sd)
+check("stats human: the default path renders without crashing, exit 0",
+      _rh.returncode == 0 and "Traceback" not in _rh.stderr, _rh.stderr[-160:])
+for _line in ("gate activity", "span: 2026-06-23T19:40:00Z → 2026-06-23T20:10:00Z", "2 session(s)",
+              "5 edits checked — 4 clean, 1 blocked, 0 setup",
+              "blocked by policy: AS-EFF-006 ×1",
+              "effects introduced this period: Db",
+              "effects present in the code: Db",
+              "largest blast radius seen: 5 function(s)",
+              "Unknowns disclosed (max in a turn): 6",
+              "files touched: 4",
+              "candor's own time: 3.0s across 5 checks"):
+    check(f"stats human: prints {_line!r}", _line in _rh.stdout, _rh.stdout)
+# a log WITHOUT the optional unknowns/reviewMs fields: those lines are ABSENT (presence-gated, not
+# zero-rendered) and the rest still renders
+_sd2 = _mkd(); os.makedirs(os.path.join(_sd2, ".candor"))
+open(os.path.join(_sd2, ".candor", "activity.jsonl"), "w").write(
+    '{"ts":"2026-06-23T19:40:00Z","sessionId":"s1","edited":["a.py"],"verdict":"clean","violations":[]}\n')
+_rh2 = _stats(_sd2)
+check("stats human: a log without unknowns/reviewMs renders WITHOUT those lines (no crash, no fake 0s)",
+      _rh2.returncode == 0 and "1 edits checked" in _rh2.stdout
+      and "Unknowns disclosed" not in _rh2.stdout and "candor's own time" not in _rh2.stdout, _rh2.stdout)
+# an all-filtered log (0 matching turns) is the no-matching-activity line, not a crash on span[None]
+check("stats human: 0 matching turns → the no-matching-activity line, exit 0",
+      "no matching gate activity" in _stats(_sd, "--session", "no-such-session").stdout)
+# flag-value errors: each value-taking flag at end of line exits 2 (never a silent default)
+for _fl in ("--log", "--session", "--since"):
+    check(f"stats: {_fl} with no value exits 2", _stats(_sd, _fl).returncode == 2)
+# a non-ISO --since gets the lexical-compare warning (the compare may drop everything)
+_rw = _stats(_sd, "--since", "yesterday", "--json")
+check("stats: a non-ISO --since warns on stderr (lexical compare may drop everything)",
+      _rw.returncode == 0 and "doesn't look like an ISO timestamp" in _rw.stderr, _rw.stderr)
+
 _td = _mkd()
 os.makedirs(os.path.join(_td, "subagents"), exist_ok=True)
 def _ev(i, name, inp):
@@ -1197,6 +1232,38 @@ _sv_out = _sv("--transcript", _td).stdout
 check("savings: human output labels it a model and cites the benchmark",
       "model, not measured" in _sv_out and "candor.poly.io/agents" in _sv_out, _sv_out)
 check("savings: no candor-query calls → clean no-op (exit 0)", _sv("--transcript", _mkd()).returncode == 0)
+# the token-estimate block, incl. _h's millions formatting: 3 blast queries × 24k × (17−1) = 1,152,000
+# → "~1.2M"; tool calls 3 × (50−1) = 147 → "~147"; the measured line counts 4 calls / 3 blast
+check("savings human: the measured line counts calls and blast-radius queries",
+      "4 call(s), 3 blast-radius (callers/where)" in _sv_out, _sv_out)
+check("savings human: the estimate block renders _h in millions (~1.2M tokens) and ~147 tool calls",
+      "~1.2M tokens" in _sv_out and "~147 tool calls" in _sv_out, _sv_out)
+# blast == 0 with queries > 0: the explainer (benchmark covers only callers/where), exit 0, no estimate
+_bd = _mkd()
+open(os.path.join(_bd, "s.jsonl"), "w").write(_ev("1", "Bash", {"command": "candor-query show r.json Foo 0"}) + "\n")
+_rb0 = _sv("--transcript", _bd)
+check("savings human: queries but NO blast-radius ones → the nothing-to-model explainer, exit 0",
+      _rb0.returncode == 0 and "No blast-radius (callers/where) queries" in _rb0.stdout
+      and "tokens and" not in _rb0.stdout, _rb0.stdout)
+# no transcripts at all (an empty project dir, no slug): the pointer note, exit 0 — both surfaces
+_nv = _sv(_mkd())
+check("savings human: no transcripts found → the pointer note, exit 0",
+      _nv.returncode == 0 and "no transcripts found" in _nv.stdout
+      and "point --transcript" in _nv.stdout, _nv.stdout)
+_nvj = _sv(_mkd(), "--json")
+check("savings --json: no transcripts found → {queries: 0, note}, exit 0",
+      _nvj.returncode == 0 and json.loads(_nvj.stdout)["queries"] == 0
+      and "no transcripts found" in json.loads(_nvj.stdout)["note"], _nvj.stdout)
+# flag errors: a value-less --transcript and an unknown flag each exit 2
+check("savings: --transcript with no value exits 2", _sv("--transcript").returncode == 2)
+check("savings: unknown flag exits 2", _sv("--bogus").returncode == 2)
+# _is_query's MCP-tool-name branch: a candor-query wired as an MCP tool counts; lookalikes don't
+from candor_agents.savings import _is_query as _isq
+check("savings _is_query: an MCP candor-query tool name matches (the non-Bash branch)",
+      _isq("mcp__candor__query", {}) is True and _isq("mcp__candor-query__callers", None) is True)
+check("savings _is_query: non-candor tools and Bash without a command don't match",
+      _isq("mcp__github__search", {}) is False and _isq("Bash", {"cmd": "x"}) is False
+      and _isq(None, {}) is False)
 
 print()
 
