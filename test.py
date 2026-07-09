@@ -1316,6 +1316,53 @@ except Exception:
 check("cli observe --json --policy <violating>: pure JSON stdout, violation on stderr, exit 1",
       rojp.returncode == 1 and _opure, f"rc={rojp.returncode}")
 
+# ── the direct `python -m candor_agents.{scan,observe}` arg-error matrices ────────────────────────
+# Every arg error is exit 2 with a clean ONE-LINE diagnostic — never a traceback (a traceback means
+# no report and the gate silently not running), never silently ignored/reinterpreted.
+def _direct(mod, *a):
+    return subprocess.run([sys.executable, "-m", f"candor_agents.{mod}", *a],
+                          capture_output=True, text=True, cwd=HERE)
+
+for _mod, _case, _args, _want in [
+    ("scan", "a value-taking flag at end of line", ["x", "--out"], "requires a value"),
+    ("scan", "a flag-shaped value", ["x", "--policy", "--json"], "requires a value"),
+    ("scan", "an unknown flag", ["x", "--frobnicate"], "unknown flag"),
+    ("scan", "a second positional", ["x", "y"], "unexpected extra argument"),
+    ("scan", "no project dir", ["--json"], "project dir is required"),
+    ("observe", "a value-taking flag at end of line", ["x", "--out"], "requires a value"),
+    ("observe", "a flag-shaped value", ["x", "--transcripts", "--json"], "requires a value"),
+    ("observe", "an unknown flag", ["x", "--frobnicate"], "unknown flag"),
+]:
+    _dr = _direct(_mod, *_args)
+    check(f"{_mod} (direct -m): {_case} → exit 2, one-line error, no traceback",
+          _dr.returncode == 2 and _want in _dr.stderr and "Traceback" not in _dr.stderr,
+          f"rc={_dr.returncode} err={_dr.stderr[-160:]!r}")
+# observe: transcripts not found (no *.jsonl in the target, no ~/.claude/projects slug) → exit 2
+_ntd = _mkd()
+_rnt = _direct("observe", _ntd)
+check("observe (direct -m): no transcripts found → exit 2 with the one-line diagnostic",
+      _rnt.returncode == 2 and "no transcripts found" in _rnt.stderr and "Traceback" not in _rnt.stderr,
+      f"rc={_rnt.returncode} err={_rnt.stderr[-160:]!r}")
+_ntf = os.path.join(_mkd(), "afile"); open(_ntf, "w").write("x")
+_rntf = _direct("observe", _ntd, "--transcripts", _ntf)
+check("observe (direct -m): --transcripts naming a FILE → exit 2 `not a directory` (never an os.listdir crash)",
+      _rntf.returncode == 2 and "not a directory" in _rntf.stderr, f"rc={_rntf.returncode}")
+# THE POSITIONAL-SWALLOW CLASS: observe/stats/savings silently OVERWROTE the target on a second
+# positional (`observe a b` analyzed b, dropped a — rc 0), while scan/drift exit 2. One contract:
+# a second positional is exit 2 everywhere.
+_rop2 = _direct("observe", "first", _otdir, "--transcripts", _otdir)
+check("observe (direct -m): a SECOND positional exits 2 (was silently replacing the target)",
+      _rop2.returncode == 2 and "unexpected extra argument" in _rop2.stderr,
+      f"rc={_rop2.returncode} err={_rop2.stderr[-140:]!r}")
+_rsp2 = subprocess.run([sys.executable, "-m", "candor_agents.cli", "stats", "a", "b"],
+                       capture_output=True, text=True, cwd=HERE)
+check("stats: a SECOND positional exits 2 (was silently replacing the target)",
+      _rsp2.returncode == 2 and "unexpected extra argument" in _rsp2.stderr, f"rc={_rsp2.returncode}")
+_rvp2 = subprocess.run([sys.executable, "-m", "candor_agents.cli", "savings", "a", "b"],
+                       capture_output=True, text=True, cwd=HERE)
+check("savings: a SECOND positional exits 2 (was silently replacing the target)",
+      _rvp2.returncode == 2 and "unexpected extra argument" in _rvp2.stderr, f"rc={_rvp2.returncode}")
+
 print()
 
 

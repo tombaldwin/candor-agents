@@ -284,6 +284,7 @@ def main(argv=None):
         return 0
     out = ".candor/report"
     target = "."
+    target_set = False
     tdir_override = None
     fleet_override = None
     as_json = False
@@ -330,8 +331,14 @@ def main(argv=None):
                              f"(usage: observe <dir> [--out <prefix>] [--json] [--policy <file>] "
                              f"[--gate-json <file>] [--transcripts <dir>] [--fleet <name>])\n")
             return 2
+        elif target_set:
+            # A second positional FAILS like scan/drift — it silently REPLACED the target before
+            # (`observe a b` analyzed b and dropped a with exit 0, the positional-swallow class).
+            sys.stderr.write(f"candor-agents: unexpected extra argument {args[i]}\n")
+            return 2
         else:
             target = args[i]
+            target_set = True
             i += 1
     # `.candor/config` (spec §3.4): anchored to the PROJECT target (the fleet whose sessions these
     # are), loaded before observing so a configured-but-unusable config fails up front and a repo

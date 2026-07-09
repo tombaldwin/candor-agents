@@ -72,6 +72,7 @@ def _h(n):
 
 def main(argv):
     target, tdir, as_json = ".", None, False
+    target_set = False
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -88,8 +89,13 @@ def main(argv):
             print(f"candor-agents: unknown flag {a} "
                   f"(usage: savings [<dir>] [--transcript <dir>] [--json])", file=sys.stderr)
             return 2
+        elif target_set:
+            # a second positional FAILS like scan/drift — it silently replaced the target before
+            print(f"candor-agents: unexpected extra argument {a}", file=sys.stderr)
+            return 2
         else:
             target = a
+            target_set = True
             i += 1
     if tdir is None:
         tdir = transcript_dir_for(target)
