@@ -244,3 +244,37 @@ def write_gate_json(path, violations, spec, stdout_is_json=False):
         sys.stderr.write(f"candor-agents: could not write --gate-json {path} ({e}) — "
                          f"failing (exit 2), the verdict surface must not vanish silently\n")
         return False
+
+
+def run_gate(policy_path, gate_json, functions, callgraph, spec, stdout_is_json=False, incomplete=None):
+    """The standing §6.2 gate + §3.3 verdict — ONE implementation, shared by scan (declared) and
+    observe (observed) so the two gate surfaces can never diverge in wording or exit-code contract:
+    a set-but-unreadable policy FAILS the run (exit 2) — never a silent gate-pass (that includes a
+    set-but-EMPTY $CANDOR_POLICY / a bare config `policy` line: enabled-with-empty fails loud on the
+    open, never a silent skip); a violation exits 1. --gate-json (spec §3.3 ⟨0.8⟩) re-emits the SAME
+    violation records as the machine verdict — written whenever the flag is given (ok:true, [] with
+    no gate configured), and an unwritable verdict path exits 2, never a silent drop. Violations and
+    the receipt go to stderr (stdout may already carry the report envelope in --json mode).
+    `incomplete` is observe's truncated-literal-surface map (see evaluate_policy). Returns the
+    process exit code: 0 clean (or no gate configured), 1 violation(s), 2 gate-infrastructure failure."""
+    import sys
+    violations = []
+    if policy_path is not None:
+        try:
+            ptext = open(policy_path, encoding="utf-8").read()
+        except OSError as e:
+            print(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT enforced "
+                  f"(exit 2)", file=sys.stderr)
+            return 2
+        violations = evaluate_policy(parse_policy(ptext), functions, callgraph, incomplete=incomplete)
+        for v in violations:
+            print(render(v), file=sys.stderr)  # keep stdout pure JSON in --json mode
+    if gate_json is not None:
+        if not write_gate_json(gate_json, violations, spec, stdout_is_json=stdout_is_json):
+            return 2
+    if policy_path is not None:
+        if violations:
+            print(f"candor-agents: {len(violations)} policy violation(s)", file=sys.stderr)
+            return 1
+        print("candor-agents: policy ✓", file=sys.stderr)
+    return 0

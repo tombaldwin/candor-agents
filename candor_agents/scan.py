@@ -1228,33 +1228,10 @@ def main():
         print(line, file=sys.stderr)
 
     # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`, spec §3.3) ───────────
-    # A set-but-unreadable policy FAILS the run (exit 2) — never silently gate-passes (that includes
-    # a set-but-EMPTY $CANDOR_POLICY / a bare config `policy` line: enabled-with-empty fails loud on
-    # the open, never a silent skip); a violation exits 1. The gate runs IN-PROCESS over this report
-    # (see policy.py for why not candor-query). --gate-json (spec §3.3 ⟨0.8⟩) re-emits the SAME
-    # violation records as the machine verdict — written whenever the flag is given (ok:true, []
-    # with no gate configured), and an unwritable verdict path exits 2, never a silent drop.
+    # The gate runs IN-PROCESS over this report (see policy.py for why not candor-query), via the
+    # ONE shared run_gate() — scan and observe must never diverge in wording or exit-code contract.
     from candor_agents import policy as _policy
-    violations = []
-    if policy_path is not None:
-        try:
-            ptext = open(policy_path, encoding="utf-8").read()
-        except OSError as e:
-            print(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT enforced "
-                  f"(exit 2)", file=sys.stderr)
-            return 2
-        violations = _policy.evaluate_policy(_policy.parse_policy(ptext), functions, callgraph)
-        for v in violations:
-            print(_policy.render(v), file=sys.stderr)  # keep stdout pure JSON in --json mode
-    if gate_json is not None:
-        if not _policy.write_gate_json(gate_json, violations, SPEC, stdout_is_json=as_json):
-            return 2
-    if policy_path is not None:
-        if violations:
-            print(f"candor-agents: {len(violations)} policy violation(s)", file=sys.stderr)
-            return 1
-        print("candor-agents: policy ✓", file=sys.stderr)
-    return 0
+    return _policy.run_gate(policy_path, gate_json, functions, callgraph, SPEC, stdout_is_json=as_json)
 
 
 if __name__ == "__main__":

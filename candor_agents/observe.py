@@ -363,31 +363,11 @@ def main(argv=None):
     report, callgraph, incomplete = observe(tdir, out, base, as_json=as_json)
 
     # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`) over the OBSERVED ────
-    # report. A set-but-unreadable policy FAILS (exit 2), a violation exits 1 — never a silent
-    # gate-pass. --gate-json (spec §3.3 ⟨0.8⟩) re-emits the SAME violation records as the machine
-    # verdict; an unwritable verdict path exits 2.
+    # report, via the ONE shared run_gate() — scan and observe must never diverge in wording or
+    # exit-code contract. `incomplete` feeds the truncated-Fs fail-closed posture (see observe()).
     from candor_agents import policy as _policy
-    violations = []
-    if policy_path is not None:
-        try:
-            ptext = open(policy_path, encoding="utf-8").read()
-        except OSError as e:
-            sys.stderr.write(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT "
-                             f"enforced (exit 2)\n")
-            return 2
-        violations = _policy.evaluate_policy(_policy.parse_policy(ptext), report["functions"], callgraph,
-                                             incomplete=incomplete)
-        for v in violations:
-            sys.stderr.write(_policy.render(v) + "\n")  # keep stdout pure JSON in --json mode
-    if gate_json is not None:
-        if not _policy.write_gate_json(gate_json, violations, SPEC, stdout_is_json=as_json):
-            return 2
-    if policy_path is not None:
-        if violations:
-            sys.stderr.write(f"candor-agents: {len(violations)} policy violation(s)\n")
-            return 1
-        sys.stderr.write("candor-agents: policy ✓\n")
-    return 0
+    return _policy.run_gate(policy_path, gate_json, report["functions"], callgraph, SPEC,
+                            stdout_is_json=as_json, incomplete=incomplete)
 
 
 if __name__ == "__main__":
