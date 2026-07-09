@@ -136,6 +136,11 @@ def _literal_allowed(effect, reached, values):
         return any(_path_covered(a, reached) for a in values)
     if effect == "Db":
         return any(_table_covered(a, reached) for a in values)
+    # Unreachable via parse_policy (allow is parser-restricted to the four literal surfaces above),
+    # but KEPT deliberately: the Rust (`_ => allow.contains(reached)`) and TS (`default: values.
+    # includes(reached)`) matchers carry the identical arm, and this file's contract is a faithful
+    # line-for-line port of that shared set; evaluate_policy is also a documented embedder surface
+    # (hand-built policy dicts), where an unknown-effect allow must exact-match, never crash.
     return reached in values
 
 
