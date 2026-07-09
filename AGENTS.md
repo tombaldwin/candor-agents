@@ -33,11 +33,30 @@ edges come from subagent metadata, effects classify from observed tool_use event
 compares the two DIRECT sets per agent: granted-but-unused → a least-privilege trim candidate;
 observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 
+## The standing gate (spec §3.3 / §3.4 ⟨0.8⟩)
+
+`scan` and `observe` take `--policy <file>` (honours `$CANDOR_POLICY`; exit 1 on a violation, 2 on
+an unreadable policy — never a silent gate-pass) and `--gate-json <file>`: the structured verdict
+`{spec, ok, violations:[{rule, fn, effects, detail}]}`, written from the SAME check that sets the
+exit code (`fn` is the unit name; feed it to the `candor-sarif` GitHub Action for PR-native
+surfacing; `-` streams it to stdout). A checked-in **`.candor/config`** is the gate's floor
+(precedence: flag → env → config): discovered by walking UP from the scan *target* — never the
+CWD — with `$CANDOR_CONFIG` overriding discovery; a configured-but-unusable config exits 2 (a
+silently-dropped config is a silently-dropped gate), and relative values resolve against the
+config's own directory. A key outside the family vocabulary warns; a family key candor-agents does
+not implement (`strict`, `baseline`, …) warns that its gate is **NOT active here** — never
+silently believed. `drift` runs its internal scan/observe gate-free (it *compares*; the gate
+surfaces are scan/observe themselves). Each scan receipt also prints the spec §7 item-14
+**`κ doesn't know`** coverage ledger: the uncurated MCP servers, unknown tools and unlisted
+command heads the verdict could not see through (an unlisted head keeps only the bare Exec
+cliff — INVISIBLE, not Unknown), plus the reviewed-pure grants it RELIES on (curated claims, not
+measurements).
+
 ## How to read the report
 
 - Units are agent types, `command:`/`skill:`/`cron:` units, and the `session` root; the session and
   each scheduled task are `entryPoint: true` (the autonomous roots). `hash` is `<fleet>#<unit>`.
-  Every unit carries `unitKind` (spec ⟨0.7⟩, informative): `agent`, `command`, `skill`, `cron`,
+  Every unit carries `unitKind` (spec ⟨0.5⟩, informative): `agent`, `command`, `skill`, `cron`,
   `session`, or `hooks` — a fleet's units are not functions, and the field keeps a merged prefix
   (fleet + code reports) readable.
 - `inferred` is the transitive effect set (delegation propagates a delegate's effects to its
@@ -54,12 +73,20 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
   heads are all known external tools is exempt (running candor *over* the code reads `Fs`, it doesn't
   perform the code's `Net`/`Db`).
 - An **uncurated MCP server** or unknown tool reads `Unknown` with a named origin in `unknownWhy`
-  (`mcp-uncurated:<server>`, `tool-unknown:<name>`, `ambient:tools-unrestricted`, `agent-spawn:…`) —
-  never silence. As a **domain engine** (spec §4 ⟨0.7⟩) the fleet has no code dispatch/reflection, so it
+  (`mcp-uncurated:<server>`, `mcp-decl-invalid:<server>:<effect>` — a `candorEffects` declaration
+  voided by an out-of-vocabulary effect name, `tool-unknown:<name>`, `ambient:tools-unrestricted`,
+  `agent-spawn:…`, and on the `hooks` unit `hooks-unreadable:<file>` / `hooks-malformed:<file>` — a
+  settings file that couldn't be read or isn't a JSON object, so its hooks/permissions are unknown —
+  and `hook-type:<type>` — a hook type the scanner doesn't model) — never silence. As a **domain
+  engine** (spec §4 ⟨0.7⟩) the fleet has no code dispatch/reflection, so it
   emits these *fleet* origins instead of the code-canonical `reflect:`/`native:`/`dispatch:`/`callback:`
   vocabulary — the universal rule is that *every* direct `Unknown` source carries a named `unknownWhy`. A `.mcp.json` server can
   declare its effects via the `candorEffects` convention (see DECLARING.md); declared-not-verified
-  trust, curated table outranks.
+  trust, curated table outranks. **The curated MCP table itself is a name-trust bound**: it matches
+  the *conventional server name* only, so a server *named* `time` classifies `{Clock}` whatever its
+  entry actually runs — `.mcp.json` is project-controlled, making a curated row a claim about an
+  honestly-named server, not an audit of the binary behind it; verify the entries if you don't
+  control the file.
 - A missing `tools:` line is **ambient authority** (everything + Unknown); `tools: []` is
   maximally confined. A frontmatter-less `.md` in `.claude/agents/` is not an agent and is
   skipped with disclosure.
