@@ -306,7 +306,7 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 
 # ── 7. envelope + main ────────────────────────────────────────────────────────────────────────────
 rep, cg = scan({"a.md": agent("a", "Read")})
-check("spec envelope (candor.spec = 0.7)", rep["candor"]["spec"] == "0.7")
+check("spec envelope (candor.spec = 0.8)", rep["candor"]["spec"] == "0.8")
 check("hash join keys emitted (§2 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
 check("unitKind names every fleet unit (spec ⟨0.5⟩: agent/session/hooks)",
       all(f.get("unitKind") in ("agent", "session", "hooks") for f in rep["functions"])
@@ -412,8 +412,8 @@ with tempfile.TemporaryDirectory() as td:
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
     check("observe version is single-sourced from scan (no drift)",
           obs["candor"]["version"] == __import__("candor_agents.scan", fromlist=["VERSION"]).VERSION, obs["candor"]["version"])
-    check("observe: spec 0.7 envelope + hash + package",
-          obs["candor"]["spec"] == "0.7" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
+    check("observe: spec 0.8 envelope + hash + package",
+          obs["candor"]["spec"] == "0.8" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
           set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
 # bash_cmds: the observed-cmds extractor (first non-fixture run found it fabricating heads)
@@ -701,7 +701,7 @@ check("the wheel ships the candor_agents package (so agentsmd + the modules are 
       and os.path.exists(os.path.join(HERE, "candor_agents", "agentsmd.py")))
 r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
 check("--agents prints the version header + the exact installed contract",
-      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.7")
+      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.8")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 # ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
@@ -1205,6 +1205,119 @@ except Exception:
     _opure = False
 check("cli observe --json --policy <violating>: pure JSON stdout, violation on stderr, exit 1",
       rojp.returncode == 1 and _opure, f"rc={rojp.returncode}")
+
+print()
+
+
+# ══ spec 0.8: --gate-json (§3.3) + .candor/config (§3.4) ══════════════════════════════════════════
+# --gate-json: the structured verdict {spec, ok, violations:[{rule,fn,effects,detail}]}, from the
+# SAME records that set the exit code — so a SARIF consumer can never see a verdict that disagrees
+# with the gate. Written whenever the flag is given; unwritable → exit 2, never silent.
+_gj = os.path.join(_mkd(), "verdict.json")
+rgv = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", _gj)
+_gv = json.load(open(_gj))
+check("scan --gate-json <violating>: verdict {spec:0.8, ok:false} agrees with exit 1",
+      rgv.returncode == 1 and _gv["spec"] == "0.8" and _gv["ok"] is False, json.dumps(_gv))
+check("scan --gate-json: each violation carries {rule, fn, effects, detail} (fn = the unit name)",
+      any(v["rule"] == "AS-EFF-006" and v["fn"] == "leaf" and v["effects"] == ["Net"]
+          and "detail" in v for v in _gv["violations"]), json.dumps(_gv))
+_gj2 = os.path.join(_mkd(), "clean.json")
+check("scan --gate-json <clean policy>: ok:true, violations [], exit 0",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc, "--gate-json", _gj2).returncode == 0
+      and json.load(open(_gj2)) == {"spec": "0.8", "ok": True, "violations": []})
+_gj3 = os.path.join(_mkd(), "nogate.json")
+check("scan --gate-json with NO gate configured: still writes the clean verdict (ok:true, [])",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--gate-json", _gj3).returncode == 0
+      and json.load(open(_gj3))["ok"] is True)
+check("scan --gate-json <unwritable path>: exit 2 — the verdict surface must not vanish silently",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc,
+          "--gate-json", os.path.join(_mkd(), "no-such-dir", "v.json")).returncode == 2)
+rgs = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", "-")
+try:
+    _gvs = json.loads(rgs.stdout)
+except Exception:
+    _gvs = None
+check("scan --gate-json -: the verdict streams to stdout (violation lines stay on stderr), exit 1",
+      rgs.returncode == 1 and _gvs and _gvs["ok"] is False and "AS-EFF-006" in rgs.stderr, rgs.stdout[:120])
+check("scan --json --gate-json -: refused (two JSON documents can't share stdout), exit 2",
+      cli("scan", _cd, "--json", "--policy", _pc, "--gate-json", "-").returncode == 2)
+# observe mirrors the surface
+_gjo = os.path.join(_mkd(), "ov.json")
+rgo = cli("observe", _otdir, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"),
+          "--fleet", "t", "--policy", _pv, "--gate-json", _gjo)
+_gvo = json.load(open(_gjo))
+check("observe --gate-json <violating>: the OBSERVED gate emits the same verdict shape, exit 1",
+      rgo.returncode == 1 and _gvo["ok"] is False
+      and any(v["rule"] == "AS-EFF-006" and v["effects"] == ["Net"] for v in _gvo["violations"]),
+      json.dumps(_gvo))
+
+# .candor/config (spec §3.4): target-anchored discovery (NEVER the CWD), $CANDOR_CONFIG override,
+# fail-closed on a configured-but-unusable file, unknown keys warn, family-but-unimplemented keys
+# warn loudly, the `policy` key gates with flag/env precedence, relative values resolve against the
+# config's own directory. THE MIGRATION CASE this battery exists for: a repo moving its wiring from
+# $CANDOR_POLICY to the checked-in config must NOT silently lose the fleet gate.
+def _fleet_with_config(config_text, policy_files=None, nest=False):
+    """A Net-leaf fleet + a .candor/config at the repo root; returns (repo_root, scan_target)."""
+    d = _mkd()
+    target = os.path.join(d, "sub", "fleet") if nest else d
+    os.makedirs(os.path.join(target, ".claude", "agents"), exist_ok=True)
+    open(os.path.join(target, ".claude", "agents", "leaf.md"), "w").write(agent("leaf", "WebFetch"))
+    os.makedirs(os.path.join(d, ".candor"), exist_ok=True)
+    open(os.path.join(d, ".candor", "config"), "w").write(config_text)
+    for rel, text in (policy_files or {}).items():
+        p = os.path.join(d, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").write(text)
+    return d, target
+
+_d, _t = _fleet_with_config("policy fleet.policy  # the checked-in gate\n",
+                            {"fleet.policy": "deny Net\n"})
+rc1 = cli("scan", _t, "--out", os.path.join(_mkd(), "r"))
+check("config: a discovered .candor/config `policy` GATES the scan (the env→config migration keeps "
+      "the gate; relative value resolves against the config's directory, not the CWD)",
+      rc1.returncode == 1 and "AS-EFF-006" in rc1.stderr, f"rc={rc1.returncode} err={rc1.stderr[-200:]!r}")
+_d, _t = _fleet_with_config("policy fleet.policy\n", {"fleet.policy": "deny Net\n"}, nest=True)
+check("config: discovery walks UP from the scan TARGET to the repo root's .candor/config",
+      cli("scan", _t, "--out", os.path.join(_mkd(), "r")).returncode == 1)
+check("config: observe honors the config `policy` too (the OBSERVED gate is not lost)",
+      cli("observe", _d, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"),
+          "--fleet", "t").returncode == 1)
+# precedence: the flag and the env var each OUTRANK the config floor
+_d, _t = _fleet_with_config("policy violating.policy\n",
+                            {"violating.policy": "deny Net\n", "clean.policy": "deny Db\n"})
+check("config precedence: --policy (clean) outranks a violating config policy → exit 0",
+      cli("scan", _t, "--out", os.path.join(_mkd(), "r"),
+          "--policy", os.path.join(_d, "clean.policy")).returncode == 0)
+check("config precedence: $CANDOR_POLICY (clean) outranks the config floor → exit 0",
+      cli("scan", _t, "--out", os.path.join(_mkd(), "r"),
+          env={"CANDOR_POLICY": os.path.join(_d, "clean.policy")}).returncode == 0)
+check("config: a set-but-EMPTY $CANDOR_POLICY fails loud (exit 2), never a silent gate-skip",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), env={"CANDOR_POLICY": ""}).returncode == 2)
+# key posture: unknown → warn; family-but-unimplemented → warn LOUDLY that the gate is not active
+_d, _t = _fleet_with_config("polcy typo.policy\nstrict conformance\n")
+rck = cli("scan", _t, "--out", os.path.join(_mkd(), "r"))
+check("config: an unknown key (a misspelt `polcy`) warns — a typo must never silently drop a gate",
+      rck.returncode == 0 and "unknown config key 'polcy'" in rck.stderr, rck.stderr[-240:])
+check("config: a family key candor-agents does not implement (`strict`) warns 'NOT active here'",
+      "not implemented by candor-agents" in rck.stderr and "NOT active here" in rck.stderr, rck.stderr[-240:])
+# fail-closed: configured-but-unusable never degrades to "no config"
+check("config: $CANDOR_CONFIG naming a missing path fails (exit 2)",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"),
+          env={"CANDOR_CONFIG": os.path.join(_mkd(), "no-such-config")}).returncode == 2)
+_ccf = os.path.join(_mkd(), "cfg")
+open(_ccf, "w").write("policy " + _pv + "\n")
+check("config: $CANDOR_CONFIG overrides discovery entirely (its policy gates → exit 1)",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), env={"CANDOR_CONFIG": _ccf}).returncode == 1)
+_d, _t = _fleet_with_config("policy p\n", {"p": "deny Net\n"})
+os.chmod(os.path.join(_d, ".candor", "config"), 0)
+_rcu = cli("scan", _t, "--out", os.path.join(_mkd(), "r"))
+os.chmod(os.path.join(_d, ".candor", "config"), 0o644)
+check("config: a DISCOVERED file that exists but cannot be read fails (exit 2) — a silently-dropped "
+      "config is a silently-dropped gate",
+      _rcu.returncode == 2 or os.geteuid() == 0, f"rc={_rcu.returncode}")
+_d, _t = _fleet_with_config("policy\n")  # a bare `policy` line: enabled with the empty value
+check("config: a BARE `policy` line fails loud on the empty path (exit 2), never a silent drop",
+      cli("scan", _t, "--out", os.path.join(_mkd(), "r")).returncode == 2)
 
 print()
 

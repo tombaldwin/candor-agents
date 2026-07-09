@@ -20,7 +20,8 @@ import re
 import sys
 import urllib.parse
 
-from candor_agents.scan import SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION, bash_cmds, propagate  # one source
+from candor_agents.scan import (SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION,
+                                bash_cmds, config_policy, propagate)  # one source
 
 
 def transcript_dir_for(path):
@@ -112,13 +113,15 @@ def print_version():
 _HELP = f"""candor-agents {VERSION} — OBSERVED fleet effects from session transcripts (candor-spec {SPEC})
 
 USAGE: candor-agents observe <project-dir> [--out <prefix>] [--json] [--policy <file>]
-                             [--transcripts <dir>] [--fleet <name>]
+                             [--gate-json <file>] [--transcripts <dir>] [--fleet <name>]
 
   <project-dir>      the fleet root (its transcripts live in ~/.claude/projects/<slug>/)
   --out <prefix>     write <prefix>.<fleet>.Observed.json + a .callgraph.json sidecar (default: .candor/report)
   --json             emit the §2 report envelope as JSON to STDOUT (human/progress goes to stderr)
   --policy <file>    enforce a §6.2 policy file: exit 1 on a violation, 2 if unreadable; honours
-                     $CANDOR_POLICY when the flag is absent (the flag wins)
+                     $CANDOR_POLICY, then a discovered .candor/config `policy`, when absent
+  --gate-json <file> write the structured gate verdict {{spec, ok, violations}} as JSON (§3.3 ⟨0.8⟩;
+                     `-` = stdout); written whenever the flag is given, exit code unchanged
   --transcripts <dir>  read transcripts from here instead of the derived ~/.claude/projects slug
   --fleet <name>     name the fleet (default: the project dir's basename)
   -V, --version      print the build + candor-spec version (offline)
@@ -264,7 +267,8 @@ def main(argv=None):
     tdir_override = None
     fleet_override = None
     as_json = False
-    policy_path = os.environ.get("CANDOR_POLICY")  # the flag (below) overrides this
+    gate_json = None
+    policy_path = os.environ.get("CANDOR_POLICY")  # the flag (below) overrides this; config is the floor
     i = 0
     # A value-taking flag with a missing/flag-shaped value FAILS (never silently consuming the next
     # flag or falling back to a default) — the gateless-ignore class the unknown-flag work forbids.
@@ -286,6 +290,11 @@ def main(argv=None):
             if v is None:
                 return 2
             policy_path = v; i += 2
+        elif args[i] == "--gate-json":
+            v = value("--gate-json")
+            if v is None:
+                return 2
+            gate_json = v; i += 2
         elif args[i] == "--transcripts":
             v = value("--transcripts")
             if v is None:
@@ -299,11 +308,15 @@ def main(argv=None):
         elif args[i].startswith("--"):
             sys.stderr.write(f"candor-agents: unknown flag {args[i]} "
                              f"(usage: observe <dir> [--out <prefix>] [--json] [--policy <file>] "
-                             f"[--transcripts <dir>] [--fleet <name>])\n")
+                             f"[--gate-json <file>] [--transcripts <dir>] [--fleet <name>])\n")
             return 2
         else:
             target = args[i]
             i += 1
+    # `.candor/config` (spec §3.4): anchored to the PROJECT target (the fleet whose sessions these
+    # are), loaded before observing so a configured-but-unusable config fails up front and a repo
+    # migrating its wiring from $CANDOR_POLICY to the checked-in config keeps its OBSERVED gate too.
+    policy_path = config_policy(policy_path, target)
     tdir = tdir_override or transcript_dir_for(target)
     if not tdir:
         sys.stderr.write(f"candor-agents: no transcripts found for {target} "
@@ -325,19 +338,26 @@ def main(argv=None):
             base = os.path.basename(os.path.abspath(tdir)).lstrip("-") or "fleet"
     report, callgraph = observe(tdir, out, base, as_json=as_json)
 
-    # ── the standing §6.2 gate (--policy / CANDOR_POLICY, spec §3.3) over the OBSERVED report ─────
-    # A set-but-unreadable policy FAILS (exit 2), a violation exits 1 — never a silent gate-pass.
-    if policy_path:
+    # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`) over the OBSERVED ────
+    # report. A set-but-unreadable policy FAILS (exit 2), a violation exits 1 — never a silent
+    # gate-pass. --gate-json (spec §3.3 ⟨0.8⟩) re-emits the SAME violation records as the machine
+    # verdict; an unwritable verdict path exits 2.
+    from candor_agents import policy as _policy
+    violations = []
+    if policy_path is not None:
         try:
             ptext = open(policy_path, encoding="utf-8").read()
         except OSError as e:
             sys.stderr.write(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT "
                              f"enforced (exit 2)\n")
             return 2
-        from candor_agents import policy as _policy
         violations = _policy.evaluate_policy(_policy.parse_policy(ptext), report["functions"], callgraph)
         for v in violations:
             sys.stderr.write(_policy.render(v) + "\n")  # keep stdout pure JSON in --json mode
+    if gate_json is not None:
+        if not _policy.write_gate_json(gate_json, violations, SPEC, stdout_is_json=as_json):
+            return 2
+    if policy_path is not None:
         if violations:
             sys.stderr.write(f"candor-agents: {len(violations)} policy violation(s)\n")
             return 1
