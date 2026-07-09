@@ -336,7 +336,11 @@ def main(argv=None):
     # `.candor/config` (spec §3.4): anchored to the PROJECT target (the fleet whose sessions these
     # are), loaded before observing so a configured-but-unusable config fails up front and a repo
     # migrating its wiring from $CANDOR_POLICY to the checked-in config keeps its OBSERVED gate too.
-    policy_path = config_policy(policy_path, target)
+    # drift's internal runs are gate-free (see scan.py / cli._run — the comparison must not abort).
+    if os.environ.get("_CANDOR_AGENTS_NO_GATE") == "1":
+        policy_path = None
+    else:
+        policy_path = config_policy(policy_path, target)
     tdir = tdir_override or transcript_dir_for(target)
     if not tdir:
         sys.stderr.write(f"candor-agents: no transcripts found for {target} "

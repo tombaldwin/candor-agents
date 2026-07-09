@@ -643,7 +643,12 @@ def main():
         fleet = os.path.basename(os.path.abspath(root)) or "fleet"
     # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-
     # unusable config fails the run up front (exit 2) and a checked-in `policy` becomes the gate floor.
-    policy_path = config_policy(policy_path, root)
+    # drift's internal scan/observe run GATE-FREE (cli._run scrubs the env + sets the marker): drift
+    # compares declared vs observed — a standing gate firing inside the comparison aborted it.
+    if os.environ.get("_CANDOR_AGENTS_NO_GATE") == "1":
+        policy_path = None
+    else:
+        policy_path = config_policy(policy_path, root)
 
     # MCP servers configured for the project — plus any DECLARED capabilities: a `candorEffects`
     # array on a server's entry ("candorEffects": ["Net","Ipc"]) classifies that server exactly like
