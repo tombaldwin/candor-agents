@@ -2004,6 +2004,77 @@ except AttributeError:
     _lazy_ok = True
 check("__init__: an unknown attribute raises AttributeError (the lazy hook doesn't swallow typos)", _lazy_ok)
 
+# ── coverage remnants: the contract arms a re-measure still flagged (each verified against the
+# Rust/TS twins where one exists; the rest are behavioral one-liners, not implementation pins) ─────
+# scope_matches: a scope LONGER than the name never matches (the len guard)
+check("policy scope_matches: a scope with more segments than the name never matches",
+      _pol.scope_matches("a.b", "a.b.c.d") is False)
+# _path_covered: a reached path that climbs out via `..` is never covered; abs/rel never conflate
+# (both arms mirror rust fs_path_covered / ts pathCovered)
+check("policy _path_covered: a `..` climb-out is never covered; absolute never covers relative",
+      _pol._path_covered("/etc/app", "/etc/../x") is False
+      and _pol._path_covered("/a", "a/b") is False)
+# an allow with a scope skips out-of-scope units; an allow whose effect the unit doesn't reach skips
+_fsc = [{"fn": "inscope", "inferred": ["Net"], "hosts": ["evil.test"], "calls": []},
+        {"fn": "outscope", "inferred": ["Net"], "hosts": ["evil.test"], "calls": []},
+        {"fn": "noeffect", "inferred": ["Fs"], "paths": ["/x"], "calls": []}]
+_vsc = _gate("allow Net in inscope good.test", _fsc, {})
+check("policy AS-EFF-008: a scoped allow gates ONLY its scope; a unit not reaching the effect is skipped",
+      [v["fn"] for v in _vsc] == ["inscope"], _vsc)
+check("policy AS-EFF-008: an UNSCOPED allow skips a unit that never reaches the allow's effect",
+      _gate("allow Net x.test", [{"fn": "fsonly", "inferred": ["Fs"], "paths": ["/x"], "calls": []}], {}) == [])
+# AS-EFF-009 BFS: a diamond callgraph (two paths to the same node) fires once, no revisit loop
+_cgd = {"web": ["b", "a"], "a": ["b"], "b": ["db"], "db": []}
+_vfd = _gate("forbid web -> db", [{"fn": f, "inferred": [], "calls": []} for f in _cgd], _cgd)
+check("policy AS-EFF-009: a diamond graph (two paths converging on b before db) fires ONCE on web "
+      "(the seen-set skips the revisit, no duplicate violation)",
+      len([v for v in _vfd if v["fn"] == "web"]) == 1, _vfd)
+# savings: _h's thousands branch + non-.jsonl files in the transcript dir are skipped
+from candor_agents.savings import _h as _hfmt
+check("savings _h: thousands format (~384K) and small-int passthrough (~999)",
+      _hfmt(384_000) == "~384K" and _hfmt(999) == "~999")
+_kd2 = _mkd()
+open(os.path.join(_kd2, "README.txt"), "w").write("candor-query callers x")  # not a .jsonl → not counted
+open(os.path.join(_kd2, "s.jsonl"), "w").write(_ev("1", "Bash", {"command": "candor-query callers r F 1"}) + "\n")
+check("savings: a non-.jsonl file in the transcript dir is never counted (only *.jsonl transcripts)",
+      json.loads(_sv("--transcript", _kd2, "--json").stdout)["measured"]["queries"] == 1)
+# stats: --log points anywhere (no project dir needed); --json missing-log shape; blank lines skipped
+_lg = os.path.join(_mkd(), "anywhere.jsonl")
+open(_lg, "w").write('{"verdict":"clean","violations":[]}\n\n{"verdict":"blocked","violations":[]}\n')
+check("stats --log <path>: reads the named log (no project dir needed) and skips blank lines",
+      json.loads(_stats("--log", _lg, "--json").stdout)["turns"] == 2)
+_smj = _stats("/tmp/candor-no-such-dir-xyz", "--json")
+check("stats --json: a missing log is the machine shape {turns:0, exists:false}, exit 0",
+      _smj.returncode == 0 and json.loads(_smj.stdout) == {"turns": 0, "exists": False,
+      "log": "/tmp/candor-no-such-dir-xyz/.candor/activity.jsonl"}, _smj.stdout)
+# guard: non-deny policy lines (comments, allow/forbid) are skipped by parse_denies, not misread
+check("guard: non-deny lines (comments/allow/forbid) are skipped — only deny rules compile",
+      guard.compile_guard("# note\nallow Net x\nforbid a -> b\ndeny Net\n")["deny"] == ["WebFetch", "WebSearch"])
+# drift: an internal observe failure PROPAGATES (no transcripts → exit 2, never a bogus comparison);
+# an extra positional exits 2 (the same swallow class, drift's own arm)
+_dfd = _mkd(); os.makedirs(os.path.join(_dfd, ".claude", "agents"))
+open(os.path.join(_dfd, ".claude", "agents", "w.md"), "w").write(agent("w", "WebFetch"))
+check("drift: the internal observe failing (no transcripts) propagates its exit 2 — never a bogus verdict",
+      cli("drift", _dfd).returncode == 2)
+check("drift: an unexpected extra argument exits 2", cli("drift", "a", "b").returncode == 2)
+# drift's per-unit verdict lines: declarations-match, and declared-Unknown observed (the soft note)
+_dtd = _mkd(); os.makedirs(os.path.join(_dtd, "subagents"))
+open(os.path.join(_dtd, "s.jsonl"), "w").write(_ev("t1", "Read", {"file_path": "/x"}) + "\n")
+open(os.path.join(_dtd, "subagents", "w.jsonl"), "w").write(_ev("t2", "WebFetch", {"url": "https://x.test"}) + "\n")
+json.dump({"agentType": "w"}, open(os.path.join(_dtd, "subagents", "w.meta.json"), "w"))
+open(os.path.join(_dtd, "subagents", "m.jsonl"), "w").write(_ev("t3", "Frobnicate", {}) + "\n")
+json.dump({"agentType": "m"}, open(os.path.join(_dtd, "subagents", "m.meta.json"), "w"))
+_dfd2 = _mkd(); os.makedirs(os.path.join(_dfd2, ".claude", "agents"))
+open(os.path.join(_dfd2, ".claude", "agents", "w.md"), "w").write(agent("w", "WebFetch"))
+open(os.path.join(_dfd2, ".claude", "agents", "m.md"), "w").write(agent("m", "Frobnicate"))
+_rdt = cli("drift", _dfd2, "--transcripts", _dtd)
+check("drift: a unit whose observation equals its declaration prints `declarations match observation`",
+      _rdt.returncode == 0 and re.search(r"^  w: declarations match observation", _rdt.stdout, re.M),
+      _rdt.stdout)
+check("drift: an observed Unknown the agent DECLARED is the soft `declared; curate it` note, not an anomaly",
+      "m: observed Unknown via tool-unknown:Frobnicate — declared" in _rdt.stdout
+      and cli("drift", _dfd2, "--transcripts", _dtd, "--strict").returncode == 0, _rdt.stdout)
+
 print()
 
 
