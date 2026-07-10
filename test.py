@@ -2129,6 +2129,68 @@ check("digest: an unknown flag exits 2", _digest(_dg, "--bogus").returncode == 2
 check("digest: a flag missing its value exits 2", _digest(_dg, "--since").returncode == 2)
 check("digest: an unexpected second positional exits 2", _digest(_dg, "extra").returncode == 2)
 
+# ---- log-gate: feed the digest from a PURE-JAR --gate-json CI run (adopt/candor.yml). Same record
+#      shape as the stop-hook / review-script path, PATH-FREE (a CI gate has no transcript). ----
+def _loggate(*a):
+    return subprocess.run([sys.executable, "-m", "candor_agents.cli", "log-gate", *a], capture_output=True, text=True)
+def _wjson(d, name, obj):
+    p = os.path.join(d, name); open(p, "w").write(json.dumps(obj)); return p
+
+_lg = _mkd()
+# a BLOCKED gate: a deny-Net violation (AS-EFF-006) + a baseline-drift (AS-EFF-005) carrying the gained effect
+_gate_blocked = {"spec": "0.8", "ok": False, "violations": [
+    {"rule": "AS-EFF-006", "fn": "web.Ctl.fetch", "effects": ["Net"], "detail": "deny Net"},
+    {"rule": "AS-EFF-005", "fn": "web.Ctl.fetch", "effects": ["Net"], "detail": "baseline drift"}]}
+_report = {"candor": {"version": "0.8.7", "toolchain": "candor-java 0.8.7", "spec": "0.8"},
+           "functions": [{"fn": "web.Ctl.fetch", "inferred": ["Net"]},
+                         {"fn": "svc.Reflecty", "inferred": ["Unknown"]},
+                         {"fn": "util.pure", "inferred": []}]}
+_gp = _wjson(_lg, "gate.json", _gate_blocked); _rp = _wjson(_lg, "report.json", _report)
+_lglog = os.path.join(_lg, ".candor", "gate-log.jsonl")
+_r = _loggate(_gp, _rp, "--log", _lglog)
+check("log-gate: exits 0 and appends one record", _r.returncode == 0 and os.path.exists(_lglog)
+      and len([ln for ln in open(_lglog) if ln.strip()]) == 1, _r.stderr)
+_rec = json.loads(open(_lglog).readline())
+check("log-gate: a not-ok gate → verdict=blocked, the AS-EFF codes de-duped", _rec["verdict"] == "blocked"
+      and _rec["violations"] == ["AS-EFF-005", "AS-EFF-006"], _rec)
+check("log-gate: PATH-FREE — edited is null and sessionId null (a CI gate has no transcript/session)",
+      _rec["edited"] is None and _rec["sessionId"] is None, _rec)
+check("log-gate: gained = the effects the AS-EFF-005 baseline ratchet reports newly introduced",
+      _rec["gained"] == ["Net"], _rec)
+check("log-gate: unknowns COUNTED and effects PRESENT read straight from the report; engine from toolchain",
+      _rec["unknowns"] == 1 and _rec["effects"] == ["Net"] and _rec["engine"] == "java", _rec)
+check("log-gate: blastRadius/reviewMs the jar gate can't compute are 0/null — never fabricated",
+      _rec["blastRadius"] == 0 and _rec["reviewMs"] is None, _rec)
+
+# PARITY (TESTING.md single-source): the jar-path record must carry EXACTLY the fields the review-path
+# (bash) writer produces and stats/digest read — else the two producers drift and the digest under-reads one.
+_CANON = {"ts", "sessionId", "engine", "edited", "gained", "blastRadius",
+          "verdict", "violations", "unknowns", "effects", "reviewMs"}
+check("log-gate: record keys are byte-for-byte the review-path record shape (no producer drift)",
+      set(_rec.keys()) == _CANON, sorted(_rec.keys()))
+
+# an OK gate → verdict=clean; the digest reads a log-gate record end-to-end ("held the line in CI" is real)
+_lg2 = _mkd()
+_gp2 = _wjson(_lg2, "gate.json", {"spec": "0.8", "ok": True, "violations": []})
+_lglog2 = os.path.join(_lg2, ".candor", "gate-log.jsonl")
+_loggate(_gp2, "--log", _lglog2)   # NO report arg — optional enrichment
+_rec2 = json.loads(open(_lglog2).readline())
+check("log-gate: an ok gate → verdict=clean; a missing report → unknowns null, effects [] (no fabrication)",
+      _rec2["verdict"] == "clean" and _rec2["unknowns"] is None and _rec2["effects"] == []
+      and _rec2["engine"] == "jar", _rec2)
+# digest over a jar-logged record renders the owner report (the whole point of P3's jar path)
+_dgji = _digest(_lg, "--log", _lglog, "--out", "-")
+check("log-gate → digest: the jar-gated CI record surfaces in the owner report ('Held the line')",
+      _dgji.returncode == 0 and "Held the line" in _dgji.stdout and "AS-EFF-006" in _dgji.stdout, _dgji.stdout)
+
+# fail-closed CLI surface (TESTING.md §2): a bad/absent verdict exits 2; --log off writes nothing
+check("log-gate: an unreadable gate verdict exits 2", _loggate(os.path.join(_lg, "nope.json")).returncode == 2)
+_bad = _wjson(_lg, "bad.json", [1, 2, 3])
+check("log-gate: a non-object gate verdict exits 2", _loggate(_bad).returncode == 2)
+_offlog = os.path.join(_mkd(), "off.jsonl")
+check("log-gate: --log off is a no-op (exit 0, nothing written)",
+      _loggate(_gp2, "--log", "off").returncode == 0 and not os.path.exists(_offlog))
+
 print()
 
 
