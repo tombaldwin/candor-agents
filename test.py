@@ -2077,6 +2077,60 @@ check("drift: an observed Unknown the agent DECLARED is the soft `declared; cura
 
 print()
 
+# ---- digest: the OWNER-facing protection report (integrations/DIGEST-SPEC.md). The visibility surface
+#      for the silent gate — over the SAME log stats reads. Owns the report's content contract. ----
+def _digest(*a):
+    return subprocess.run([sys.executable, "-m", "candor_agents.cli", "digest", *a], capture_output=True, text=True)
+
+# a fixture that exercises the caught-vs-allowed split: a BLOCKED introduction, an ALLOWED (clean)
+# introduction, and a pure clean turn.
+_dg = _mkd(); os.makedirs(os.path.join(_dg, ".candor"), exist_ok=True)
+with open(os.path.join(_dg, ".candor", "activity.jsonl"), "w") as _f:
+    _f.write("\n".join([
+        '{"ts":"2026-06-05T14:00:00Z","sessionId":"s1","engine":"java","edited":["src/Secret.java"],"gained":["Db"],"blastRadius":41,"verdict":"blocked","violations":["AS-EFF-006"],"unknowns":2,"effects":["Db"],"reviewMs":150}',
+        '{"ts":"2026-06-11T09:00:00Z","sessionId":"s2","engine":"java","edited":["src/Ok.java"],"gained":["Net"],"blastRadius":3,"verdict":"clean","violations":[],"unknowns":0,"effects":["Net"],"reviewMs":120}',
+        '{"ts":"2026-06-20T11:00:00Z","sessionId":"s2","engine":"java","edited":["src/Pure.java"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[],"unknowns":0,"effects":["Log"],"reviewMs":95}',
+    ]) + "\n")
+_dgout = _digest(_dg, "--out", "-").stdout
+check("digest: leads with the catch — 'Held the line' names the AS-EFF-006 violation caught before merge",
+      "Held the line" in _dgout and "AS-EFF-006 — performed an effect its policy forbids" in _dgout, _dgout)
+check("digest: caught (blocked) and allowed (clean) introductions are SEPARATE — the Db block is not repeated as 'allowed', the Net clean IS",
+      "New capability allowed" in _dgout and "(Net)" in _dgout and "(Db)" not in _dgout.split("New capability allowed")[1] if "New capability allowed" in _dgout else False, _dgout)
+check("digest: ALWAYS carries the coverage/honesty line (the disclosure ethos on itself)",
+      "**Coverage**" in _dgout and "could not fully resolve" in _dgout, _dgout)
+check("digest: closes by reframing silence as coverage ('Quiet is good')",
+      "Quiet is good" in _dgout and "silence is the gate working" in _dgout, _dgout)
+check("digest: AGGREGATE only — no file path from the log ever appears in the report (privacy)",
+      "Secret.java" not in _dgout and "Ok.java" not in _dgout and "src/" not in _dgout, _dgout)
+
+# resolved-everything → the good-news coverage line, never 'up to 0'
+_dgq = _mkd(); os.makedirs(os.path.join(_dgq, ".candor"), exist_ok=True)
+open(os.path.join(_dgq, ".candor", "activity.jsonl"), "w").write(
+    '{"ts":"2026-07-01T10:00:00Z","sessionId":"q","engine":"java","edited":["a.java"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[],"unknowns":0,"effects":["Log"],"reviewMs":80}\n')
+_dgqout = _digest(_dgq, "--out", "-").stdout
+check("digest: a quiet period reports honestly — no catches, and coverage reads as good news not 'up to 0'",
+      "no policy violation reached a merge" in _dgqout and "every change resolved to the leaf" in _dgqout
+      and "up to 0" not in _dgqout, _dgqout)
+
+# default writes a committable CANDOR-REPORT.md (aggregate → safe to commit, unlike the gitignored log)
+_dgw = _digest(_dg)
+check("digest: default writes CANDOR-REPORT.md and exits 0",
+      _dgw.returncode == 0 and os.path.exists(os.path.join(_dg, "CANDOR-REPORT.md")), _dgw.stderr)
+
+# no log yet → an honest note, exit 0, no file written (never an empty/misleading report)
+_dgn = _mkd()
+_dgnr = _digest(_dgn)
+check("digest: no activity logged yet → honest note, exit 0, no CANDOR-REPORT.md written",
+      _dgnr.returncode == 0 and "no activity logged yet" in _dgnr.stderr
+      and not os.path.exists(os.path.join(_dgn, "CANDOR-REPORT.md")), _dgnr.stderr)
+
+# arg matrix (TESTING.md §2 fail-closed on the CLI surface)
+check("digest: an unknown flag exits 2", _digest(_dg, "--bogus").returncode == 2)
+check("digest: a flag missing its value exits 2", _digest(_dg, "--since").returncode == 2)
+check("digest: an unexpected second positional exits 2", _digest(_dg, "extra").returncode == 2)
+
+print()
+
 
 print(f"test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
