@@ -2129,6 +2129,27 @@ check("digest: an unknown flag exits 2", _digest(_dg, "--bogus").returncode == 2
 check("digest: a flag missing its value exits 2", _digest(_dg, "--since").returncode == 2)
 check("digest: an unexpected second positional exits 2", _digest(_dg, "extra").returncode == 2)
 
+# REGRESSION (found dogfooding candor-java 2026-07-10): a change BLOCKED for introducing a new effect
+# (rc=1, no AS-EFF code — the edit-loop's non-policy block) was COUNTED in "Held the line" but never
+# itemized, so the header ("2 caught") didn't reconcile with the bullets (one AS-EFF line). Every caught
+# change must be explained; a code-less block reads as "introduced a new effect not in the baseline".
+_dgb = _mkd(); os.makedirs(os.path.join(_dgb, ".candor"), exist_ok=True)
+open(os.path.join(_dgb, ".candor", "activity.jsonl"), "w").write("\n".join([
+    '{"ts":"2026-07-01T10:00:00Z","sessionId":null,"engine":"java","edited":null,"gained":["Env"],"blastRadius":8,"verdict":"blocked","violations":[],"unknowns":17,"effects":["Env","Fs"],"reviewMs":0}',
+    '{"ts":"2026-07-01T11:00:00Z","sessionId":null,"engine":"jar","edited":null,"gained":[],"blastRadius":0,"verdict":"blocked","violations":["AS-EFF-006"],"unknowns":17,"effects":["Fs"],"reviewMs":null}',
+]) + "\n")
+_dgbout = _digest(_dgb, "--out", "-").stdout
+check("digest: a code-less block (new-effect introduction) is ITEMIZED, naming the effect — not swallowed",
+      "introduced a new effect (Env) not in the baseline — blocked for review" in _dgbout, _dgbout)
+check("digest: 'Held the line' header reconciles — 2 caught, and 2 bullets (the AS-EFF line + the code-less one)",
+      "**Held the line** — 2 changes caught before merge:" in _dgbout
+      and _dgbout.count("\n  - ") == 2 and "AS-EFF-006" in _dgbout, _dgbout)
+check("digest: the code-less block is NOT double-counted as 'allowed through' (it was blocked, not clean)",
+      "New capability allowed" not in _dgbout, _dgbout)
+# the time line reports only TIMED checks (a jar/CI record has null reviewMs) — never implies timings not taken
+check("digest: 'candor's own time' counts only timed checks (1 here — the null-reviewMs jar record is excluded)",
+      "across 1 timed check." in _dgbout, _dgbout)
+
 # ---- log-gate: feed the digest from a PURE-JAR --gate-json CI run (adopt/candor.yml). Same record
 #      shape as the stop-hook / review-script path, PATH-FREE (a CI gate has no transcript). ----
 def _loggate(*a):

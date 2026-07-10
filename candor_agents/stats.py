@@ -55,14 +55,22 @@ def _summary(recs):
     verdict = Counter(r.get("verdict") for r in recs)
     viol = Counter()
     effects, files, sessions, present = set(), set(), set(), set()
-    max_blast = unknowns_max = candor_ms = 0
-    introduced_turns = 0
+    max_blast = unknowns_max = candor_ms = timed = 0
+    introduced_turns = blocked_no_code = 0
+    blocked_gained = set()
     has_unknowns = has_reviewms = False
     # only string timestamps are comparable — ignore any non-string ts rather than crash sorted() on mixed types
     ts = sorted(r["ts"] for r in recs if isinstance(r.get("ts"), str))
     for r in recs:
-        for v in r.get("violations") or []:
+        vs = r.get("violations") or []
+        for v in vs:
             viol[v] += 1
+        # a change BLOCKED with no policy code = the edit-loop caught a new-effect introduction (rc=1, no
+        # AS-EFF). It counts in `blocked` but has nothing to itemize by code — track it (and what it gained)
+        # so "Held the line" can explain every caught change, not just the policy ones.
+        if r.get("verdict") == "blocked" and not vs:
+            blocked_no_code += 1
+            blocked_gained.update(r.get("gained") or [])
         effects.update(r.get("gained") or [])      # effects INTRODUCED vs baseline this turn
         present.update(r.get("effects") or [])      # effects PRESENT in the report this turn (from the trailer)
         files.update(r.get("edited") or [])
@@ -81,11 +89,15 @@ def _summary(recs):
         if _is_int(m):
             has_reviewms = True
             candor_ms += m
+            timed += 1
     return {
         "unknownsMax": unknowns_max,
         "hasUnknowns": has_unknowns,
         "candorMs": candor_ms,
         "hasReviewMs": has_reviewms,
+        "timedChecks": timed,
+        "blockedNoCode": blocked_no_code,
+        "blockedGained": sorted(blocked_gained),
         "turns": len(recs),
         "clean": verdict.get("clean", 0),
         "blocked": verdict.get("blocked", 0),
