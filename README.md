@@ -19,6 +19,7 @@ candor-agents drift   <project>    # the gap: least-privilege advice + anomalies
 candor-agents guard   <policy>     # ENFORCED: compile a deny-policy -> settings.json permissions.deny
 candor-agents stats   <project>    # MEASURED: edit-time gate activity, from the stop-hook log
 candor-agents digest  <project>    # OWNER report: a plain-language CANDOR-REPORT.md over that log
+candor-agents log-gate <gate.json> [<report.json>]  # feed the digest from a jar --gate-json CI run (path-free)
 ```
 
 - **scan** is the capability surface — the static fleet declarations as a report.
