@@ -17,6 +17,8 @@ candor-agents scan    <project>    # DECLARED: what the fleet MAY do (agents, .m
 candor-agents observe <project>    # OBSERVED: what it actually DID (the session transcripts)
 candor-agents drift   <project>    # the gap: least-privilege advice + anomalies
 candor-agents guard   <policy>     # ENFORCED: compile a deny-policy -> settings.json permissions.deny
+candor-agents stats   <project>    # MEASURED: edit-time gate activity, from the stop-hook log
+candor-agents digest  <project>    # OWNER report: a plain-language CANDOR-REPORT.md over that log
 ```
 
 - **scan** is the capability surface — the static fleet declarations as a report.

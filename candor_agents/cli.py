@@ -6,6 +6,7 @@
   candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege advice)
   candor-agents guard   <policy-file> [<project-dir>]    # ENFORCED: compile a deny-policy to runtime
   candor-agents stats   [<project-dir>] [--since <iso>] [--session <id>] [--json]   # MEASURED: edit-time gate activity (stop hook log)
+  candor-agents digest  [<project-dir>] [--since <iso>] [--out <path|->] [--title <s>]  # OWNER report → CANDOR-REPORT.md
   candor-agents savings [<project-dir>] [--transcript <dir>] [--json]               # MODELLED: what candor-query saved vs re-deriving
 
 scan answers "what MAY this fleet do"; observe answers "what DID it do"; drift is the gap between
@@ -173,6 +174,11 @@ def main():
         # MEASURED edit-time gate activity from the stop hook's .candor/activity.jsonl (counted, not modelled).
         from candor_agents import stats
         return stats.main(rest)
+    if cmd == "digest":
+        # The OWNER-facing protection report over the same log (integrations/DIGEST-SPEC.md): a periodic,
+        # aggregate, no-paths summary that makes the SILENT gate visible without adding dev-channel noise.
+        from candor_agents import digest
+        return digest.main(rest)
     if cmd == "savings":
         # MODELLED: a labelled estimate of what candor-query saved vs re-deriving (transcript-based).
         from candor_agents import savings
