@@ -8,7 +8,19 @@ report bytes, drift results, or gate verdicts (regenerate baselines / expect ver
 
 candor-agents is the family's **domain engine** (SPEC §4): its units are *agents*, not functions, and it
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
-major.minor tracks the spec it declares — `0.8.x` declares spec `0.8`.
+major.minor tracks the spec it declares — `0.9.x` declares spec `0.9`.
+
+## [0.9.0] — 2026-07-11
+
+### spec 0.9 — rides the remedial-loop rung
+
+candor-agents now declares **spec `0.9`** (`SPEC` in `scan.py`; the envelope + `--gate-json` verdict carry
+it). 0.9 is a **tier-2 (pinned-tool-surface) rung** (candor-spec §"Conformance tiers") led by the code
+engines — the remedial loop (`fix`/`unverified`/gate auto-disclosure) becomes the pinned §3.1/§3.3 contract
+*for the code engines*; the domain engine rides the rung for floor alignment (its units are agents, not the
+functions those tools operate on). **No behaviour change here**: report bytes, drift results, and gate
+verdicts are byte-identical to 0.8.3 — only the declared `spec` string moves `0.8`→`0.9`. A consumer
+pinning `spec == "0.8"` must accept `0.9`.
 
 ## [0.8.3] — 2026-07-10
 
