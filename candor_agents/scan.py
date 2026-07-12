@@ -500,8 +500,9 @@ def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
 
 def kappa_ledger(why_map, unit_heads, pure_used):
     """The κ-coverage ledger (spec §7 item 14, a conformance MUST) — the fleet analog of the code
-    engines' per-scan receipt, canonical marker `κ doesn't know`. What the fleet's curated classifier
-    (κ = TOOL_EFFECTS/MCP_TABLE/COMMAND_HEAD/PURE_TOOLS) does NOT cover, named with unit counts:
+    engines' per-scan receipt, canonical cross-engine marker `classifier doesn't cover`. What the
+    fleet's curated classifier (κ = TOOL_EFFECTS/MCP_TABLE/COMMAND_HEAD/PURE_TOOLS) does NOT cover,
+    named with unit counts:
       - `mcp:<server>`  an uncurated / voided-declaration MCP server (reads Unknown per unit — the
                         fleet domain DISCLOSES these already; the ledger is the per-scan aggregate)
       - `tool:<name>`   a tool name outside every table (reads Unknown per unit)
@@ -531,14 +532,14 @@ def kappa_ledger(why_map, unit_heads, pure_used):
         top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         shown = ", ".join(f"{k} ({n} unit{'s' if n != 1 else ''})" for k, n in top[:8])
         more = f" + {len(top) - 8} more" if len(top) > 8 else ""
-        lines.append(f"candor-agents: κ doesn't know {len(top)} "
-                     f"capabilit{'y' if len(top) == 1 else 'ies'} this fleet declares — an uncurated "
-                     f"MCP server / unknown tool reads Unknown (disclosed per unit); an unlisted "
-                     f"command head keeps only the bare Exec cliff (its own effects INVISIBLE): "
+        lines.append(f"candor-agents: candor's classifier doesn't cover {len(top)} "
+                     f"capabilit{'y' if len(top) == 1 else 'ies'} this fleet declares — their effects "
+                     f"are INVISIBLE to the scan (an uncurated MCP server / unknown tool reads Unknown, "
+                     f"disclosed per unit; an unlisted command head keeps only the bare Exec cliff): "
                      f"{shown}{more}")
     if pure_used:
-        lines.append(f"candor-agents: κ relies on {len(pure_used)} reviewed-pure tool grant(s) — a "
-                     f"curated claim, not a measurement: {', '.join(sorted(pure_used))}")
+        lines.append(f"candor-agents: the classifier relies on {len(pure_used)} reviewed-pure tool "
+                     f"grant(s) — a curated claim, not a measurement: {', '.join(sorted(pure_used))}")
     return lines
 
 

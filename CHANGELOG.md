@@ -12,6 +12,18 @@ major.minor tracks the spec it declares — `0.10.x` declares spec `0.10`.
 
 ## [0.10.0] — 2026-07-12
 
+### coverage-ledger marker renamed `κ doesn't know` → `classifier doesn't cover`
+
+The per-scan item-14 coverage-ledger line now carries the **cross-engine marker `classifier doesn't
+cover`** (the grep target every candor engine shares) and drops the Greek `κ` from its
+**user- and agent-facing** output — the glyph was unexplained and confusing in the receipt. The line
+keeps its fleet domain nouns (uncurated MCP servers / unknown tools / unlisted command heads) and its
+INVISIBLE-not-a-purity-claim framing; the reviewed-pure disclosure now reads *"the classifier relies
+on…"*. AGENTS.md, README.md, and the embedded `--agents` contract are re-synced to the new wording.
+`κ` remains **internal maintainer vocabulary only** — the `kappa_ledger`/`collect_kappa` identifiers,
+the `κ = TOOL_EFFECTS/…` classifier shorthand in docstrings, and this CHANGELOG's history are
+unchanged. No report bytes / drift / gate-verdict change — receipt text only.
+
 ### spec 0.10 — floor alignment to the §3.3.1 rung
 
 candor-agents now declares **spec `0.10`** (`SPEC` in `scan.py`; the envelope + `--gate-json` verdict carry

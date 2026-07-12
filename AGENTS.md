@@ -47,7 +47,8 @@ config's own directory. A key outside the family vocabulary warns; a family key 
 not implement (`strict`, `baseline`, …) warns that its gate is **NOT active here** — never
 silently believed. `drift` runs its internal scan/observe gate-free (it *compares*; the gate
 surfaces are scan/observe themselves). Each scan receipt also prints the spec §7 item-14
-**`κ doesn't know`** coverage ledger: the uncurated MCP servers, unknown tools and unlisted
+coverage ledger (the cross-engine **`candor's classifier doesn't cover…`** marker): the uncurated
+MCP servers, unknown tools and unlisted
 command heads the verdict could not see through (an unlisted head keeps only the bare Exec
 cliff — INVISIBLE, not Unknown), plus the reviewed-pure grants it RELIES on (curated claims, not
 measurements).
