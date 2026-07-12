@@ -53,7 +53,8 @@ scan *target* (never the CWD; `$CANDOR_CONFIG` overrides discovery), fail-closed
 but unusable (exit 2 — a silently-dropped config is a silently-dropped gate), precedence flag →
 env → config, relative values resolved against the config's own directory. A family key
 candor-agents doesn't implement warns that its gate is **not** active here. Every scan receipt
-also prints the spec §7 item-14 **`κ doesn't know`** coverage ledger: the uncurated MCP servers,
+also prints the spec §7 item-14 coverage ledger (the cross-engine **`candor's classifier doesn't
+cover…`** marker): the uncurated MCP servers,
 unknown tools and unlisted command heads the verdict could not see through, plus the
 reviewed-pure grants it relies on — per-scan evidence, not a doc footnote.
 

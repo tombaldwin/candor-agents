@@ -1547,8 +1547,8 @@ print()
 
 
 # ══ the κ-coverage ledger (spec §7 item 14 — a conformance MUST) ═══════════════════════════════════
-# Per-scan receipt evidence of what the curated classifier does NOT cover, canonical marker
-# `κ doesn't know` (the cross-engine grep target): uncurated MCP servers + unknown tools (Unknown per
+# Per-scan receipt evidence of what the curated classifier does NOT cover, canonical cross-engine
+# marker `classifier doesn't cover` (the grep target): uncurated MCP servers + unknown tools (Unknown per
 # unit, aggregated here) and UNLISTED command heads (the bare Exec cliff — the head's own effects are
 # INVISIBLE, item 14's silent-purity concern), plus the reviewed-pure grants the verdict relies on.
 rep, r = build(agents_files={"u.md": agent("u", "mcp__billing__charge"),
@@ -1556,8 +1556,8 @@ rep, r = build(agents_files={"u.md": agent("u", "mcp__billing__charge"),
                              "p.md": agent("p", "TodoWrite, WebFetch")},
                commands={"mk.md": "---\nallowed-tools: Bash(make:*), Bash(curl:*)\n---\nBuild.\n"},
                mcp=["billing"])
-check("κ ledger: the receipt line starts with the canonical `κ doesn't know` marker",
-      "κ doesn't know" in r.stderr, r.stderr[-400:])
+check("κ ledger: the receipt line carries the canonical cross-engine `classifier doesn't cover` marker",
+      "classifier doesn't cover" in r.stderr and "κ" not in r.stderr, r.stderr[-400:])
 check("κ ledger: an uncurated MCP server is named with its unit count (agent + session root)",
       "mcp:billing (2 units)" in r.stderr, r.stderr[-400:])
 check("κ ledger: an unknown tool is named", "tool:FrobnicateDisk (1 unit)" in r.stderr, r.stderr[-400:])
@@ -1581,7 +1581,7 @@ json.dump({"mcpServers": {"typoed": {"command": "x", "candorEffects": ["net"]}}}
 _kr = _sp.run([sys.executable, "-m", "candor_agents.scan", _kd, "--out", os.path.join(_kd, "r"),
                "--fleet", "t"], capture_output=True, text=True)
 check("κ ledger: a VOIDED candorEffects declaration aggregates as a κ gap (mcp:typoed)",
-      "κ doesn't know" in _kr.stderr and "mcp:typoed" in _kr.stderr, _kr.stderr[-300:])
+      "classifier doesn't cover" in _kr.stderr and "mcp:typoed" in _kr.stderr, _kr.stderr[-300:])
 
 print()
 
