@@ -8,7 +8,19 @@ report bytes, drift results, or gate verdicts (regenerate baselines / expect ver
 
 candor-agents is the family's **domain engine** (SPEC §4): its units are *agents*, not functions, and it
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
-major.minor tracks the spec it declares — `0.9.x` declares spec `0.9`.
+major.minor tracks the spec it declares — `0.10.x` declares spec `0.10`.
+
+## [0.10.0] — 2026-07-12
+
+### spec 0.10 — floor alignment to the §3.3.1 rung
+
+candor-agents now declares **spec `0.10`** (`SPEC` in `scan.py`; the envelope + `--gate-json` verdict carry
+it), following the ratcheting family floor. 0.10 pins the §3.3.1 query-grammar rung — which candor-agents
+satisfies *vacuously*: it is a **fleet surface** (`scan`/`observe`/`drift`/`guard`) and exposes **no §3.1
+report-query verbs**, so there is no query grammar to conform. This is a **declared-version alignment only**,
+keeping the floor consistent across the family. **No fleet-surface behaviour change**: report bytes, drift
+results, and gate verdicts are byte-identical to 0.9.0 — only the declared `spec` string moves `0.9`→`0.10`.
+A consumer pinning `spec == "0.9"` must accept `0.10`.
 
 ## [0.9.0] — 2026-07-11
 
