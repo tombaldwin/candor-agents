@@ -8,7 +8,22 @@ report bytes, drift results, or gate verdicts (regenerate baselines / expect ver
 
 candor-agents is the family's **domain engine** (SPEC §4): its units are *agents*, not functions, and it
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
-major.minor tracks the spec it declares — `0.10.x` declares spec `0.10`.
+major.minor tracks the spec it declares — `0.11.x` declares spec `0.11`.
+
+## [0.11.0] — 2026-07-13
+
+### spec 0.11 — floor alignment
+
+candor-agents now declares **spec `0.11`** (`SPEC` in `scan.py`; the envelope + `--gate-json` verdict carry
+it): the floor ratchets to the surprising-reach + corrupt-report-loudness rung (see the candor-spec
+CHANGELOG for the spec-side detail). This is a **declared-version alignment only**, keeping the floor
+consistent across the family. **No fleet-surface behaviour change**: report bytes, drift results, and gate
+verdicts are byte-identical to 0.10.0 — only the declared `spec` string moves `0.10`→`0.11`. A consumer
+pinning `spec == "0.10"` must accept `0.11`.
+
+Note: this is also the **first tagged release** to carry the coverage-ledger marker rename
+(`κ doesn't know` → `classifier doesn't cover`) — that change landed on main after the `v0.10.0` tag was
+cut, so its entry sits under 0.10.0 below but ships here.
 
 ## [0.10.0] — 2026-07-12
 
