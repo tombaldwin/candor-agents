@@ -20,8 +20,8 @@ import os
 import re
 import sys
 
-SPEC = "0.10"
-VERSION = "agents-0.10.0"
+SPEC = "0.11"
+VERSION = "agents-0.11.0"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
