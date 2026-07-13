@@ -1138,7 +1138,7 @@ os.makedirs(os.path.join(_sd, ".candor"), exist_ok=True)
 with open(os.path.join(_sd, ".candor", "activity.jsonl"), "w") as _f:
     _f.write("\n".join([
         '{"ts":"2026-06-23T19:40:00Z","sessionId":"s1","engine":"java","edited":["src/A.java"],"gained":[],"blastRadius":0,"verdict":"clean","violations":[],"unknowns":6,"reviewMs":1000,"effects":["Db"]}',
-        '{"ts":"2026-06-23T19:42:00Z","sessionId":"s1","engine":"java","edited":["src/B.java","src/C.java"],"gained":["Db"],"blastRadius":5,"verdict":"blocked","violations":["AS-EFF-006"],"unknowns":3,"reviewMs":2000,"effects":["Db"]}',
+        '{"ts":"2026-06-23T19:42:00Z","sessionId":"s1","engine":"java","edited":["src/B.java","src/C.java"],"gained":["Db"],"blastRadius":5,"maxHops":4,"verdict":"blocked","violations":["AS-EFF-006"],"unknowns":3,"reviewMs":2000,"effects":["Db"]}',
         '5',                                   # valid JSON, NOT an object -> skip, never crash (review #3)
         '{ corrupt — invalid json, skip }',    # invalid JSON -> skip
         '{"ts":"2026-06-23T20:10:00Z","sessionId":"s2","engine":"ts","edited":["x.ts"],"verdict":"clean","violations":[],"unknowns":0,"reviewMs":0,"effects":[]}',
@@ -1153,6 +1153,8 @@ check("stats: clean/blocked verdicts counted", _sj["clean"] == 4 and _sj["blocke
 check("stats: violations counted by AS-EFF code", _sj["violations"].get("AS-EFF-006") == 1, json.dumps(_sj))
 check("stats: distinct files/sessions/max-blast; bool blastRadius NOT counted as 1 (#16)",
       _sj["filesTouched"] == 4 and _sj["sessions"] == 2 and _sj["largestBlastRadius"] == 5, json.dumps(_sj))
+check("stats: deepestPropagation aggregated from maxHops (FEEDBACK-SPEC P2.2)",
+      _sj["deepestPropagation"] == 4, json.dumps(_sj))
 check("stats: unknownsMax + candorMs; a 0-reviewMs turn doesn't hide the line (#13)",
       _sj["unknownsMax"] == 6 and _sj["hasUnknowns"] is True and _sj["candorMs"] == 3000 and _sj["hasReviewMs"] is True, json.dumps(_sj))
 check("stats: effects-present (trailer) surfaced, distinct from effects-introduced (#7)",
@@ -1177,6 +1179,7 @@ for _line in ("gate activity", "span: 2026-06-23T19:40:00Z → 2026-06-23T20:10:
               "effects introduced this period: Db",
               "effects present in the code: Db",
               "largest blast radius seen: 5 function(s)",
+              "deepest propagation seen: 4 hop(s) from a new source",
               "Unknowns disclosed (max in a turn): 6",
               "files touched: 4",
               "candor's own time: 3.0s across 5 checks"):
