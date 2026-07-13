@@ -55,7 +55,7 @@ def _summary(recs):
     verdict = Counter(r.get("verdict") for r in recs)
     viol = Counter()
     effects, files, sessions, present = set(), set(), set(), set()
-    max_blast = unknowns_max = candor_ms = timed = 0
+    max_blast = max_hops = unknowns_max = candor_ms = timed = 0
     introduced_turns = blocked_no_code = 0
     blocked_gained = set()
     has_unknowns = has_reviewms = False
@@ -79,6 +79,9 @@ def _summary(recs):
         b = r.get("blastRadius")
         if _is_int(b):
             max_blast = max(max_blast, b)
+        h = r.get("maxHops")
+        if isinstance(h, int):
+            max_hops = max(max_hops, h)
         if (r.get("gained") or []) or (_is_int(b) and b > 0):
             introduced_turns += 1
         u = r.get("unknowns")
@@ -107,6 +110,7 @@ def _summary(recs):
         "effectsPresent": sorted(present),
         "turnsIntroducingEffects": introduced_turns,
         "largestBlastRadius": max_blast,
+        "deepestPropagation": max_hops,
         "filesTouched": len(files),
         "sessions": len(sessions),
         "span": [ts[0], ts[-1]] if ts else None,
@@ -128,6 +132,8 @@ def _print_human(s, path):
         print(f"  effects present in the code: {', '.join(s['effectsPresent'])}")
     if s["largestBlastRadius"]:
         print(f"  largest blast radius seen: {s['largestBlastRadius']} function(s)")
+    if s["deepestPropagation"]:
+        print(f"  deepest propagation seen: {s['deepestPropagation']} hop(s) from a new source")
     if s.get("hasUnknowns"):   # present-field test, not truthiness — a genuine max of 0 still prints
         print(f"  Unknowns disclosed (max in a turn): {s['unknownsMax']}")
     if s["filesTouched"]:
