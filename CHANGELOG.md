@@ -8,7 +8,23 @@ report bytes, drift results, or gate verdicts (regenerate baselines / expect ver
 
 candor-agents is the family's **domain engine** (SPEC §4): its units are *agents*, not functions, and it
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
-major.minor tracks the spec it declares — `0.12.x` declares spec `0.12`.
+major.minor tracks the spec it declares — `0.13.x` declares spec `0.13`.
+
+## [0.13.0] — 2026-07-14
+
+### spec 0.13 — floor alignment
+
+candor-agents now declares **spec `0.13`** (`SPEC` in `scan.py`; the envelope + `--gate-json` verdict carry
+it): the floor ratchets to the **`Llm`-effect rung** — the new §6.1 boundary effect for a call whose sink
+is a model API (a data-exfiltration surface, always alongside `Net`, gate-able / watchable / tour-able;
+see the candor-spec CHANGELOG for the spec-side detail). This is a **declared-version alignment only**,
+keeping the floor consistent across the family — `Llm` is a code-engine sink classification and the domain
+engine has no `Llm` surface (its leaves are tool grants, not call sites), so no new surface lands here.
+**No fleet-surface behaviour change**: report bytes, drift results, and gate verdicts are byte-identical to
+0.12.0 — only the declared `spec` string moves `0.12`→`0.13`. A consumer pinning `spec == "0.12"` must
+accept `0.13`.
+
+No engine-local change accompanies this rung — the `v0.12.0..HEAD` range is the version bump alone.
 
 ## [0.12.0] — 2026-07-14
 
