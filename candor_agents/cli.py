@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""candor-agents — effect analysis for agent fleets (candor-spec 0.13).
+"""candor-agents — effect analysis for agent fleets (candor-spec 0.14).
 
   candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: what the fleet MAY do
   candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: what it DID (transcripts)
