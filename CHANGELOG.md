@@ -8,7 +8,27 @@ report bytes, drift results, or gate verdicts (regenerate baselines / expect ver
 
 candor-agents is the family's **domain engine** (SPEC §4): its units are *agents*, not functions, and it
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
-major.minor tracks the spec it declares — `0.11.x` declares spec `0.11`.
+major.minor tracks the spec it declares — `0.12.x` declares spec `0.12`.
+
+## [0.12.0] — 2026-07-14
+
+### spec 0.12 — floor alignment
+
+candor-agents now declares **spec `0.12`** (`SPEC` in `scan.py`; the envelope + `--gate-json` verdict carry
+it): the floor ratchets to the gains-origin rung — the §3.1 `gains` `origin` field, the supply-chain
+existing/new/unknown split (see the candor-spec CHANGELOG for the spec-side detail). This is a
+**declared-version alignment only**, keeping the floor consistent across the family — candor-agents does
+not expose a `gains` verb, so no new surface lands here. **No fleet-surface behaviour change**: report
+bytes, drift results, and gate verdicts are byte-identical to 0.11.0 — only the declared `spec` string
+moves `0.11`→`0.12`. A consumer pinning `spec == "0.11"` must accept `0.12`.
+
+### Added
+
+- **`stats` aggregates `deepestPropagation`** from the activity log's new `maxHops` record field — the
+  companion to `largestBlastRadius`. The review scripts now log the change's graph-depth as `maxHops`,
+  and `stats` reports the maximum with the human line `deepest propagation seen: N hop(s) from a new
+  source`. Records with an absent or non-integer `maxHops` are ignored (the established junk-tolerance
+  pattern).
 
 ## [0.11.0] — 2026-07-13
 
