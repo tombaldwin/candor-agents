@@ -1,22 +1,46 @@
 #!/usr/bin/env python3
-"""candor-agents — effect analysis for agent fleets (candor-spec 0.15).
+"""candor-agents — the agent-fleet effect engine. Declared grants vs observed use; drift is the alarm.
 
-  candor-agents scan    <project-dir> [--out <prefix>]   # DECLARED: what the fleet MAY do
-  candor-agents observe <project-dir> [--out <prefix>]   # OBSERVED: what it DID (transcripts)
-  candor-agents drift   <project-dir> [--strict]         # declared vs observed (least-privilege advice)
-  candor-agents guard   <policy-file> [<project-dir>]    # ENFORCED: compile a deny-policy to runtime
-  candor-agents stats   [<project-dir>] [--since <iso>] [--session <id>] [--json]   # MEASURED: edit-time gate activity (stop hook log)
-  candor-agents digest  [<project-dir>] [--since <iso>] [--out <path|->] [--title <s>]  # OWNER report → CANDOR-REPORT.md
-  candor-agents log-gate <gate.json> [<report.json>] [--log <path>]                # feed the digest from a jar --gate-json CI run
-  candor-agents savings [<project-dir>] [--transcript <dir>] [--json]               # MODELLED: what candor-query saved vs re-deriving
+Reads a fleet's agent definitions (.claude/agents, .mcp.json, settings, commands,
+skills, cron) for what it MAY do, and its session transcripts for what it DID —
+the gap between the two is the least-privilege advice. Every report is the same
+envelope the rest of the candor family emits, so the unmodified candor-query
+binary and the shared policy grammar work over both modes.
 
-scan answers "what MAY this fleet do"; observe answers "what DID it do"; drift is the gap between
-them: a grant no session ever used is a least-privilege trim candidate (the AS-EFF-002 analog), an
-observed effect outside the declarations is an anomaly worth reading (a scan gap, an undeclared
-agent type, or transcript noise — --strict exits 1 on it). guard closes the loop from may to
-ENFORCED: it compiles a `deny <Effect>` policy into the settings.json permissions.deny the harness
-enforces natively — the dual of scan, which READS permissions.deny to subtract effects. Reports are
-candor-spec §2 envelopes, so the unmodified candor-query binary and the §6.2 policy grammar work over both modes.
+USAGE
+  candor-agents <action> [args] [options]     one action per invocation (below)
+  candor-agents <dir>                         a bare dir is `scan <dir>`, the static default
+
+ACTIONS
+  scan <dir>                 DECLARED: what the fleet MAY do
+  observe <dir>              OBSERVED: what it DID (session transcripts)
+  drift <dir>                declared vs observed — trim candidates and anomalies (--strict exits 1)
+  guard <policy> [<dir>]     ENFORCED: compile a deny-policy into the harness's permissions.deny
+  stats [<dir>]              MEASURED: edit-time gate activity (the stop-hook log)
+  digest [<dir>]             the OWNER report over the same log → CANDOR-REPORT.md
+  log-gate <gate.json>       feed the digest from a jar --gate-json CI run
+  savings [<dir>]            MODELLED: what candor-query saved vs re-deriving
+  agents                     the agent contract for this installed version (AGENTS.md)
+
+OPTIONS  (per action; `scan -h` / `observe -h` show the full surface)
+  --out <prefix>             where to write the report (scan/observe) or digest (--out <path|->)
+  --json                     machine-readable output (scan, observe, stats, savings)
+  --policy <file>            evaluate a policy — exit 1 on a violation (scan, observe)
+  --gate-json <file>         write the structured gate verdict as JSON (scan, observe)
+  --fleet <name>             name the fleet (default: the project dir's basename)
+  --transcripts <dir>        read transcripts from here (observe, drift)
+  --strict                   drift: exit 1 on an anomaly
+  --since <iso>              window the activity log (stats, digest)
+  -V, --version              print the installed version (offline)
+  -h, --help                 this help
+
+EXAMPLES
+  candor-agents scan .
+  candor-agents drift . --strict
+  candor-agents digest . --since 2026-07-01
+  candor-agents guard fleet.policy .
+
+Docs: candor.poly.io   ·   Verify an install: candor doctor
 """
 import json
 import os
