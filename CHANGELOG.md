@@ -8,7 +8,25 @@ report bytes, drift results, or gate verdicts (regenerate baselines / expect ver
 
 candor-agents is the family's **domain engine** (SPEC §4): its units are *agents*, not functions, and it
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
-major.minor tracks the spec it declares — `0.14.x` declares spec `0.14`.
+major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
+
+## [0.15.0] — 2026-07-15
+
+### spec 0.15 — floor alignment
+
+candor-agents now declares **spec `0.15`** (`SPEC` in `scan.py`; the envelope + `--gate-json` verdict carry
+it): the floor ratchets to the **coverage-envelope + host-resolution rung** — the coverage envelope is a
+code-engine report field and host-resolution recall is a code-engine classifier improvement (see the
+candor-spec 0.15 CHANGELOG for the spec-side detail). This is a **declared-version alignment only**,
+keeping the floor consistent across the family — the fleet's reports COULD carry an uncovered
+tool-surface coverage envelope in a future rung, but no such field lands here, and host resolution has no
+fleet-side analogue (its leaves are tool grants, not call sites).
+**No fleet-surface behaviour change**: report bytes, drift results, and gate verdicts are byte-identical to
+0.14.0 — only the declared `spec` string moves `0.14`→`0.15`. A consumer pinning `spec == "0.14"` must
+accept `0.15`.
+
+No engine-local change accompanies this rung — the `v0.14.0..HEAD` range was empty; this version bump is
+the entire delta.
 
 ## [0.14.0] — 2026-07-14
 

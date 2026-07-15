@@ -36,7 +36,7 @@ def _engine_from(report, gate):
 def build_record(gate, report, engine=None, now=None):
     """Map a gate verdict (+ optional report) to the activity-record shape stats/digest read.
     `gate` is the `--gate-json` object {spec, ok, violations:[{rule,fn,effects,detail}]};
-    `report` the spec-0.14 effect report (functions[].inferred), or None."""
+    `report` the spec-0.15 effect report (functions[].inferred), or None."""
     report = report or {}
     fns = report.get("functions") or []
     viols = gate.get("violations") or []
