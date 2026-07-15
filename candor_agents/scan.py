@@ -550,25 +550,35 @@ def print_version():
     print("upgrade: pipx upgrade candor-agents  (or: pip install -U candor-agents)")
 
 
-_HELP = f"""candor-agents {VERSION} — effect analysis for Claude Code agent fleets (candor-spec {SPEC})
+_HELP = """candor-agents scan — DECLARED: what the fleet MAY do.
 
-USAGE: candor-agents scan <project-dir> [--out <prefix>] [--json] [--policy <file>]
-                          [--gate-json <file>] [--fleet <name>] [--link <prefix>] [--nested-spawn]
+Reads the fleet root (.claude/agents, .mcp.json, settings, commands, skills, cron)
+and writes a report the unmodified candor-query binary reads.
 
-  <project-dir>      the fleet root (.claude/agents, .mcp.json, settings, commands, skills, cron)
-  --out <prefix>     write <prefix>.<fleet>.Fleet.json + a .callgraph.json sidecar (default: report)
-  --json             emit the §2 report envelope as JSON to STDOUT (human/progress goes to stderr)
-  --policy <file>    enforce a §6.2 policy file: exit 1 on a violation, 2 if unreadable; honours
-                     $CANDOR_POLICY, then a discovered .candor/config `policy`, when absent
-  --gate-json <file> write the structured gate verdict {{spec, ok, violations}} as JSON (§3.3 ⟨0.8⟩;
-                     `-` = stdout); written whenever the flag is given, exit code unchanged
-  --fleet <name>     name the fleet (default: the project dir's basename)
-  --link <prefix>    edge Bash-holding units into a linked CODE report's entry points (§4 cliff)
-  --nested-spawn     allow ambient agents to nest-spawn (harnesses that permit it)
-  -V, --version      print the build + candor-spec version (offline)
-  -h, --help         show this help
+USAGE
+  candor-agents scan <project-dir> [options]
 
-See https://github.com/tombaldwin/candor-agents"""
+OPTIONS
+  --out <prefix>            write <prefix>.<fleet>.Fleet.json + a .callgraph.json sidecar
+                            (default: report)
+  --json                    emit the report envelope as JSON to stdout (human/progress
+                            goes to stderr)
+  --policy <file>           evaluate a policy file: exit 1 on a violation, 2 if unreadable;
+                            honours $CANDOR_POLICY, then a discovered .candor/config `policy`
+  --gate-json <file>        write the structured gate verdict {spec, ok, violations} as JSON
+                            (`-` = stdout); written whenever given, exit code unchanged
+  --fleet <name>            name the fleet (default: the project dir's basename)
+  --link <prefix>           edge Bash-holding units into a linked CODE report's entry points
+                            (the Bash cliff)
+  --nested-spawn            allow ambient agents to nest-spawn (harnesses that permit it)
+  -V, --version             print the installed version (offline)
+  -h, --help                this help
+
+EXAMPLES
+  candor-agents scan .
+  candor-agents scan . --policy fleet.policy --gate-json gate.json
+
+Docs: candor.poly.io   ·   Verify an install: candor doctor"""
 
 
 def parse_args(args):

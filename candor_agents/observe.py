@@ -116,24 +116,33 @@ def print_version():
     print("upgrade: pipx upgrade candor-agents  (or: pip install -U candor-agents)")
 
 
-_HELP = f"""candor-agents {VERSION} — OBSERVED fleet effects from session transcripts (candor-spec {SPEC})
+_HELP = """candor-agents observe — OBSERVED: what the fleet DID, from session transcripts.
 
-USAGE: candor-agents observe <project-dir> [--out <prefix>] [--json] [--policy <file>]
-                             [--gate-json <file>] [--transcripts <dir>] [--fleet <name>]
+Reads the project's Claude Code transcripts (~/.claude/projects/<slug>/) and writes
+a report in the same shape scan emits — the two halves drift compares.
 
-  <project-dir>      the fleet root (its transcripts live in ~/.claude/projects/<slug>/)
-  --out <prefix>     write <prefix>.<fleet>.Observed.json + a .callgraph.json sidecar (default: .candor/report)
-  --json             emit the §2 report envelope as JSON to STDOUT (human/progress goes to stderr)
-  --policy <file>    enforce a §6.2 policy file: exit 1 on a violation, 2 if unreadable; honours
-                     $CANDOR_POLICY, then a discovered .candor/config `policy`, when absent
-  --gate-json <file> write the structured gate verdict {{spec, ok, violations}} as JSON (§3.3 ⟨0.8⟩;
-                     `-` = stdout); written whenever the flag is given, exit code unchanged
-  --transcripts <dir>  read transcripts from here instead of the derived ~/.claude/projects slug
-  --fleet <name>     name the fleet (default: the project dir's basename)
-  -V, --version      print the build + candor-spec version (offline)
-  -h, --help         show this help
+USAGE
+  candor-agents observe <project-dir> [options]
 
-See https://github.com/tombaldwin/candor-agents"""
+OPTIONS
+  --out <prefix>            write <prefix>.<fleet>.Observed.json + a .callgraph.json sidecar
+                            (default: .candor/report)
+  --json                    emit the report envelope as JSON to stdout (human/progress
+                            goes to stderr)
+  --policy <file>           evaluate a policy file: exit 1 on a violation, 2 if unreadable;
+                            honours $CANDOR_POLICY, then a discovered .candor/config `policy`
+  --gate-json <file>        write the structured gate verdict {spec, ok, violations} as JSON
+                            (`-` = stdout); written whenever given, exit code unchanged
+  --transcripts <dir>       read transcripts from here instead of the derived ~/.claude/projects slug
+  --fleet <name>            name the fleet (default: the project dir's basename)
+  -V, --version             print the installed version (offline)
+  -h, --help                this help
+
+EXAMPLES
+  candor-agents observe .
+  candor-agents observe . --transcripts ./sessions --json
+
+Docs: candor.poly.io   ·   Verify an install: candor doctor"""
 
 
 def observe(tdir, out_prefix, fleet, as_json=False):
