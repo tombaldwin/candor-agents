@@ -10,6 +10,14 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
+## [0.18.0] — 2026-07-16
+
+### spec 0.18 — the trust-trio
+
+candor-agents now declares **spec `0.18`** (`SPEC`; version `agents-0.18.0`). Tracks the family floor bump —
+the pinned-tool-surface rung (`--strict` advisory-verb CI gate; the surface/`tour` mostly-Unknown
+disclosure). No report-schema or verdict change; the drift-gate and `--gate-json` verdict are unchanged.
+
 ## [0.15.0] — 2026-07-15
 
 ### spec 0.15 — floor alignment
