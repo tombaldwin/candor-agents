@@ -1,4 +1,4 @@
-"""candor-agents — effect analysis for agent fleets (candor-spec 0.20).
+"""candor-agents — effect analysis for agent fleets (candor-spec 0.21).
 
 The CLI entry point is `candor_agents.cli:main`. Modules are runnable individually via
 `python -m candor_agents.<module>` (scan/observe/cli), which is how the CLI dispatches its
