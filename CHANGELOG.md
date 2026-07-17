@@ -10,6 +10,13 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
+## [0.19.0] — 2026-07-17
+
+Floor ratchet to spec **0.19**. The 0.19 rung is **reason-scoped `Unknown` policies** (SPEC §6.2) — a
+§6.2 policy-gate tool-surface feature for the effect engines (rust/java/ts/swift); it adds no report-schema
+or drift-surface change, so candor-agents' declared-vs-observed report is byte-identical under 0.19 (the
+declared `spec` string bumps to keep the family floor uniform).
+
 ## [0.18.0] — 2026-07-16
 
 ### spec 0.18 — the trust-trio
