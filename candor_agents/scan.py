@@ -20,7 +20,7 @@ import os
 import re
 import sys
 
-SPEC = "0.22"
+SPEC = "0.23"
 VERSION = "agents-0.22.0"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
