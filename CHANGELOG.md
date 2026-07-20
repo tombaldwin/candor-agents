@@ -10,6 +10,11 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
+## [0.23.0] — 2026-07-20
+
+Spec floor → **0.23** (lockstep with the family). Reads the 0.23 report schema (interfaceUnion field
+tolerated; the declared-vs-observed drift analysis is unchanged). No agent-facing behaviour change.
+
 ## [0.22.0] — 2026-07-18
 
 Spec floor → **0.22** (the `verify` oracle rung, shipped on the java/ts arms). candor-agents declares `0.22`; the
