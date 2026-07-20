@@ -10,6 +10,12 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
+## [0.23.1] — 2026-07-20
+
+Version-aligned with the family's 0.23.1 patch (engine performance + classifier-soundness fixes in the
+code engines; spec unchanged at **0.23**). No functional change to candor-agents itself — it reads the same
+0.23 report schema and drift semantics.
+
 ## [0.23.0] — 2026-07-20
 
 Spec floor → **0.23** (lockstep with the family). Reads the 0.23 report schema (interfaceUnion field
