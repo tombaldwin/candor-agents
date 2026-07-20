@@ -767,7 +767,7 @@ check("the wheel ships the candor_agents package (so agentsmd + the modules are 
       and os.path.exists(os.path.join(HERE, "candor_agents", "agentsmd.py")))
 r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
 check("--agents prints the version header + the exact installed contract",
-      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.22")
+      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.23")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 # ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
