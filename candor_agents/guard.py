@@ -22,9 +22,15 @@ import json
 import os
 import sys
 
+from candor_agents.policy import EFFECTS
 from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE
 
-VOCAB = {"Net", "Fs", "Db", "Exec", "Env", "Clock", "Ipc", "Log", "Rand", "Clipboard"}
+# SPEC §1's effect table (⟨0.24⟩ phrasing: "every effect in the table above, excluding `Unknown`") —
+# taken from the shared list rather than re-typed, which is how `Llm` came to be missing from all
+# THREE of this engine's copies of it at once. guard is the dual of the gate, so an effect the gate
+# now enforces must at least be RECOGNISED here (and reported as having no denyable tool), never
+# silently mis-read as the rule's scope token.
+VOCAB = set(EFFECTS)
 VOCAB_LOWER = {e.lower(): e for e in VOCAB}  # case-fold map, to catch a miscased `deny net`
 
 

@@ -10,6 +10,57 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
+## [0.24.0] — 2026-07-28
+
+Spec floor → **0.24**. Not a version-only bump: four ⟨0.24⟩ clauses genuinely bind this engine, and
+three of them were live defects. The `--class` query flags, the `callers --include-unknown` frontier,
+the §2.2 hierarchy sidecar and `gate --report` are N/A — candor-agents ships no §3.1 query verb by
+design (the unmodified `candor-query` answers over its report). §4's five-kind code vocabulary is N/A
+too: §4 ⟨0.7⟩ exempts the agent-fleet engine **by name** and requires its own documented origin
+vocabulary instead, which it already had.
+
+- ⚠ **§4.0 / conformance PART 16 — `pure <scope>` no longer fires on `Unknown`.** It fires iff a
+  DETERMINED effect is present (`S ≠ ∅`); `D ≠ ∅` alone is AS-EFF-003 *disclosure*, not an AS-EFF-006
+  violation. A fleet whose agents were determined-pure behind one uncurated MCP server used to fail
+  `pure` and now passes. **Gate verdicts change.**
+- ⚠ **§6.2 — `deny E Unknown[<class>]` is implemented; it was a FAIL-OPEN.** The bracketed form parsed
+  as the rule's *scope* token, so `deny Unknown[*]` named no effect, was dropped with a warning and
+  exited **0** on a report where the bare `deny Unknown` exited 1 — the spec says those two forms are
+  byte-identical. Fleet reasons all project to `unresolved` via §6.2's conservative catch-all, so
+  `[*]`, `[unresolved]` and `[dynamic]` match the bare form, while a code-only filter (`[dispatch]`)
+  matches nothing and emits the advisory under-gating lint. An all-unrecognized bracket falls back to
+  ALL classes — fail-closed, never to a filter that matches nothing. AS-EFF-006 verdicts carrying
+  `Unknown` now include the ⟨0.19⟩ **`reasonClass`** array; the class resolves TRANSITIVELY, and a
+  direct `Unknown` a unit did not name CONTRIBUTES `unresolved` at the source (⟨0.24⟩), so adding a
+  reasoned callee can never turn a red verdict green.
+- ⚠ **§1/§5.1/§6.1 — `Llm` was missing from all THREE of this engine's copies of §1's effect table.**
+  Consequences, both real: `deny Llm` named no known effect, so the rule was dropped and the gate
+  exited 0 (fail-open); and `"candorEffects": ["Llm"]` was voided as out-of-vocabulary, so a server
+  declaring the effect it actually has read `Unknown` — a *false* disclosure, reporting a legitimate
+  declaration as a typo. One vocabulary now, sourced once. Per §6.1 ⟨0.24⟩ `Llm` **co-emits `Net`**
+  (a model-provider call is an outbound request in every instance); `Db` still does not.
+- ⚠ **`deny <E>[<class>]` on a CONCRETE effect no longer drops the rule.** Found by the same sweep:
+  `deny Net[unknown-host]` named no known effect, so the whole rule was discarded and the run exited
+  0 on a Net-reaching fleet. This engine emits no ⟨0.20⟩ `netClass`, so *honouring* the filter would
+  fail open too (matching an absent field passes). It now keeps the EFFECT, drops the filter, and
+  says so on stderr — the family's policy-side rule (a dropped token leaves a *wider* rule standing),
+  which is safe under monotone denial. Implementing `netClass` properly is still open.
+- **§2.2 — the `--link` report locator excludes all SEVEN reserved trailing segments at the glob.**
+  It carved out three (`callgraph`, `calibrated`, `encountered-*`) and would claim another engine's
+  `hierarchy` / `layerreach` / `locs` / `gate` sidecar as a report. Still a denylist, deliberately: an
+  allowlist of known `<type>` values makes any report whose type segment we failed to anticipate
+  silently invisible. A crate legitimately *named* `hierarchy` still resolves.
+- **§2 — every ordering is locale-INDEPENDENT, now pinned.** Python's `sorted()` on `str` is
+  code-point order, so this was already satisfied at all 72 sort sites (no `locale.strxfrm`, no
+  locale-aware comparator, no environment-derived sort key). "Free today" is not "pinned": a control
+  asserts the report, the callgraph sidecar and the stderr receipt are byte-identical under `LC_ALL=C`
+  and `LC_ALL=et_EE.UTF-8`. Estonian, not Turkish — locale collation reorders pure ASCII, and a
+  Turkish control returns "no difference" on ASCII and licenses a false all-clear.
+- **Controls.** Every new test was verified to FAIL against a mutation of the fix it pins, including
+  the §4 ⟨0.24⟩ MUST: a fabricated off-vocabulary kind (`banana:whatever`) round-trips verbatim and
+  classifies through the conservative catch-all — and still ARMS a `Unknown[unresolved]` gate, so an
+  unrecognized reason can never become a silent hole under a narrowed filter.
+
 ## [0.23.1] — 2026-07-20
 
 Version-aligned with the family's 0.23.1 patch (engine performance + classifier-soundness fixes in the
