@@ -20,7 +20,11 @@ Annotate the server's entry in your project's `.mcp.json` with a `candorEffects`
 ```
 
 - The vocabulary is candor-spec §1: `Net`, `Fs`, `Db`, `Exec`, `Env`, `Clock`, `Ipc`, `Log`,
-  `Rand`, `Clipboard`.
+  `Rand`, `Clipboard`, `Llm`. (`Llm` has been a §1 effect since spec ⟨0.13⟩ but was missing from this
+  engine's copy of the table until ⟨0.24⟩, so a server declaring it was voided as a typo — read §1,
+  don't count this list.) Declaring `Llm` also reports `Net`: a model-provider call is an outbound
+  request in every instance, so §6.1 has the two co-emitted. `Db` is *not* co-emitted with `Net` —
+  an embedded, file-backed store has no egress.
 - `"candorEffects": []` declares a **pure** server (it computes; it reaches nothing).
 - An unknown effect name **voids the declaration** — the server stays `Unknown` with
   `unknownWhy: ["mcp-decl-invalid:<server>:<name>"]`. A typo (`"net"`) must never silently narrow

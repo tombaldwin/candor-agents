@@ -347,7 +347,7 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 
 # ── 7. envelope + main ────────────────────────────────────────────────────────────────────────────
 rep, cg = scan({"a.md": agent("a", "Read")})
-check("spec envelope (candor.spec = 0.22)", rep["candor"]["spec"] == "0.23")
+check("spec envelope (candor.spec = 0.24)", rep["candor"]["spec"] == "0.24")
 check("hash join keys emitted (§2 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
 check("unitKind names every fleet unit (spec ⟨0.5⟩: agent/session/hooks)",
       all(f.get("unitKind") in ("agent", "session", "hooks") for f in rep["functions"])
@@ -355,6 +355,98 @@ check("unitKind names every fleet unit (spec ⟨0.5⟩: agent/session/hooks)",
 m = entry(rep, "session")
 check("the session root is the entry point and edges to every agent",
       m and m.get("entryPoint") is True and cg["session"] == ["a"])
+
+# ══ SPEC §2 ⟨0.24⟩ — EVERY ORDERING, in a report AND in a query output, is locale-INDEPENDENT ══════
+# Sort by Unicode code point. The whole document already depends on this without saying so: every
+# compatibility argument is phrased as "a default report is BYTE-IDENTICAL", which is not even
+# checkable if two runs of one version can disagree. Measured elsewhere in the family: one engine used
+# a locale-sensitive comparator at SEVEN sites, one of them ordering the coverage ledger INSIDE the
+# emitted report — same build, same tree, different `LC_ALL`, different report bytes.
+#
+# Python's `sorted()` on `str` is code-point order and locale-independent, so this engine satisfies
+# the clause for free. "Free today" is not "pinned", hence this control — it fails the moment anyone
+# reaches for `locale.strxfrm`, a locale-aware `cmp_to_key`, or an env-derived sort key.
+#
+# `et_EE`, NOT `tr_TR`: **locale collation reorders pure ASCII**, and Estonian collates `z` between
+# `s` and `t`, so `[tpad, zpad]` under `LC_ALL=C` becomes `[zpad, tpad]` under `et_EE.UTF-8`. Turkish
+# does not reorder ASCII at all, so a C-vs-`tr_TR` control returns "no difference" and licenses a
+# FALSE all-clear. Verified by injecting `key=locale.strxfrm` at one report-ordering site: et_EE
+# caught it — and `da_DK.UTF-8` and `cs_CZ.UTF-8` both reported NO difference on the same input, so
+# the locale choice is load-bearing, not decorative.
+_ld = tempfile.mkdtemp()
+_lad = os.path.join(_ld, ".claude", "agents"); os.makedirs(_lad)
+for _n, _t in [("zpad", "WebFetch"), ("tpad", "Read"), ("spad", "Bash"), ("apad", "Write")]:
+    open(os.path.join(_lad, _n + ".md"), "w").write(agent(_n, f"{_t}, Agent", body="Use zpad, tpad, spad."))
+json.dump({"mcpServers": {"zmystery": {}, "tmystery": {}, "smystery": {}}},
+          open(os.path.join(_ld, ".mcp.json"), "w"))
+_lbytes = {}
+for _loc in ("C", "et_EE.UTF-8"):
+    for _f in os.listdir(_ld):  # delete the output before measuring the control
+        if _f.endswith(".json") and _f != ".mcp.json":
+            os.remove(os.path.join(_ld, _f))
+    _env = dict(os.environ); _env["LC_ALL"] = _loc; _env["LANG"] = _loc
+    _lo = os.path.join(_ld, "L")
+    _lr = subprocess.run([sys.executable, "-m", "candor_agents.scan", _ld, "--out", _lo, "--fleet", "t"],
+                         capture_output=True, text=True, env=_env)
+    _lbytes[_loc] = (_lr.returncode, open(_lo + ".t.Fleet.json", "rb").read(),
+                     open(_lo + ".t.Fleet.callgraph.json", "rb").read(), _lr.stderr)
+check("§2 ⟨0.24⟩: the REPORT is byte-identical under `LC_ALL=C` and `LC_ALL=et_EE.UTF-8` — every "
+      "ordering is by Unicode code point, never by an ambient locale's collation",
+      _lbytes["C"][1] == _lbytes["et_EE.UTF-8"][1] and _lbytes["C"][0] == 0,
+      f"C={len(_lbytes['C'][1])}B et_EE={len(_lbytes['et_EE.UTF-8'][1])}B")
+check("§2 ⟨0.24⟩: the CALLGRAPH SIDECAR and the stderr RECEIPT are locale-independent too — the "
+      "clause covers report bytes and query/receipt output alike",
+      _lbytes["C"][2] == _lbytes["et_EE.UTF-8"][2] and _lbytes["C"][3] == _lbytes["et_EE.UTF-8"][3])
+check("§2 ⟨0.24⟩ control is NON-VACUOUS in its FIXTURE: it really does carry ASCII names Estonian "
+      "collation reorders (`tpad` before `zpad` under C; et_EE puts `z` between `s` and `t`)",
+      b"zpad" in _lbytes["C"][1] and b"tpad" in _lbytes["C"][1]
+      and _lbytes["C"][1].index(b"tpad") < _lbytes["C"][1].index(b"zpad"))
+# …and non-vacuous in its PLATFORM. If the C library has no Estonian locale (common on a minimal CI
+# image) then setting `LC_ALL` is inert, the byte-equality above passes without testing anything, and
+# a green check would be a claim the run did not earn. Probe whether the locale can actually reorder
+# ASCII here; disclose a SKIP rather than bank a vacuous pass.
+_lprobe = subprocess.run(
+    [sys.executable, "-c", "import locale;locale.setlocale(locale.LC_COLLATE,'et_EE.UTF-8');"
+                           "print(sorted(['tpad','zpad'],key=locale.strxfrm))"],
+    capture_output=True, text=True)
+if _lprobe.returncode == 0 and _lprobe.stdout.strip() == "['zpad', 'tpad']":
+    check("§2 ⟨0.24⟩ control is NON-VACUOUS on THIS PLATFORM: `et_EE.UTF-8` is installed and does "
+          "reorder pure ASCII, so the byte-equality above was a real measurement", True)
+else:
+    print("  SKIP §2 locale control is VACUOUS here — `et_EE.UTF-8` is unavailable or does not "
+          f"reorder ASCII ({_lprobe.stdout.strip() or _lprobe.stderr.strip().splitlines()[-1:]}); "
+          "the byte-equality checks above proved nothing on this machine")
+
+# ══ SPEC §1/§5.1/§6.1 ⟨0.24⟩ — `Llm` is a §1 effect, and it CO-EMITS `Net` ════════════════════════
+# §5.1: a `candorEffects` manifest names "effect names from §1", and voiding is reserved for a name
+# OUTSIDE §1 (a typo must not silently narrow a surface). `Llm` has been §1 since ⟨0.13⟩ and was
+# missing from this engine's vocabulary, so a server declaring the effect it actually has was voided
+# as out-of-vocabulary and read Unknown — fail-closed, but a FALSE disclosure: a legitimate
+# declaration reported as a typo. §6.1 ⟨0.24⟩: `Llm` REFINES `Net` (a model-provider call is an
+# outbound request in EVERY instance, which is the test for refinement) so the engines co-emit both —
+# unlike `Db`, which has no egress and is emitted alone.
+_md = tempfile.mkdtemp()
+_mad = os.path.join(_md, ".claude", "agents"); os.makedirs(_mad)
+open(os.path.join(_mad, "l.md"), "w").write(agent("l", "mcp__myllm"))
+open(os.path.join(_mad, "e.md"), "w").write(agent("e", "mcp__embedded"))
+json.dump({"mcpServers": {"myllm": {"candorEffects": ["Llm"]},
+                          "embedded": {"candorEffects": ["Db"]}}},
+          open(os.path.join(_md, ".mcp.json"), "w"))
+_mo = os.path.join(_md, "m")
+subprocess.run([sys.executable, "-m", "candor_agents.scan", _md, "--out", _mo, "--fleet", "t"],
+               capture_output=True, text=True)
+_mrep = json.load(open(_mo + ".t.Fleet.json"))
+check("§5.1 ⟨0.24⟩: a `candorEffects: [\"Llm\"]` declaration is ACCEPTED — `Llm` is a §1 name, so "
+      "voiding it as out-of-vocabulary was a false disclosure, not a conservative one",
+      "Llm" in entry(_mrep, "l")["direct"] and "Unknown" not in entry(_mrep, "l")["inferred"],
+      json.dumps(entry(_mrep, "l")))
+check("§6.1 ⟨0.24⟩: `Llm` CO-EMITS `Net` (every model-provider call is an outbound request), so a "
+      "`deny Net` gate sees the egress — additive and monotone, never a relaxation",
+      "Net" in entry(_mrep, "l")["inferred"])
+check("§6.1 ⟨0.24⟩: `Db` does NOT co-emit `Net` — an embedded store has no egress at all, and "
+      "widening `deny Net` onto it would be the fabrication mirror",
+      "Net" not in entry(_mrep, "e")["inferred"] and "Db" in entry(_mrep, "e")["direct"],
+      json.dumps(entry(_mrep, "e")))
 
 # ── 8. fs detail aggregates read/write ────────────────────────────────────────────────────────────
 rep, _ = scan({"rw.md": agent("rw", "Read, Write")})
@@ -412,6 +504,68 @@ check("--link: Bash agent inherits the code's recorded effects", "Db" in er["inf
 check("--link: non-Bash agent does NOT inherit", "Db" not in entry(rep, "watcher")["inferred"])
 check("--link: pseudo-node not re-emitted as a fleet row", entry(rep, "main") is None)
 
+from candor_agents import scan as _sc
+
+# ══ SPEC §2.2 ⟨0.24⟩ — a report-locator glob MUST exclude the RESERVED trailing segments AT THE GLOB
+# `--link <prefix>` is this engine's only report locator, and it carved out 3 of the family's 7
+# reserved names. Sidecar names are per-engine, so the exclusion cannot be by segment COUNT (that
+# admits a 2-segment sidecar from another producer) and cannot be at the PARSE (measured on the
+# reference engine: a `<prefix>.<pkg>.hierarchy.json` claimed as a report reported the engine's own
+# mistake as the user's data loss). It MUST be a DENYLIST — an allowlist of known `<type>` values
+# would make any report whose type segment we failed to anticipate silently invisible: a false
+# all-clear. Incompleteness in a denylist is loud; in an allowlist it is the cardinal sin.
+_sd = os.path.join(d, "s")
+json.dump(code, open(f"{_sd}.app.scan.json", "w"))          # a real report
+for _seg in ("callgraph", "hierarchy", "calibrated", "layerreach", "locs", "gate"):
+    # every reserved name, in BOTH shapes the family writes: `<prefix>.<seg>.json` (1 segment) and
+    # `<prefix>.<pkg>.<seg>.json` (2) — the shape that landed on the `<crate>.<type>` report form.
+    json.dump({"functions": [{"fn": f"SIDECAR::{_seg}", "inferred": ["Net"], "entryPoint": True}]},
+              open(f"{_sd}.{_seg}.json", "w"))
+    json.dump({"functions": [{"fn": f"SIDECAR2::{_seg}", "inferred": ["Net"], "entryPoint": True}]},
+              open(f"{_sd}.app.{_seg}.json", "w"))
+json.dump({"functions": [{"fn": "SIDECAR::enc", "inferred": ["Net"], "entryPoint": True}]},
+          open(f"{_sd}.encountered-app.json", "w"))
+out2 = os.path.join(d, "r2")
+subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out2, "--fleet", "t",
+                "--link", _sd], capture_output=True, text=True)
+_cg2 = json.load(open(f"{out2}.t.Fleet.callgraph.json"))
+check("§2.2 ⟨0.24⟩ --link: EVERY reserved trailing segment is excluded at the GLOB (callgraph / "
+      "hierarchy / calibrated / layerreach / locs / gate / encountered-*), in both the 1-segment and "
+      "the 2-segment shape — this list carried 3 of the 7",
+      not any(str(t).startswith("SIDECAR") for t in _cg2["runner"]), _cg2["runner"])
+check("§2.2 ⟨0.24⟩ --link: the real report beside those sidecars still resolves — the exclusion must "
+      "not cost a report (an empty link would pass the assertion above vacuously)",
+      "main" in _cg2["runner"] and "Db" in entry(json.load(open(f"{out2}.t.Fleet.json")),
+                                                 "runner")["inferred"], _cg2["runner"])
+check("§2.2 ⟨0.24⟩: a crate legitimately NAMED `hierarchy` sits in the `<crate>` position, not the "
+      "reserved one, and MUST still resolve — the denylist reads the TRAILING segment only",
+      not _sc.is_reserved_sidecar("r.hierarchy.lib.json")
+      and not _sc.is_reserved_sidecar("r.gate.scan.json")
+      and _sc.is_reserved_sidecar("r.app.hierarchy.json")
+      and _sc.is_reserved_sidecar("r.encountered-mycrate.json"))
+
+# §4 ⟨0.24⟩ CONSUMER CONTROL — a chained CODE report may carry any of the five kinds, plus a migration
+# or fabricated one. This engine reads `entryPoint`/`inferred` from a linked report and NOTHING else,
+# so an off-vocabulary kind cannot break it and cannot be silently rewritten. The inherited `Unknown`
+# correctly carries NO direct `unknownWhy` on the fleet unit (§4: a reason names a site in the unit's
+# OWN body) — the reason stays at the source, in the code report, reachable over the preserved edge.
+_lkd = os.path.join(d, "k")
+json.dump({"candor": {"version": "x", "spec": "0.24"},
+           "functions": [{"fn": "kmain", "inferred": ["Unknown"], "direct": ["Unknown"],
+                          "unknownWhy": ["banana:whatever"], "calls": [], "entryPoint": True}]},
+          open(f"{_lkd}.app.scan.json", "w"))
+out3 = os.path.join(d, "r3")
+_r3 = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", out3, "--fleet", "t",
+                      "--link", _lkd], capture_output=True, text=True)
+_rep3 = json.load(open(f"{out3}.t.Fleet.json"))
+check("§4 ⟨0.24⟩ --link: a linked report carrying a FABRICATED off-vocabulary kind is consumed "
+      "without error and its `Unknown` propagates to the linking unit",
+      _r3.returncode == 0 and "Unknown" in entry(_rep3, "runner")["inferred"], _r3.stderr[-300:])
+check("§4 ⟨0.24⟩ --link: the foreign reason is NOT copied onto the inheriting unit — an inherited "
+      "`Unknown` carries no reason of its own, and the edge to the source is preserved",
+      "banana:whatever" not in entry(_rep3, "runner").get("unknownWhy", [])
+      and "kmain" in json.load(open(f"{out3}.t.Fleet.callgraph.json"))["runner"])
+
 print()
 
 
@@ -453,8 +607,8 @@ with tempfile.TemporaryDirectory() as td:
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
     check("observe version is single-sourced from scan (no drift)",
           obs["candor"]["version"] == __import__("candor_agents.scan", fromlist=["VERSION"]).VERSION, obs["candor"]["version"])
-    check("observe: spec 0.23 envelope + hash + package",
-          obs["candor"]["spec"] == "0.23" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
+    check("observe: spec 0.24 envelope + hash + package",
+          obs["candor"]["spec"] == "0.24" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
           set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
 # bash_cmds: the observed-cmds extractor (first non-fixture run found it fabricating heads)
@@ -767,7 +921,7 @@ check("the wheel ships the candor_agents package (so agentsmd + the modules are 
       and os.path.exists(os.path.join(HERE, "candor_agents", "agentsmd.py")))
 r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
 check("--agents prints the version header + the exact installed contract",
-      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.23")
+      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.24")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 # ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
@@ -1443,15 +1597,15 @@ print()
 _gj = os.path.join(_mkd(), "verdict.json")
 rgv = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", _gj)
 _gv = json.load(open(_gj))
-check("scan --gate-json <violating>: verdict {spec:0.23, ok:false} agrees with exit 1",
-      rgv.returncode == 1 and _gv["spec"] == "0.23" and _gv["ok"] is False, json.dumps(_gv))
+check("scan --gate-json <violating>: verdict {spec:0.24, ok:false} agrees with exit 1",
+      rgv.returncode == 1 and _gv["spec"] == "0.24" and _gv["ok"] is False, json.dumps(_gv))
 check("scan --gate-json: each violation carries {rule, fn, effects, detail} (fn = the unit name)",
       any(v["rule"] == "AS-EFF-006" and v["fn"] == "leaf" and v["effects"] == ["Net"]
           and "detail" in v for v in _gv["violations"]), json.dumps(_gv))
 _gj2 = os.path.join(_mkd(), "clean.json")
 check("scan --gate-json <clean policy>: ok:true, violations [], exit 0",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc, "--gate-json", _gj2).returncode == 0
-      and json.load(open(_gj2)) == {"spec": "0.23", "ok": True, "violations": []})
+      and json.load(open(_gj2)) == {"spec": "0.24", "ok": True, "violations": []})
 _gj3 = os.path.join(_mkd(), "nogate.json")
 check("scan --gate-json with NO gate configured: still writes the clean verdict (ok:true, [])",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--gate-json", _gj3).returncode == 0
@@ -1653,10 +1807,110 @@ check("policy render(): the console line is `[rule] detail` from the same record
       _pol.render(_v[0]) == f"[AS-EFF-006] {_v[0]['detail']}" and "forbidden by policy" in _pol.render(_v[0]), _v)
 check("policy AS-EFF-006: a clean policy (`deny Db`) over a Net/Fs fleet yields no violations",
       _gate("deny Db", _f006, {}) == [])
-# `pure <scope>` is a deny with NO effects → ANY inferred effect on the scope is a violation
+# `pure <scope>` is a deny with NO effects → any DETERMINED effect on the scope is a violation.
+# NOT "any inferred effect", which is what this comment said until spec ⟨0.24⟩ and what the code did:
+# `pure` fires iff `S ≠ ∅` (§4.0's verb table), and `S` is `inferred` MINUS the `Unknown` marker.
 _vp = _gate("pure leaf", _f006, {})
 check("policy AS-EFF-006: `pure leaf` (deny with no effects) flags leaf for performing Net",
       len(_vp) == 1 and _vp[0]["fn"] == "leaf" and _vp[0]["rule"] == "AS-EFF-006", _vp)
+
+# ══ SPEC ⟨0.24⟩ — `pure` is UNAFFECTED by `Unknown` (§4.0's verb table, conformance PART 16) ═══════
+# `pure <scope>` fires iff `S ≠ ∅`, where `S` is the DETERMINED effects — `inferred` MINUS the
+# `Unknown` visibility marker. `D ≠ ∅` alone is AS-EFF-003 DISCLOSURE, not an AS-EFF-006 violation;
+# `unverified` is the verb that exists to surface it. Until ⟨0.24⟩ this engine counted `Unknown` as an
+# effect, so a fleet whose units were determined-pure but sat behind one uncurated MCP server failed
+# `pure` — and no bare-`Unknown` fixture in this file could show it, because every such unit also had
+# a real effect. THE SECOND ASSERTION IS THE ONE THAT MATTERS: killing an over-charge is exactly where
+# a silent UNDER-report gets introduced, so the fixture proving `pure` stopped firing on `Unknown`
+# cannot also prove it still fires on `Net`. Both, or neither is evidence.
+_f024 = [{"fn": "blind", "direct": ["Unknown"], "inferred": ["Unknown"],
+          "unknownWhy": ["mcp-uncurated:mystery"], "calls": []},
+         {"fn": "doer", "direct": ["Net", "Unknown"], "inferred": ["Net", "Unknown"],
+          "unknownWhy": ["tool-unknown:Frobnicate"], "calls": []}]
+_cg024 = {"blind": [], "doer": []}
+check("⟨0.24⟩ policy `pure`: a determined-PURE unit with an undischarged Unknown (S=∅, D≠∅) PASSES — "
+      "`Unknown` is the §4 trust marker, not an effect (§4.0 verb table / conformance PART 16)",
+      _gate("pure blind", _f024, _cg024) == [], _gate("pure blind", _f024, _cg024))
+_vpn = _gate("pure doer", _f024, _cg024)
+check("⟨0.24⟩ policy `pure` STILL fires on a DETERMINED effect beside the Unknown, and reports S only "
+      "(the control against fixing the over-charge into a silent under-report)",
+      len(_vpn) == 1 and _vpn[0]["fn"] == "doer" and _vpn[0]["effects"] == ["Net"], _vpn)
+
+# ══ SPEC §6.2 — the reason-class projection + the `Unknown[class]` filter ══════════════════════════
+# A DOMAIN engine (§4 ⟨0.7⟩) emits none of the five code kinds, so EVERY reason candor-agents writes
+# reaches `unresolved` through §6.2's conservative catch-all. That makes the filter cheap here — and
+# makes its absence a live FAIL-OPEN, which is what it was: `Unknown[…]` parsed as the rule's SCOPE
+# token, so `deny Unknown[*]` named no effect, was dropped, and exited 0 while bare `deny Unknown`
+# on the same report exited 1. The spec says the two forms are byte-identical.
+check("§6.2 projection: every FLEET reason kind classifies `unresolved` via the conservative catch-all",
+      {_pol.classify_reason(w) for w in
+       ["mcp-uncurated:s", "mcp-decl-invalid:s:net", "tool-unknown:X", "ambient:tools-unrestricted",
+        "agent-spawn:x", "hooks-unreadable:settings.json", "hooks-malformed:s.json",
+        "hook-type:Weird"]} == {"unresolved"})
+check("§6.2 projection: a CODE reason arriving from a chained report classifies as the engine that "
+      "wrote it does — incl. `ambiguous:` → dispatch, a §4 kind only since ⟨0.24⟩ but in this table "
+      "all along",
+      [_pol.classify_reason(w) for w in
+       ["reflect:x", "native:x", "dispatch:A.b", "callback:f", "ambiguous:g", "indy:h",
+        "task-handoff:t", "missing-config", "dep:abc123", "dep-stale:pkg"]]
+      == ["reflect", "native", "dispatch", "indirect", "dispatch", "dispatch",
+          "indirect", "setup", "unresolved", "unresolved"])
+# THE FABRICATED KIND — a MUST, not a nicety (§4 ⟨0.24⟩). A mutation that rewrites the kind test from
+# "is the kind in the SET" to "does the token have the `kind:detail` SHAPE" passes every assertion
+# about every REAL kind — they all have the shape — and is caught solely by this one. A control only
+# exercised by inputs the implementation already handles is not a control.
+check("§4 ⟨0.24⟩ CONTROL: a FABRICATED off-vocabulary kind classifies through the conservative "
+      "catch-all — never dropped, never guessed",
+      _pol.classify_reason("banana:whatever") == "unresolved"
+      and _pol.classify_reason("banana") == "unresolved"          # no `kind:detail` shape at all
+      and _pol.classify_reason("dispatchoid:x") != "unresolved")   # prefix rule, deliberately
+_f024b = [{"fn": "blind", "direct": ["Unknown"], "inferred": ["Unknown"],
+           "unknownWhy": ["banana:whatever"], "calls": []}]
+check("§4 ⟨0.24⟩ CONTROL: a fabricated kind still ARMS the gate — `deny Unknown[unresolved]` fires on "
+      "it, so an unrecognized reason can never be a silent hole under a narrowed filter",
+      [v["fn"] for v in _gate("deny Unknown[unresolved] blind", _f024b, {"blind": []})] == ["blind"])
+for _form in ("deny Unknown blind", "deny Unknown[*] blind", "deny Unknown[unresolved] blind",
+              "deny Unknown[dynamic] blind", "deny Unknown[banana] blind"):
+    _vu = _gate(_form, _f024, _cg024)
+    check(f"§6.2 `{_form}` fires on the fleet's Unknown (bare / `*` / `dynamic` / an all-unrecognized "
+          f"bracket all fall back to ALL classes — fail-CLOSED)",
+          [v["fn"] for v in _vu] == ["blind"] and _vu[0]["effects"] == ["Unknown"], _vu)
+    check(f"§6.2 `{_form}`: the AS-EFF-006 verdict carries `reasonClass` — every class present on the "
+          f"unit, not just the matched one (§3.3)", _vu[0].get("reasonClass") == ["unresolved"], _vu)
+check("§6.2 `deny Unknown[dispatch]` does NOT fire on a fleet report — no domain reason projects to "
+      "`dispatch`, and a filter that cannot be honoured must narrow, never widen",
+      _gate("deny Unknown[dispatch] blind", _f024, _cg024) == [])
+check("§6.2: a scoped `Unknown[…]` leaves a CONCRETE effect in the same rule unaffected",
+      [v["effects"] for v in _gate("deny Net Unknown[dispatch] doer", _f024, _cg024)] == [["Net"]])
+# The class travels TRANSITIVELY, exactly as the `Unknown` effect does: `unknownWhy` is direct-only by
+# design (§4 — a reason names a site in the unit's OWN body), so a unit whose Unknown is INHERITED
+# carries no reason and matching the direct field would answer a different question.
+_ftr = [{"fn": "boss", "direct": [], "inferred": ["Unknown"], "calls": ["leaf"]},
+        {"fn": "leaf", "direct": ["Unknown"], "inferred": ["Unknown"],
+         "unknownWhy": ["mcp-uncurated:m"], "calls": []}]
+_vtr = _gate("deny Unknown[unresolved] boss", _ftr, {"boss": ["leaf"], "leaf": []})
+check("§6.2: the reason class resolves TRANSITIVELY — a unit whose `Unknown` is purely INHERITED is "
+      "scoped by its callee's class, not by its own (absent) `unknownWhy`",
+      [v["fn"] for v in _vtr] == ["boss"] and _vtr[0]["reasonClass"] == ["unresolved"], _vtr)
+# ⟨0.24⟩ CONTRIBUTES, not "defaults to": keyed on a DIRECT `Unknown` the unit did not name, never on
+# the class set being empty. Absence is also what an INHERITED Unknown looks like, and charging that
+# one `unresolved` is the mirror fabrication. Monotone: adding a reasoned callee must not turn a red
+# verdict green (the measured counterexample to the monotone-denial corollary).
+_fc = [{"fn": "both", "direct": ["Unknown"], "inferred": ["Unknown"], "calls": ["named"]},
+       {"fn": "named", "direct": ["Unknown"], "inferred": ["Unknown"],
+        "unknownWhy": ["dispatch:A.b"], "calls": []}]
+_vc = _gate("deny Unknown[unresolved] both", _fc, {"both": ["named"], "named": []})
+check("§6.2 ⟨0.24⟩ CONTRIBUTES: a unit with a DIRECT Unknown it did not name contributes `unresolved` "
+      "AT THE SOURCE, so calling a REASONED callee as well cannot turn a red verdict green",
+      [v["fn"] for v in _vc] == ["both"]
+      and _vc[0]["reasonClass"] == ["dispatch", "unresolved"], _vc)
+check("§6.2 ⟨0.24⟩ CONTRIBUTES is gated on a DIRECT unnamed Unknown, NOT on an empty reason set — an "
+      "INHERITED Unknown correctly classified at the callee is not charged `unresolved` too",
+      _pol.transitive_reason_classes(
+          [{"fn": "up", "direct": [], "inferred": ["Unknown"], "calls": ["dn"]},
+           {"fn": "dn", "direct": ["Unknown"], "inferred": ["Unknown"],
+            "unknownWhy": ["dispatch:A.b"], "calls": []}],
+          {"up": ["dn"], "dn": []}) == {"up": {"dispatch"}, "dn": {"dispatch"}})
 
 # --- AS-EFF-008 (allowlist, FAIL-CLOSED) over the literal surfaces ---
 # A unit reaches Net to two hosts; the allowlist clears only one → the other is a violation.
@@ -1784,14 +2038,16 @@ def _parse_warn(text):
 
 _pp, _w = _parse_warn("deny Exec   # this is a comment, not a scope")
 check("policy parse: an inline `#` comment is stripped, never taken as the scope",
-      _pp["deny"] == [{"effects": ["Exec"], "scope": "", "raw": "deny Exec"}], _pp)
+      _pp["deny"] == [{"effects": ["Exec"], "scope": "", "unknownClasses": [],
+                       "raw": "deny Exec"}], _pp)
 _pp, _w = _parse_warn("deny notaneffect")
 check("policy parse: a deny naming NO known effect is DROPPED with a warning — never reinterpreted "
       "as `pure` (which would forbid everything)",
       _pp["deny"] == [] and "deny names no known effect" in _w, (_pp, _w))
 _pp, _w = _parse_warn("pure com.acme.domain")
 check("policy parse: `pure <scope>` IS the empty-effect deny",
-      _pp["deny"] == [{"effects": [], "scope": "com.acme.domain", "raw": "pure com.acme.domain"}], _pp)
+      _pp["deny"] == [{"effects": [], "scope": "com.acme.domain", "unknownClasses": [],
+                       "raw": "pure com.acme.domain"}], _pp)
 _pp, _w = _parse_warn("forbid com.acme.web->com.acme.db")
 check("policy parse: an UNSPACED `a->b` forbid is malformed → dropped with a warning",
       _pp["forbid"] == [] and "malformed forbid" in _w, (_pp, _w))
@@ -1806,8 +2062,46 @@ check("policy parse: an unknown rule kind is dropped with a warning",
       _pp == {"deny": [], "allow": [], "forbid": []} and "unknown rule kind" in _w, (_pp, _w))
 _pp, _w = _parse_warn("deny Db Net   com.acme.domain")
 check("policy parse: multi-effect deny — the first non-effect token is the scope and ENDS the rule",
-      _pp["deny"] == [{"effects": ["Db", "Net"], "scope": "com.acme.domain",
+      _pp["deny"] == [{"effects": ["Db", "Net"], "scope": "com.acme.domain", "unknownClasses": [],
                        "raw": "deny Db Net   com.acme.domain"}], _pp)
+_pp, _w = _parse_warn("deny Unknown[dispatch] x")
+check("policy parse §6.2: narrowing `Unknown[…]` without `unresolved` emits the advisory UNDER-GATING "
+      "lint, and the rule SURVIVES (the message must not claim the rule was ignored)",
+      _pp["deny"] == [{"effects": ["Unknown"], "scope": "x", "unknownClasses": ["dispatch"],
+                       "raw": "deny Unknown[dispatch] x"}] and "UNDER-gate" in _w, (_pp, _w))
+_pp, _w = _parse_warn("deny Unknown[dispatch,banana] x")
+check("policy parse §6.2: an unrecognized class token is DROPPED and the rule keeps its recognized "
+      "ones — the warning says exactly that, not `ignoring policy rule`, which would be false",
+      _pp["deny"][0]["unknownClasses"] == ["dispatch"]
+      and "that class is dropped, the rest of the rule stands" in _w
+      and "ignoring policy rule" not in _w, (_pp, _w))
+_pp, _w = _parse_warn("deny Unknown[banana] x")
+check("policy parse §6.2: a bracket whose classes are ALL unrecognized falls back to the BARE form "
+      "(all classes), never to a filter that matches nothing — fail-closed",
+      _pp["deny"][0]["unknownClasses"] == [] and _pp["deny"][0]["effects"] == ["Unknown"], (_pp, _w))
+_pp, _w = _parse_warn("deny Net Unknown x")
+check("policy parse §6.2: bare `Unknown` means ALL classes ⇒ an EMPTY filter, so a pre-0.19 policy "
+      "parses byte-identically", _pp["deny"][0]["unknownClasses"] == [], _pp)
+_pp, _w = _parse_warn("deny Net[unknown-host] api")
+check("policy parse §6.2: a destination-class filter on a CONCRETE effect keeps the EFFECT and drops "
+      "the FILTER, loudly — this engine emits no `netClass`, so honouring it would match an absent "
+      "field and pass, and dropping the whole rule exited 0 on a Net-reaching fleet. Both fail OPEN; "
+      "widening is the family's policy-side rule and is safe under monotone denial",
+      _pp["deny"] == [{"effects": ["Net"], "scope": "api", "unknownClasses": [],
+                       "raw": "deny Net[unknown-host] api"}] and "enforced UNSCOPED" in _w, (_pp, _w))
+_pp, _w = _parse_warn("deny Llm api")
+check("policy parse §1 ⟨0.24⟩: `Llm` is a §1 effect (since ⟨0.13⟩) and parses as one — it was missing "
+      "from this engine's vocabulary, so the whole rule was DROPPED and the gate exited 0 (fail-open)",
+      _pp["deny"] == [{"effects": ["Llm"], "scope": "api", "unknownClasses": [],
+                       "raw": "deny Llm api"}] and "no known effect" not in _w, (_pp, _w))
+check("policy §1 ⟨0.24⟩: the effect vocabulary is §1's table minus `Unknown` — all ELEVEN, not `the "
+      "ten` (the phrasing that went stale when `Llm` landed)",
+      sorted(_pol.EFFECTS) == sorted(["Net", "Fs", "Db", "Exec", "Env", "Clock", "Ipc", "Log",
+                                      "Rand", "Clipboard", "Llm"]) and "Unknown" not in _pol.EFFECTS)
+from candor_agents import guard as _guard
+check("policy §1 ⟨0.24⟩: guard (the runtime dual) reads the SAME vocabulary — three hand-typed copies "
+      "of §1's table is how `Llm` came to be missing from all of them at once",
+      _guard.VOCAB == set(_pol.EFFECTS))
 
 # --- VERDICT PARITY with the UNMODIFIED candor-query (the property that makes ONE gate code+fleets) ---
 # Parser parity: policy.parse_policy must agree with `candor-query parsepolicy` (the canonical shared
@@ -2162,10 +2456,10 @@ def _wjson(d, name, obj):
 
 _lg = _mkd()
 # a BLOCKED gate: a deny-Net violation (AS-EFF-006) + a baseline-drift (AS-EFF-005) carrying the gained effect
-_gate_blocked = {"spec": "0.23", "ok": False, "violations": [
+_gate_blocked = {"spec": "0.24", "ok": False, "violations": [
     {"rule": "AS-EFF-006", "fn": "web.Ctl.fetch", "effects": ["Net"], "detail": "deny Net"},
     {"rule": "AS-EFF-005", "fn": "web.Ctl.fetch", "effects": ["Net"], "detail": "baseline drift"}]}
-_report = {"candor": {"version": "0.8.7", "toolchain": "candor-java 0.8.7", "spec": "0.23"},
+_report = {"candor": {"version": "0.8.7", "toolchain": "candor-java 0.8.7", "spec": "0.24"},
            "functions": [{"fn": "web.Ctl.fetch", "inferred": ["Net"]},
                          {"fn": "svc.Reflecty", "inferred": ["Unknown"]},
                          {"fn": "util.pure", "inferred": []}]}
@@ -2195,7 +2489,7 @@ check("log-gate: record keys are byte-for-byte the review-path record shape (no 
 
 # an OK gate → verdict=clean; the digest reads a log-gate record end-to-end ("held the line in CI" is real)
 _lg2 = _mkd()
-_gp2 = _wjson(_lg2, "gate.json", {"spec": "0.23", "ok": True, "violations": []})
+_gp2 = _wjson(_lg2, "gate.json", {"spec": "0.24", "ok": True, "violations": []})
 _lglog2 = os.path.join(_lg2, ".candor", "gate-log.jsonl")
 _loggate(_gp2, "--log", _lglog2)   # NO report arg — optional enrichment
 _rec2 = json.loads(open(_lglog2).readline())

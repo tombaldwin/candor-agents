@@ -15,13 +15,76 @@ reads as uncertifiable (no visible literal) — under-report, never a fabricated
 """
 import re
 
-EFFECTS = ["Net", "Fs", "Db", "Exec", "Env", "Clock", "Ipc", "Log", "Rand", "Clipboard"]
+# SPEC §1's effect table, minus the `Unknown` visibility marker — "every effect in the table above,
+# excluding `Unknown`" ⟨0.24⟩, which is the phrasing that replaced the stale "the ten" (it went stale
+# the moment `Llm` was added at ⟨0.13⟩). `Llm` was MISSING here until ⟨0.24⟩, and the consequence was
+# a FAIL-OPEN gate, not a cosmetic gap: `deny Llm` named no known effect, so the whole rule was
+# dropped with a warning and the run exited 0 — a green verdict for a policy the user wrote and the
+# engine declined to enforce. Counting this list is how the family drifts; read §1 instead.
+EFFECTS = ["Net", "Fs", "Db", "Exec", "Env", "Clock", "Ipc", "Log", "Rand", "Clipboard", "Llm"]
 ALLOW_EFFECTS = {"Net", "Exec", "Fs", "Db"}  # the four literal surfaces
 
 # §6.2 token separator: ASCII whitespace ONLY (the cross-engine rule — a non-ASCII space stays part
 # of its token so the rule reads malformed and is dropped, matching the Rust/Java/TS parsers).
 _ASCII_WS = re.compile(r"[ \t\n\v\f\r]+")
 _VOCAB = set(EFFECTS)
+
+# ── §6.2 reason classes — the closed, normative projection of §4's `unknownWhy` reasons ───────────
+# THIS IS THE ONLY PLACE THIS ENGINE HOLDS A KIND VOCABULARY. §4 ⟨0.24⟩ records that every surveyed
+# implementation held one TWICE — a string classifier feeding this table and a typed enum feeding the
+# emitter — and that the halves drift silently because the string half stays right. candor-agents has
+# no typed half: it GENERATES its reason strings at the source (scan.py/observe.py) and never
+# re-parses them, so the divergence is unreachable. A future typed representation must land in the
+# same commit as its control (`an off-vocabulary reason kind round-trips and classifies through the
+# conservative catch-all`, test.py).
+REASON_CLASSES = ("reflect", "dispatch", "indirect", "native", "unresolved", "setup")
+# `dynamic` = every GENUINE class (excludes `setup`, which is "the analysis is not wired up"), and it
+# INCLUDES `unresolved` so the recommended strict gate never under-gates.
+DYNAMIC_CLASSES = frozenset(REASON_CLASSES) - {"setup"}
+_UNKNOWN_SCOPED = re.compile(r"Unknown\[([^\]]*)\]")
+_EFFECT_SCOPED = re.compile(r"([A-Za-z]+)\[([^\]]*)\]")
+
+
+def classify_reason(why):
+    """SPEC §6.2 — map ONE raw `unknownWhy` reason to its normative class. Prefix-based over the
+    lowercased token, conservative catch-all: an unrecognized reason is `unresolved`, NEVER dropped.
+
+    A DOMAIN engine (§4 ⟨0.7⟩) emits none of the five code kinds, so every reason candor-agents
+    itself writes (`mcp-uncurated:`, `mcp-decl-invalid:`, `tool-unknown:`, `ambient:`, `agent-spawn:`,
+    `hooks-unreadable:`, `hooks-malformed:`, `hook-type:`) reaches `unresolved` through that
+    catch-all — which is the class §6.2 prescribes for exactly this case. The code prefixes are
+    ported anyway, verbatim from the reference (candor_classify::policy::ReasonClass::classify), so
+    a reason arriving from a chained CODE report classifies the same way in this engine as in the one
+    that wrote it, and so `ambiguous:` — a §4 kind only since ⟨0.24⟩, but in this table all along —
+    lands on `dispatch` here too."""
+    w = str(why).strip().lower()
+    if w.startswith("reflect") or w == "dynamicmemberlookup":
+        return "reflect"
+    if w.startswith("native"):
+        return "native"
+    if w.startswith("callback") or w.startswith("closure") or w.startswith("task-handoff"):
+        return "indirect"
+    if w.startswith("dispatch") or w.startswith("indy") or w.startswith("ambiguous"):
+        return "dispatch"
+    if w.startswith("missing-config") or w.startswith("no-tsconfig") or w.startswith("no-node_modules"):
+        return "setup"
+    return "unresolved"
+
+
+def reason_class_matches(classes, want):
+    """Does a function's TRANSITIVE reason-class set intersect the filter `want`? Empty `want` = the
+    bare `Unknown` / `Unknown[*]` form = all classes.
+
+    THE EMPTY-`classes` ARM IS THE FAIL-CLOSED NET (§6.2 ⟨0.24⟩): a function whose `Unknown` carries
+    no recorded reason CONTRIBUTES `unresolved`, so a narrowed filter never SILENTLY tolerates a hole
+    the engine failed to classify. Read the other way round — `not intersecting ⇒ exclude` over an
+    empty set — an unclassifiable hole would be dropped by EVERY filter including one naming its own
+    class, which is a silent under-report wearing a filter."""
+    if not want:
+        return True
+    if not classes:
+        return "unresolved" in want
+    return bool(set(classes) & set(want))
 
 
 def parse_policy(text):
@@ -42,17 +105,77 @@ def parse_policy(text):
 
         if t[0] == "deny":
             effects, scope = [], ""
+            classes, star = set(), False  # the `Unknown[…]` reason-class filter; empty ⇒ all classes
             for tok in t[1:]:
+                m = _UNKNOWN_SCOPED.fullmatch(tok)
+                if m:
+                    # `Unknown[dispatch,reflect]` / `Unknown[*]` / `Unknown[dynamic]` — §6.2 ⟨0.19⟩,
+                    # ported token-for-token from candor_classify::policy.
+                    effects.append("Unknown")
+                    for cn in m.group(1).split(","):
+                        cn = cn.strip()
+                        if not cn:
+                            continue
+                        if cn == "*":
+                            star = True
+                        elif cn == "dynamic":
+                            classes |= DYNAMIC_CLASSES
+                        elif cn in REASON_CLASSES:
+                            classes.add(cn)
+                        else:
+                            # The CLASS is dropped and the rule KEEPS its recognized ones — so this
+                            # must NOT use warn(), whose wording is "ignoring policy rule": the rule
+                            # survives, and a message claiming otherwise would send a reader looking
+                            # for a gate that is in fact still enforced. If dropping leaves no class
+                            # at all the filter falls back to ALL (below), never to "matches nothing".
+                            sys.stderr.write(
+                                f"candor-agents: policy rule names unknown reason-class `{cn}` "
+                                f"(known: {','.join(REASON_CLASSES)}; aliases: dynamic,*) — that class "
+                                f"is dropped, the rest of the rule stands: {line}\n")
+                    continue
+                me = _EFFECT_SCOPED.fullmatch(tok)
+                if me and me.group(1) in _VOCAB:
+                    # A bracketed filter on a CONCRETE effect — `Net[unknown-host]`, the ⟨0.20⟩
+                    # destination-class form. This engine emits no `netClass`, so HONOURING the filter
+                    # would fail OPEN (it would match against an absent field and pass). Dropping the
+                    # whole rule fails open too: `deny Net[unknown-host]` named no known effect, so it
+                    # was discarded and the run exited 0 on a Net-reaching fleet. Take the third road,
+                    # which is the family's policy-side rule (§3.1: "on the policy side a dropped token
+                    # leaves a WIDER rule standing"): keep the EFFECT, drop the filter, and say so.
+                    # Widening is safe under monotone denial; narrowing is the silent relaxation.
+                    effects.append(me.group(1))
+                    sys.stderr.write(
+                        f"candor-agents: policy rule scopes `{me.group(1)}[…]` by destination class, "
+                        f"which this engine does not emit — the filter is DROPPED and the rule is "
+                        f"enforced UNSCOPED (wider, never narrower; a honoured-looking narrow filter "
+                        f"would silently pass): {line}\n")
+                    continue
                 if tok in _VOCAB or tok == "Unknown":
                     effects.append(tok)
+                    if tok == "Unknown":
+                        star = True  # bare `Unknown` ⇒ all classes (a pre-0.19 policy is unchanged)
                 else:
                     scope = tok  # first non-effect token is the scope and ENDS the rule
                     break
             if not effects:
                 warn("deny names no known effect"); continue
-            deny.append({"effects": sorted(set(effects)), "scope": scope, "raw": line})
+            if star:
+                classes = set()  # `*` / bare `Unknown` ⇒ empty filter ⇒ matches any Unknown
+            elif classes and "unresolved" not in classes:
+                # Advisory under-gating lint (§6.2): `unresolved` is the catch-all for holes the engine
+                # could not classify, so a narrowed filter omitting it may tolerate exactly those. On a
+                # FLEET report that is total, not partial — every domain reason projects to
+                # `unresolved` — so such a rule gates nothing at all here.
+                sys.stderr.write(
+                    f"candor-agents: policy rule narrows `Unknown[…]` but omits `unresolved` — it may "
+                    f"UNDER-gate on holes the engine couldn't classify, and on a fleet report EVERY "
+                    f"domain reason classifies `unresolved`, so this rule gates no Unknown at all; add "
+                    f"`unresolved` (or use `dynamic`): {line}\n")
+            deny.append({"effects": sorted(set(effects)), "scope": scope,
+                         "unknownClasses": sorted(classes), "raw": line})
         elif t[0] == "pure":
-            deny.append({"effects": [], "scope": t[1] if len(t) > 1 else "", "raw": line})
+            deny.append({"effects": [], "scope": t[1] if len(t) > 1 else "",
+                         "unknownClasses": [], "raw": line})
         elif t[0] == "allow":
             if len(t) < 3:
                 warn("allow names no values"); continue
@@ -144,6 +267,38 @@ def _literal_allowed(effect, reached, values):
     return reached in values
 
 
+def transitive_reason_classes(functions, callgraph):
+    """fn -> its TRANSITIVE §6.2 reason-class set. `unknownWhy` is direct-only by design (§4: a reason
+    names a site in the unit's OWN body), so a unit whose `Unknown` is purely inherited carries none —
+    matching a filter against the direct field answers a different question. The gate resolves the
+    class over the same reach the `Unknown` effect itself propagates on.
+
+    THE CONTRIBUTION IS AT THE SOURCE, NOT THE JOIN (§6.2 ⟨0.24⟩): a unit with a DIRECT `Unknown` it
+    did not name contributes `unresolved` into the DIRECT map here, BEFORE propagation — so a caller
+    of both a reasonless unit and a reasoned one accumulates both classes, and the class set only ever
+    GROWS as evidence arrives (the monotone-denial property `Reject` is upward-closed in). Gating this
+    on absence of the whole reason set instead would be the mirror fabrication the clause names: it
+    would charge `unresolved` to a unit whose `Unknown` is correctly classified at its callee."""
+    direct = {}
+    for f in functions:
+        cs = {classify_reason(w) for w in f.get("unknownWhy", [])}
+        if "Unknown" in f.get("direct", []) and not f.get("unknownWhy"):
+            cs.add("unresolved")
+        if cs:
+            direct[f["fn"]] = cs
+    acc = {n: set(direct.get(n, ())) for n in set(callgraph) | set(direct)}
+    changed = True
+    while changed:  # least fixpoint of the componentwise join (§4.0), same shape as propagate()
+        changed = False
+        for n, callees in callgraph.items():
+            for c in callees:
+                add = acc.get(c)
+                if add and not add <= acc[n]:
+                    acc[n] |= add
+                    changed = True
+    return {n: cs for n, cs in acc.items() if cs}
+
+
 def evaluate_policy(pol, functions, callgraph, incomplete=None):
     """The standing §6.2 gate over a report + callgraph. Returns one STRUCTURED violation record
     {rule, fn, effects, detail} per breach (candor-spec §3.3 ⟨0.8⟩ — the --gate-json shape, shared
@@ -160,19 +315,39 @@ def evaluate_policy(pol, functions, callgraph, incomplete=None):
     out = []
     incomplete = incomplete or {}
     surfaces = {"Net": "hosts", "Exec": "cmds", "Fs": "paths", "Db": "tables"}
+    classes = transitive_reason_classes(functions, callgraph)
 
-    def push(rule, fn, effects, detail):
-        out.append({"rule": rule, "fn": fn, "effects": list(effects), "detail": detail})
+    def push(rule, fn, effects, detail, reason_class=()):
+        v = {"rule": rule, "fn": fn, "effects": list(effects), "detail": detail}
+        if reason_class:
+            v["reasonClass"] = list(reason_class)  # §3.3/§6.2 ⟨0.19⟩, omitted when empty
+        out.append(v)
 
     for f in functions:
         inferred = f.get("inferred", [])
         for r in pol["deny"]:
             if r["scope"] and not scope_matches(f["fn"], r["scope"]):
                 continue
-            hits = inferred if not r["effects"] else [e for e in inferred if e in r["effects"]]
+            if not r["effects"]:
+                # `pure <scope>` — SPEC §4.0's verb table: it fires iff `S ≠ ∅`, and `S` is the
+                # DETERMINED effects, i.e. `inferred` MINUS the `Unknown` marker. `D ≠ ∅` alone
+                # (an undischarged blind spot) is AS-EFF-003 disclosure, never an AS-EFF-006
+                # violation — conformance PART 16 pins the same fixture under a bare `pure` as
+                # PASS four-way, and `unverified` is the verb that exists to surface exactly this.
+                # Until ⟨0.24⟩ this engine counted `Unknown` as an effect and failed a fleet whose
+                # units were determined-pure but had an uncurated MCP server behind them.
+                hits = [e for e in inferred if e != "Unknown"]
+            else:
+                want = set(r.get("unknownClasses") or ())
+                keep = {e for e in r["effects"] if e != "Unknown"}
+                if "Unknown" in r["effects"] and "Unknown" in inferred \
+                        and reason_class_matches(classes.get(f["fn"]), want):
+                    keep.add("Unknown")
+                hits = [e for e in inferred if e in keep]
             if hits:
                 push("AS-EFF-006", f["fn"], hits,
-                     f"`{f['fn']}` performs {{ {', '.join(hits)} }}, forbidden by policy: `{r['raw']}`")
+                     f"`{f['fn']}` performs {{ {', '.join(hits)} }}, forbidden by policy: `{r['raw']}`",
+                     reason_class=sorted(classes.get(f["fn"], ())) if "Unknown" in hits else ())
         for r in pol["allow"]:
             if r["scope"] and not scope_matches(f["fn"], r["scope"]):
                 continue

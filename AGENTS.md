@@ -39,7 +39,17 @@ observed-outside-declaration → an anomaly to read (`--strict` exits 1 on it).
 an unreadable policy — never a silent gate-pass) and `--gate-json <file>`: the structured verdict
 `{spec, ok, violations:[{rule, fn, effects, detail}]}`, written from the SAME check that sets the
 exit code (`fn` is the unit name; feed it to the `candor-sarif` GitHub Action for PR-native
-surfacing; `-` streams it to stdout). A checked-in **`.candor/config`** is the gate's floor
+surfacing; `-` streams it to stdout). Two rules worth knowing before you write a policy:
+**`pure <scope>` does NOT fire on `Unknown`** — it fires iff a DETERMINED effect is present (spec
+§4.0's verb table: `Unknown` is the trust marker, not an effect), so an agent that is
+determined-pure behind one uncurated MCP server passes `pure` and is surfaced as *disclosure*
+instead; and **`deny E Unknown[<class>]`** takes the §6.2 reason-class filter, where bare `Unknown`
+and `Unknown[*]` mean all classes. A fleet is a **domain engine**, so EVERY one of its reasons
+projects to `unresolved` (§6.2's conservative catch-all) — `Unknown[unresolved]` and
+`Unknown[dynamic]` behave exactly like the bare form, and a rule naming only code classes
+(`Unknown[dispatch]`) gates nothing here and says so on stderr. An AS-EFF-006 verdict whose
+`effects` include `Unknown` carries a **`reasonClass`** array with every class present on the unit.
+A checked-in **`.candor/config`** is the gate's floor
 (precedence: flag → env → config): discovered by walking UP from the scan *target* — never the
 CWD — with `$CANDOR_CONFIG` overriding discovery; a configured-but-unusable config exits 2 (a
 silently-dropped config is a silently-dropped gate), and relative values resolve against the
@@ -80,8 +90,11 @@ measurements).
   settings file that couldn't be read or isn't a JSON object, so its hooks/permissions are unknown —
   and `hook-type:<type>` — a hook type the scanner doesn't model) — never silence. As a **domain
   engine** (spec §4 ⟨0.7⟩) the fleet has no code dispatch/reflection, so it
-  emits these *fleet* origins instead of the code-canonical `reflect:`/`native:`/`dispatch:`/`callback:`
-  vocabulary — the universal rule is that *every* direct `Unknown` source carries a named `unknownWhy`. A `.mcp.json` server can
+  emits these *fleet* origins instead of the code-canonical
+  `reflect:`/`native:`/`dispatch:`/`callback:`/`ambiguous:` vocabulary (five since ⟨0.24⟩) — the
+  universal rule is that *every* direct `Unknown` source carries a named `unknownWhy`. All of these
+  fleet origins project to the §6.2 reason class **`unresolved`** through its conservative
+  catch-all, which is what a `deny E Unknown[<class>]` rule matches against. A `.mcp.json` server can
   declare its effects via the `candorEffects` convention (see DECLARING.md); declared-not-verified
   trust, curated table outranks. **The curated MCP table itself is a name-trust bound**: it matches
   the *conventional server name* only, so a server *named* `time` classifies `{Clock}` whatever its

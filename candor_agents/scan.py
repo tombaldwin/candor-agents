@@ -20,8 +20,10 @@ import os
 import re
 import sys
 
-SPEC = "0.23"
-VERSION = "agents-0.23.1"
+from candor_agents import policy as _policy
+
+SPEC = "0.24"
+VERSION = "agents-0.24.0"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -657,6 +659,18 @@ def parse_args(args):
     return root, out, fleet, link, nested, as_json, gate_json, policy_path
 
 
+def refine_llm(effs):
+    """SPEC §6.1 ⟨0.24⟩ — `Llm` REFINES `Net`, and `Db` does NOT, and the test for the difference is
+    whether EVERY occurrence of the effect is an occurrence of the base channel. A model-provider call
+    is an outbound request in every instance, so the engines CO-EMIT `Llm` and `Net`; an embedded,
+    file-backed store has no egress at all, so `Db` is emitted alone. Doing this at the classifier
+    keeps the gate a plain set-membership test — widening `deny Net` to fire on a refinement instead
+    would be the fabrication mirror (it would charge every `Db` user with network egress).
+
+    Additive and monotone: it only ever adds `Net`, so a `deny Net` gate cannot be relaxed by it."""
+    return effs | {"Net"} if "Llm" in effs else effs
+
+
 def read_mcp(root):
     """MCP servers configured for the project (`.mcp.json`) — plus any DECLARED capabilities: a
     `candorEffects` array on a server's entry ("candorEffects": ["Net","Ipc"]) classifies that
@@ -670,7 +684,12 @@ def read_mcp(root):
     mcp_servers = []
     declared_mcp = {}  # server -> declared effect set (validated)
     declared_bad = {}  # server -> the invalid name that voided its declaration
-    VOCAB = {"Net", "Fs", "Db", "Exec", "Env", "Clock", "Ipc", "Log", "Rand", "Clipboard"}
+    # SPEC §5.1: the manifest names "effect names from §1", and voiding is reserved for a name OUTSIDE
+    # §1 (a typo must not silently narrow a surface). `Llm` has been a §1 effect since ⟨0.13⟩ and was
+    # missing from this set until ⟨0.24⟩ — so a server declaring the effect it actually has was voided
+    # as out-of-vocabulary and read `Unknown`. Fail-closed, but a FALSE disclosure: the engine reported
+    # a legitimate declaration as a typo. One vocabulary, sourced from §1's table.
+    VOCAB = set(_policy.EFFECTS)
     mcp_path = os.path.join(root, ".mcp.json")
     if os.path.exists(mcp_path):
         try:
@@ -684,7 +703,7 @@ def read_mcp(root):
                 if bad:
                     declared_bad[name] = bad[0]
                 else:
-                    declared_mcp[name] = set(decl)  # [] = declared PURE (maximally confined)
+                    declared_mcp[name] = refine_llm(set(decl))  # [] = declared PURE (maximally confined)
         except Exception as e:
             print(f"candor-agents: unreadable .mcp.json ({e}) — servers unknown", file=sys.stderr)
     return mcp_servers, declared_mcp, declared_bad
@@ -1123,6 +1142,30 @@ def classify_units(agents, commands, skills, crons, ROOT, HOOKS, has_hooks, hook
     return direct, fs_detail, why_map
 
 
+# SPEC §2.2 ⟨0.24⟩ — the family-wide RESERVED trailing segments. A report-locator glob MUST exclude
+# them AT THE GLOB, not diagnose them at the parse: sidecar names are per-engine, so a discriminator
+# based on segment COUNT excludes an engine's own 3-segment sidecars and not a 2-segment one from
+# another producer. Measured on the reference engine, `<prefix>.<pkg>.hierarchy.json` landed exactly on
+# the `<crate>.<type>` report shape and two globs in one binary disagreed about one file.
+#
+# It MUST be a DENYLIST — carve out the reserved segments, keep accepting everything else. The
+# inversion (accept only known `<type>` values) is an allowlist, and any report whose type segment we
+# failed to anticipate would become silently invisible: a false all-clear. A denylist can only be
+# INCOMPLETE, and incompleteness here is loud. This list carried 3 of the 7 until ⟨0.24⟩ — the exact
+# by-name drift the clause was written to stop ("one engine carved out six suffixes, another two").
+RESERVED_SIDECARS = ("callgraph", "hierarchy", "calibrated", "layerreach", "locs", "gate")
+
+
+def is_reserved_sidecar(path):
+    """Is `path` a §2.2 reserved sidecar rather than a report? Keyed on the TRAILING segment before
+    `.json` (a crate legitimately NAMED `hierarchy` sits in the `<crate>` position, not the reserved
+    one, and must still resolve), plus the `encountered-*` family, whose whole name is the marker."""
+    base = os.path.basename(path)
+    stem = base[:-5] if base.endswith(".json") else base
+    tail = stem.rsplit(".", 1)[-1]
+    return tail in RESERVED_SIDECARS or tail.startswith("encountered-")
+
+
 def link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, denied_servers):
     """--link: the Exec-boundary refinement (spec §4)."""
     # Edge every Bash-holding (or ambient) agent to each entryPoint of the linked CODE report, and
@@ -1133,7 +1176,7 @@ def link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, 
     if link:
         import glob as _glob
         for rp in sorted(_glob.glob(f"{link}.*.json")):
-            if rp.endswith(".callgraph.json") or ".encountered-" in rp or rp.endswith(".calibrated.json"):
+            if is_reserved_sidecar(rp):
                 continue
             try:
                 cr = json.load(open(rp))
@@ -1325,7 +1368,6 @@ def main():
     # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`, spec §3.3) ───────────
     # The gate runs IN-PROCESS over this report (see policy.py for why not candor-query), via the
     # ONE shared run_gate() — scan and observe must never diverge in wording or exit-code contract.
-    from candor_agents import policy as _policy
     return _policy.run_gate(policy_path, gate_json, functions, callgraph, SPEC, stdout_is_json=as_json)
 
 
