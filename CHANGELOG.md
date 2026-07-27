@@ -26,13 +26,33 @@ vocabulary instead, which it already had.
 - ⚠ **§6.2 — `deny E Unknown[<class>]` is implemented; it was a FAIL-OPEN.** The bracketed form parsed
   as the rule's *scope* token, so `deny Unknown[*]` named no effect, was dropped with a warning and
   exited **0** on a report where the bare `deny Unknown` exited 1 — the spec says those two forms are
-  byte-identical. Fleet reasons all project to `unresolved` via §6.2's conservative catch-all, so
-  `[*]`, `[unresolved]` and `[dynamic]` match the bare form, while a code-only filter (`[dispatch]`)
-  matches nothing and emits the advisory under-gating lint. An all-unrecognized bracket falls back to
-  ALL classes — fail-closed, never to a filter that matches nothing. AS-EFF-006 verdicts carrying
-  `Unknown` now include the ⟨0.19⟩ **`reasonClass`** array; the class resolves TRANSITIVELY, and a
-  direct `Unknown` a unit did not name CONTRIBUTES `unresolved` at the source (⟨0.24⟩), so adding a
-  reasoned callee can never turn a red verdict green.
+  byte-identical. The scan's own reasons all project to `unresolved` via §6.2's conservative
+  catch-all, so on an unlinked fleet `[*]`, `[unresolved]` and `[dynamic]` match the bare form, while
+  a code-only filter (`[dispatch]`) matches nothing and emits the advisory under-gating lint. An
+  all-unrecognized bracket falls back to ALL classes — fail-closed, never to a filter that matches
+  nothing. AS-EFF-006 verdicts carrying `Unknown` now include the ⟨0.19⟩ **`reasonClass`** array; the
+  class resolves TRANSITIVELY, and a direct `Unknown` a unit did not name CONTRIBUTES `unresolved` at
+  the source (⟨0.24⟩), so adding a reasoned callee can never turn a red verdict green.
+- ⚠ **§6.2 — the reason class now crosses the `--link` boundary with the reach it scopes.** The reach
+  crossed and the class did not: `link_code_report` kept only each entry's `inferred`, so a fleet unit
+  inheriting a linked `Unknown` reached the gate with an EMPTY class set. Both of §6.2's named failure
+  modes were live at once — `deny Unknown[dispatch]` exited **0** on a reach that is exactly
+  dispatch-classified in the code report (req 2: excluded by every filter, *including one naming its
+  own class*), while `deny Unknown[unresolved]` exited **1** on that same reach (req 3's mirror
+  fabrication, charged by the join's absence-keyed arm), and the verdict omitted `reasonClass`
+  entirely. Fixed at the source: the linked report's own TRANSITIVE resolution (over its
+  `.callgraph.json` sidecar *and* its rows' `calls`) is seeded onto the pseudo-node — the entry's own
+  `unknownWhy` is direct-only by §4 design and is not sufficient. A linked `Unknown` with no resolvable
+  reason contributes `unresolved` at that pseudo-node, so a classed sibling on the same unit cannot
+  mask it. **Gate verdicts change under `--link`, in both directions.** The pre-existing `--link`
+  consumer control could not see any of this: its reason (`banana:whatever`) classifies `unresolved`
+  anyway, so it asserted the same outcome whether linked reasons were consumed or dropped entirely —
+  §4 ⟨0.24⟩'s "a control only exercised by inputs the implementation already handles is not a control",
+  demonstrated on itself. The new controls use `dispatch:`/`reflect:`, classes the fleet scan can never
+  produce on its own, and pin BOTH directions plus the bare/`[*]`/`[dynamic]` forms as unchanged. The
+  ported code-prefix table in `classify_reason` was dead on every production path until this; its
+  docstring's claim that chained-code reasons "classify the same way in this engine as in the one that
+  wrote it" is now true rather than aspirational.
 - ⚠ **§1/§5.1/§6.1 — `Llm` was missing from all THREE of this engine's copies of §1's effect table.**
   Consequences, both real: `deny Llm` named no known effect, so the rule was dropped and the gate
   exited 0 (fail-open); and `"candorEffects": ["Llm"]` was voided as out-of-vocabulary, so a server

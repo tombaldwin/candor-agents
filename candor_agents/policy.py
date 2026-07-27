@@ -53,10 +53,18 @@ def classify_reason(why):
     itself writes (`mcp-uncurated:`, `mcp-decl-invalid:`, `tool-unknown:`, `ambient:`, `agent-spawn:`,
     `hooks-unreadable:`, `hooks-malformed:`, `hook-type:`) reaches `unresolved` through that
     catch-all — which is the class §6.2 prescribes for exactly this case. The code prefixes are
-    ported anyway, verbatim from the reference (candor_classify::policy::ReasonClass::classify), so
-    a reason arriving from a chained CODE report classifies the same way in this engine as in the one
-    that wrote it, and so `ambiguous:` — a §4 kind only since ⟨0.24⟩, but in this table all along —
-    lands on `dispatch` here too."""
+    ported verbatim from the reference (candor_classify::policy::ReasonClass::classify) and reach the
+    gate over ONE path: `scan --link`, where a chained CODE report's reasons are resolved in that
+    report and seeded onto the pseudo-node (scan.link_code_report). So a reason arriving from a
+    chained report classifies the same way here as in the engine that wrote it, and `ambiguous:` — a
+    §4 kind only since ⟨0.24⟩, but in this table all along — lands on `dispatch` here too.
+
+    That sentence used to be a claim about a table nothing production fed: the link path kept only
+    each entry's `inferred`, so the reasons stopped at the boundary and every linked `Unknown`
+    reached the gate classless. Any assertion here that only exercises DOMAIN reasons cannot tell the
+    two states apart — they all classify `unresolved` either way (§4 ⟨0.24⟩: a control exercised only
+    by inputs the implementation already handles is not a control). The control that can is a linked
+    `dispatch:` reason, end to end (test.py §10)."""
     w = str(why).strip().lower()
     if w.startswith("reflect") or w == "dynamicmemberlookup":
         return "reflect"
@@ -163,14 +171,17 @@ def parse_policy(text):
                 classes = set()  # `*` / bare `Unknown` ⇒ empty filter ⇒ matches any Unknown
             elif classes and "unresolved" not in classes:
                 # Advisory under-gating lint (§6.2): `unresolved` is the catch-all for holes the engine
-                # could not classify, so a narrowed filter omitting it may tolerate exactly those. On a
-                # FLEET report that is total, not partial — every domain reason projects to
-                # `unresolved` — so such a rule gates nothing at all here.
+                # could not classify, so a narrowed filter omitting it may tolerate exactly those. Every
+                # reason this engine writes ITSELF projects to `unresolved`, so on an unlinked fleet
+                # report such a rule gates nothing at all. It is NOT vacuous under `--link`: a chained
+                # CODE report's reasons keep their own class across the boundary, so `Unknown[dispatch]`
+                # there names a real, reachable set — hence "the fleet's own" rather than "every".
                 sys.stderr.write(
                     f"candor-agents: policy rule narrows `Unknown[…]` but omits `unresolved` — it may "
-                    f"UNDER-gate on holes the engine couldn't classify, and on a fleet report EVERY "
-                    f"domain reason classifies `unresolved`, so this rule gates no Unknown at all; add "
-                    f"`unresolved` (or use `dynamic`): {line}\n")
+                    f"UNDER-gate on holes the engine couldn't classify, and every reason the fleet "
+                    f"scan writes itself classifies `unresolved`, so this rule gates no Unknown at all "
+                    f"unless it is aimed at a `--link`ed code report's reasons; add `unresolved` (or "
+                    f"use `dynamic`): {line}\n")
             deny.append({"effects": sorted(set(effects)), "scope": scope,
                          "unknownClasses": sorted(classes), "raw": line})
         elif t[0] == "pure":
@@ -267,7 +278,7 @@ def _literal_allowed(effect, reached, values):
     return reached in values
 
 
-def transitive_reason_classes(functions, callgraph):
+def transitive_reason_classes(functions, callgraph, seed=None):
     """fn -> its TRANSITIVE §6.2 reason-class set. `unknownWhy` is direct-only by design (§4: a reason
     names a site in the unit's OWN body), so a unit whose `Unknown` is purely inherited carries none —
     matching a filter against the direct field answers a different question. The gate resolves the
@@ -278,14 +289,23 @@ def transitive_reason_classes(functions, callgraph):
     of both a reasonless unit and a reasoned one accumulates both classes, and the class set only ever
     GROWS as evidence arrives (the monotone-denial property `Reject` is upward-closed in). Gating this
     on absence of the whole reason set instead would be the mirror fabrication the clause names: it
-    would charge `unresolved` to a unit whose `Unknown` is correctly classified at its callee."""
-    direct = {}
+    would charge `unresolved` to a unit whose `Unknown` is correctly classified at its callee.
+
+    `seed`: fn -> class set for nodes that are NOT in `functions` — the `--link` pseudo-nodes, whose
+    reasons live in the chained CODE report (scan.link_code_report resolves them there and hands the
+    result over). Reach without resolution is BOTH failure modes at once: the linking unit inherits
+    the pseudo-node's `Unknown` over the preserved edge, so if the class does not travel with it the
+    unit lands on the empty-`classes` arm below — excluded by a filter naming its own class (the
+    under-report §6.2 requirement 2 forbids) and charged `unresolved` by one that doesn't (the mirror
+    fabrication requirement 3 forbids). Seeds join the DIRECT map, before propagation, like any other
+    source-side contribution."""
+    direct = {n: set(cs) for n, cs in (seed or {}).items() if cs}
     for f in functions:
         cs = {classify_reason(w) for w in f.get("unknownWhy", [])}
         if "Unknown" in f.get("direct", []) and not f.get("unknownWhy"):
             cs.add("unresolved")
         if cs:
-            direct[f["fn"]] = cs
+            direct.setdefault(f["fn"], set()).update(cs)
     acc = {n: set(direct.get(n, ())) for n in set(callgraph) | set(direct)}
     changed = True
     while changed:  # least fixpoint of the componentwise join (§4.0), same shape as propagate()
@@ -299,7 +319,7 @@ def transitive_reason_classes(functions, callgraph):
     return {n: cs for n, cs in acc.items() if cs}
 
 
-def evaluate_policy(pol, functions, callgraph, incomplete=None):
+def evaluate_policy(pol, functions, callgraph, incomplete=None, reason_seed=None):
     """The standing §6.2 gate over a report + callgraph. Returns one STRUCTURED violation record
     {rule, fn, effects, detail} per breach (candor-spec §3.3 ⟨0.8⟩ — the --gate-json shape, shared
     with candor-ts policy.mjs): `effects` is the specific effect set the violation concerns per the
@@ -311,11 +331,15 @@ def evaluate_policy(pol, functions, callgraph, incomplete=None):
     observed `paths` list truncated at the emit bound). An allowlist over an incomplete surface is
     uncertifiable even when literals are visible — a benign visible literal must not mask the
     dropped remainder (the AS-EFF-008 fail-closed posture, matching the code engines' internal
-    masking-incompleteness map)."""
+    masking-incompleteness map).
+
+    `reason_seed` (optional): fn -> reason-class set for callgraph nodes with no row in `functions` —
+    the `--link` pseudo-nodes. See transitive_reason_classes; without it the reach crosses the link
+    boundary but the CLASS does not, which is an under-report and a fabrication simultaneously."""
     out = []
     incomplete = incomplete or {}
     surfaces = {"Net": "hosts", "Exec": "cmds", "Fs": "paths", "Db": "tables"}
-    classes = transitive_reason_classes(functions, callgraph)
+    classes = transitive_reason_classes(functions, callgraph, seed=reason_seed)
 
     def push(rule, fn, effects, detail, reason_class=()):
         v = {"rule": rule, "fn": fn, "effects": list(effects), "detail": detail}
@@ -426,7 +450,8 @@ def write_gate_json(path, violations, spec, stdout_is_json=False):
         return False
 
 
-def run_gate(policy_path, gate_json, functions, callgraph, spec, stdout_is_json=False, incomplete=None):
+def run_gate(policy_path, gate_json, functions, callgraph, spec, stdout_is_json=False, incomplete=None,
+             reason_seed=None):
     """The standing §6.2 gate + §3.3 verdict — ONE implementation, shared by scan (declared) and
     observe (observed) so the two gate surfaces can never diverge in wording or exit-code contract:
     a set-but-unreadable policy FAILS the run (exit 2) — never a silent gate-pass (that includes a
@@ -435,8 +460,9 @@ def run_gate(policy_path, gate_json, functions, callgraph, spec, stdout_is_json=
     violation records as the machine verdict — written whenever the flag is given (ok:true, [] with
     no gate configured), and an unwritable verdict path exits 2, never a silent drop. Violations and
     the receipt go to stderr (stdout may already carry the report envelope in --json mode).
-    `incomplete` is observe's truncated-literal-surface map (see evaluate_policy). Returns the
-    process exit code: 0 clean (or no gate configured), 1 violation(s), 2 gate-infrastructure failure."""
+    `incomplete` is observe's truncated-literal-surface map and `reason_seed` scan's `--link`
+    pseudo-node reason classes (both see evaluate_policy). Returns the process exit code: 0 clean
+    (or no gate configured), 1 violation(s), 2 gate-infrastructure failure."""
     import sys
     violations = []
     if policy_path is not None:
@@ -446,7 +472,8 @@ def run_gate(policy_path, gate_json, functions, callgraph, spec, stdout_is_json=
             print(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT enforced "
                   f"(exit 2)", file=sys.stderr)
             return 2
-        violations = evaluate_policy(parse_policy(ptext), functions, callgraph, incomplete=incomplete)
+        violations = evaluate_policy(parse_policy(ptext), functions, callgraph, incomplete=incomplete,
+                                     reason_seed=reason_seed)
         for v in violations:
             print(render(v), file=sys.stderr)  # keep stdout pure JSON in --json mode
     if gate_json is not None:

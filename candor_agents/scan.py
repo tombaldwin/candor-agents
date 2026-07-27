@@ -1167,12 +1167,22 @@ def is_reserved_sidecar(path):
 
 
 def link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, denied_servers):
-    """--link: the Exec-boundary refinement (spec §4)."""
+    """--link: the Exec-boundary refinement (spec §4).
+
+    Returns (linked, linked_classes): entry fn -> its recorded transitive effects, and entry fn ->
+    its TRANSITIVE §6.2 reason-class set resolved INSIDE the code report. The second is not a nicety:
+    the fleet unit inherits the pseudo-node's `Unknown` over the cross edge, so if the class does not
+    cross with it, `deny Unknown[dispatch]` on a purely dispatch-classified reach exits 0 (§6.2 req 2)
+    while `deny Unknown[unresolved]` on that same reach exits 1 (the mirror fabrication, req 3) — one
+    defect, both failure modes live at once. The entry's OWN `unknownWhy` is NOT the answer: §4 makes
+    it direct-only, so an entry whose `Unknown` is inherited from deeper in the code report names no
+    reason at all. What travels is the code report's own transitive resolution."""
     # Edge every Bash-holding (or ambient) agent to each entryPoint of the linked CODE report, and
     # seed the entry as a pseudo-node carrying its recorded transitive effects. The pseudo-node is
     # NOT re-emitted (it lives in the code report); under a merged prefix the cross edge makes
     # callers/whatif walk from a code function up into the FLEET.
     linked = {}  # entry fn -> its inferred effects (from the code report)
+    linked_classes = {}  # entry fn -> its transitive reason classes, resolved in the code report
     if link:
         import glob as _glob
         for rp in sorted(_glob.glob(f"{link}.*.json")):
@@ -1182,9 +1192,25 @@ def link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, 
                 cr = json.load(open(rp))
             except Exception:
                 continue
-            for f in cr.get("functions", []):
+            # A chained report is FOREIGN input: keep the "consumed without error" property (§4
+            # ⟨0.24⟩) by dropping rows that don't even carry a name, rather than letting the class
+            # resolution below raise on them.
+            cfns = [f for f in cr.get("functions", []) if isinstance(f, dict)
+                    and isinstance(f.get("fn"), str)]
+            ccls = _reason_classes_of(rp, cfns)
+            for f in cfns:
                 if f.get("entryPoint"):
                     linked[f["fn"]] = set(f.get("inferred", []))
+                    cs = set(ccls.get(f["fn"], ()))
+                    if not cs and "Unknown" in linked[f["fn"]]:
+                        # The code report reaches `Unknown` but records no reason we can resolve —
+                        # the §6.2 fail-closed net, applied AT THIS SOURCE rather than left to the
+                        # join's empty-`classes` arm: a linking unit that also inherits a CLASSED
+                        # Unknown from elsewhere would otherwise never reach that arm, and this hole
+                        # would be dropped by every narrowed filter.
+                        cs = {"unresolved"}
+                    if cs:
+                        linked_classes.setdefault(f["fn"], set()).update(cs)
         if not linked:
             print(f"candor-agents: --link {link}: no entryPoint functions found — nothing linked", file=sys.stderr)
         for name, a in agents.items():
@@ -1198,7 +1224,30 @@ def link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, 
             if "Bash" in live(unit["tools"], denied_tools, denied_servers) and not (unit["heads"] and all(h in COMMAND_HEAD for h in unit["heads"])):
                 calls[u] = sorted(set(calls[u]) | set(linked))
         calls[ROOT] = sorted(set(calls[ROOT]) | set(linked))
-    return linked
+    return linked, linked_classes
+
+
+def _reason_classes_of(report_path, cfns):
+    """The §6.2 transitive reason classes of ONE chained code report, resolved with that report's own
+    callgraph — its §2.2 `.callgraph.json` sidecar UNIONed with each row's `calls`. Both, because
+    neither alone is guaranteed: the sidecar is where the producer records edges out of rows the
+    report omits (pure units aren't emitted), and the `calls` field is what survives when a consumer
+    is handed the report without its sidecar."""
+    stem = report_path[:-5] if report_path.endswith(".json") else report_path
+    cg = {}
+    try:
+        side = json.load(open(f"{stem}.callgraph.json"))
+        if isinstance(side, dict):
+            for k, v in side.items():
+                if isinstance(k, str) and isinstance(v, (list, tuple)):
+                    cg[k] = [c for c in v if isinstance(c, str)]
+    except Exception:
+        pass
+    for f in cfns:
+        edges = f.get("calls")
+        cg[f["fn"]] = sorted(set(cg.get(f["fn"], ()))
+                             | {c for c in (edges or []) if isinstance(c, str)})
+    return _policy.transitive_reason_classes(cfns, cg)
 
 
 def build_functions(fleet, calls, inferred, fs_tr, direct, why_map, agents, commands, skills,
@@ -1322,7 +1371,8 @@ def main():
                                                 has_hooks, hook_cmds, hook_why, unresolved_spawn,
                                                 ambient_live, live_servers, declared_mcp,
                                                 declared_bad, denied_tools, denied_servers)
-    linked = link_code_report(link, agents, commands, skills, calls, ROOT, denied_tools, denied_servers)
+    linked, linked_classes = link_code_report(link, agents, commands, skills, calls, ROOT,
+                                              denied_tools, denied_servers)
 
     # ── transitive fixpoint (spec §5a) — one shared propagate(), used by observe.py too ─────────
     seed = {n: set(direct[n]) for n in calls}
@@ -1368,7 +1418,10 @@ def main():
     # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`, spec §3.3) ───────────
     # The gate runs IN-PROCESS over this report (see policy.py for why not candor-query), via the
     # ONE shared run_gate() — scan and observe must never diverge in wording or exit-code contract.
-    return _policy.run_gate(policy_path, gate_json, functions, callgraph, SPEC, stdout_is_json=as_json)
+    # `reason_seed`: the linked pseudo-nodes' classes. The cross edge is in `callgraph`, so the
+    # `Unknown` reach already crosses the boundary; this is what makes its CLASS cross with it.
+    return _policy.run_gate(policy_path, gate_json, functions, callgraph, SPEC, stdout_is_json=as_json,
+                            reason_seed=linked_classes)
 
 
 if __name__ == "__main__":
