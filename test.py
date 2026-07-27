@@ -566,6 +566,114 @@ check("§4 ⟨0.24⟩ --link: the foreign reason is NOT copied onto the inheriti
       "banana:whatever" not in entry(_rep3, "runner").get("unknownWhy", [])
       and "kmain" in json.load(open(f"{out3}.t.Fleet.callgraph.json"))["runner"])
 
+# ══ SPEC §6.2 ⟨0.24⟩ — THE REASON CLASS MUST CROSS THE `--link` BOUNDARY WITH THE REACH IT SCOPES ══
+# The reach crossed and the CLASS did not: the link path kept only each entry's `inferred`, so a
+# fleet unit inheriting a linked `Unknown` reached the gate with an EMPTY class set. One defect, both
+# of §6.2's named failure modes live at once — `deny Unknown[dispatch]` exited 0 on a reach that is
+# EXACTLY dispatch-classified (req 2: excluded "by every filter, including one naming its own class")
+# while `deny Unknown[unresolved]` exited 1 on that same reach (req 3's mirror fabrication, charged
+# by the join-side empty-`classes` arm that CONTRIBUTES exists to replace). Hence BOTH directions
+# below: a fix that only lights the first is half a fix, and the more dangerous half.
+#
+# WHY THE CONTROL DIRECTLY ABOVE COULD NOT SEE THIS: `banana:whatever` classifies `unresolved`, and so
+# does an unclassed hole — it asserts the same outcome whether linked reasons are consumed or dropped
+# entirely. §4 ⟨0.24⟩: a control only exercised by inputs the implementation already handles is not a
+# control. The reason below is `dispatch:`, whose class the fleet scan can NEVER produce itself, so
+# these assertions can only pass if the class genuinely travelled.
+def _linked_gate(tag, code_functions, rule, sidecar=None):
+    """Scan the fleet against a linked CODE report under one policy rule → (exit code, verdict)."""
+    pre = os.path.join(d, f"lk-{tag}")
+    json.dump({"candor": {"version": "x", "spec": "0.24"}, "functions": code_functions},
+              open(f"{pre}.app.scan.json", "w"))
+    if sidecar is not None:
+        json.dump(sidecar, open(f"{pre}.app.scan.callgraph.json", "w"))
+    po = os.path.join(d, f"lk-{tag}.policy")
+    open(po, "w").write(rule + "\n")
+    o, gj = os.path.join(d, f"lo-{tag}"), os.path.join(d, f"lg-{tag}.json")
+    for stale in (f"{o}.t.Fleet.json", f"{o}.t.Fleet.callgraph.json", gj):
+        if os.path.exists(stale):
+            os.remove(stale)                       # delete the output before measuring the control
+    rr = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", o, "--fleet", "t",
+                         "--link", pre, "--policy", po, "--gate-json", gj],
+                        capture_output=True, text=True)
+    return rr.returncode, json.load(open(gj))
+
+
+def _rcls(verdict):
+    """The first violation's `reasonClass`, or None when there is no violation — so a mutant that
+    empties the verdict FAILS these checks instead of crashing the run out from under the rest."""
+    vs = verdict["violations"]
+    return vs[0].get("reasonClass") if vs else None
+
+
+# (1) the entry names its own dispatch reason.
+_LD = [{"fn": "kmain", "inferred": ["Unknown"], "direct": ["Unknown"],
+        "unknownWhy": ["dispatch:A.b"], "calls": [], "entryPoint": True}]
+_rc, _vd = _linked_gate("d1", _LD, "deny Unknown[dispatch] runner", {"kmain": []})
+check("§6.2 ⟨0.24⟩ --link UNDER-REPORT: `deny Unknown[dispatch]` FIRES on a fleet unit whose "
+      "transitive `Unknown` is exactly dispatch-classified in the linked CODE report — the class "
+      "crosses the boundary with the reach it scopes",
+      _rc == 1 and [v["fn"] for v in _vd["violations"]] == ["runner"], (_rc, _vd))
+check("§6.2/§3.3 --link: the AS-EFF-006 verdict carries `reasonClass` — a MUST once `effects` include "
+      "`Unknown`, and it must name the LINKED class, not the absence default",
+      _rcls(_vd) == ["dispatch"], _vd)
+_rc, _vd = _linked_gate("d2", _LD, "deny Unknown[unresolved] runner", {"kmain": []})
+check("§6.2 ⟨0.24⟩ --link MIRROR FABRICATION: `deny Unknown[unresolved]` does NOT fire on that same "
+      "unit — charging `unresolved` to an `Unknown` correctly classified `dispatch` at its source is "
+      "the fabrication req 3 forbids (it fired through the join's absence-keyed empty-classes arm)",
+      _rc == 0 and _vd["ok"] and _vd["violations"] == [], (_rc, _vd))
+for _f in ("deny Unknown runner", "deny Unknown[*] runner", "deny Unknown[dynamic] runner"):
+    _rc, _vd = _linked_gate("d3", _LD, _f, {"kmain": []})
+    check(f"§6.2 --link: `{_f}` is UNCHANGED by the class crossing (bare / `*` / `dynamic` all cover "
+          f"dispatch) and now carries the resolved class",
+          _rc == 1 and [v["fn"] for v in _vd["violations"]] == ["runner"]
+          and _rcls(_vd) == ["dispatch"], (_f, _rc, _vd))
+
+# (2) the entry does NOT name it — `unknownWhy` is direct-only (§4), so the reason sits a frame deeper
+# INSIDE the code report. Reading the entry's own field would answer a different question and leave
+# this case exactly as broken as before; what has to travel is the code report's own transitive
+# resolution, over its `.callgraph.json` sidecar AND its rows' `calls`.
+_LI = [{"fn": "kmain", "inferred": ["Unknown"], "direct": [], "calls": ["deep"], "entryPoint": True},
+       {"fn": "deep", "inferred": ["Unknown"], "direct": ["Unknown"],
+        "unknownWhy": ["reflect:R.m"], "calls": []}]
+for _tag, _side in (("i1", {"kmain": ["deep"], "deep": []}), ("i2", None)):
+    _how = "with its callgraph sidecar" if _side else "with NO sidecar (the rows' `calls` carry it)"
+    _rc, _vd = _linked_gate(_tag, _LI, "deny Unknown[reflect] runner", _side)
+    check(f"§6.2 ⟨0.24⟩ --link: the class travels when the linked ENTRY's `Unknown` is itself "
+          f"INHERITED inside the code report ({_how}) — the entry's direct `unknownWhy` is empty here, "
+          f"so only the code report's own TRANSITIVE resolution can supply `reflect`",
+          _rc == 1 and _rcls(_vd) == ["reflect"], (_tag, _rc, _vd))
+    _rc2, _vd2 = _linked_gate(_tag, _LI, "deny Unknown[unresolved] runner", _side)
+    check(f"§6.2 ⟨0.24⟩ --link: and `unresolved` still does NOT fire on it ({_how}) — the mirror "
+          f"direction holds for the inherited case too",
+          _rc2 == 0 and _vd2["ok"], (_tag, _rc2, _vd2))
+
+# (3) FAIL-CLOSED at the source, not at the join: a linked report that reaches `Unknown` and records
+# no reason we can resolve contributes `unresolved` AT THE PSEUDO-NODE. Leaving it to the join's
+# empty-`classes` arm would drop the hole entirely for any unit that ALSO inherits a classed Unknown
+# from elsewhere — a silent under-report wearing a filter.
+_LN = [{"fn": "kmain", "inferred": ["Unknown"], "direct": [], "calls": [], "entryPoint": True}]
+_rc, _vd = _linked_gate("n1", _LN, "deny Unknown[unresolved] runner", {"kmain": []})
+check("§6.2 --link FAIL-CLOSED: a linked `Unknown` with no resolvable reason contributes `unresolved` "
+      "at the pseudo-node, so a narrowed filter naming it still fires",
+      _rc == 1 and _rcls(_vd) == ["unresolved"], (_rc, _vd))
+_rc, _vd = _linked_gate("n2", _LN, "deny Unknown[dispatch] runner", {"kmain": []})
+check("§6.2 --link: …and that unclassifiable hole is NOT fabricated into some other class — "
+      "`deny Unknown[dispatch]` does not fire on it",
+      _rc == 0 and _vd["ok"], (_rc, _vd))
+# WHY AT THE SOURCE AND NOT AT THE JOIN — the case that tells the two apart: ONE unit reaching BOTH a
+# classed linked `Unknown` and a classless one. Its class set is then NON-empty, so the join's
+# empty-`classes` net never runs and an `unresolved` filter would drop the hole entirely — the silent
+# under-report, restored one layer up. Contributing at the pseudo-node keeps the set only GROWING.
+_LB = [{"fn": "kdisp", "inferred": ["Unknown"], "direct": ["Unknown"],
+        "unknownWhy": ["dispatch:A.b"], "calls": [], "entryPoint": True},
+       {"fn": "khole", "inferred": ["Unknown"], "direct": [], "calls": [], "entryPoint": True}]
+_rc, _vd = _linked_gate("b1", _LB, "deny Unknown[unresolved] runner", {"kdisp": [], "khole": []})
+check("§6.2 ⟨0.24⟩ --link: a unit reaching BOTH a dispatch-classed linked `Unknown` and an "
+      "unclassifiable one is STILL caught by `deny Unknown[unresolved]` — the hole contributes at its "
+      "own pseudo-node, so its classed sibling cannot mask it",
+      _rc == 1 and _rcls(_vd) == ["dispatch", "unresolved"], (_rc, _vd))
+
 print()
 
 

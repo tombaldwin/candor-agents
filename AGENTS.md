@@ -44,11 +44,17 @@ surfacing; `-` streams it to stdout). Two rules worth knowing before you write a
 §4.0's verb table: `Unknown` is the trust marker, not an effect), so an agent that is
 determined-pure behind one uncurated MCP server passes `pure` and is surfaced as *disclosure*
 instead; and **`deny E Unknown[<class>]`** takes the §6.2 reason-class filter, where bare `Unknown`
-and `Unknown[*]` mean all classes. A fleet is a **domain engine**, so EVERY one of its reasons
-projects to `unresolved` (§6.2's conservative catch-all) — `Unknown[unresolved]` and
+and `Unknown[*]` mean all classes. A fleet is a **domain engine**, so every reason the *scan itself*
+writes projects to `unresolved` (§6.2's conservative catch-all) — `Unknown[unresolved]` and
 `Unknown[dynamic]` behave exactly like the bare form, and a rule naming only code classes
-(`Unknown[dispatch]`) gates nothing here and says so on stderr. An AS-EFF-006 verdict whose
-`effects` include `Unknown` carries a **`reasonClass`** array with every class present on the unit.
+(`Unknown[dispatch]`) gates nothing on an unlinked fleet and says so on stderr. Under **`--link`**
+it is not vacuous: the linked CODE report's reasons keep the class *its* engine gave them (resolved
+transitively inside that report, not from the entry point's direct `unknownWhy`), so
+`Unknown[dispatch]` fires on a unit whose `Unknown` comes from the code across the Exec boundary —
+and `Unknown[unresolved]` correctly does **not**. A linked `Unknown` whose reason cannot be resolved
+contributes `unresolved`, so a narrowed filter never silently tolerates it. An AS-EFF-006 verdict
+whose `effects` include `Unknown` carries a **`reasonClass`** array with every class present on the
+unit.
 A checked-in **`.candor/config`** is the gate's floor
 (precedence: flag → env → config): discovered by walking UP from the scan *target* — never the
 CWD — with `$CANDOR_CONFIG` overriding discovery; a configured-but-unusable config exits 2 (a
