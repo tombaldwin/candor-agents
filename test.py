@@ -347,7 +347,7 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 
 # ── 7. envelope + main ────────────────────────────────────────────────────────────────────────────
 rep, cg = scan({"a.md": agent("a", "Read")})
-check("spec envelope (candor.spec = 0.24)", rep["candor"]["spec"] == "0.24")
+check("spec envelope (candor.spec = 0.24)", rep["candor"]["spec"] == "0.25")
 check("hash join keys emitted (§2 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
 check("unitKind names every fleet unit (spec ⟨0.5⟩: agent/session/hooks)",
       all(f.get("unitKind") in ("agent", "session", "hooks") for f in rep["functions"])
@@ -550,7 +550,7 @@ check("§2.2 ⟨0.24⟩: a crate legitimately NAMED `hierarchy` sits in the `<cr
 # correctly carries NO direct `unknownWhy` on the fleet unit (§4: a reason names a site in the unit's
 # OWN body) — the reason stays at the source, in the code report, reachable over the preserved edge.
 _lkd = os.path.join(d, "k")
-json.dump({"candor": {"version": "x", "spec": "0.24"},
+json.dump({"candor": {"version": "x", "spec": "0.25"},
            "functions": [{"fn": "kmain", "inferred": ["Unknown"], "direct": ["Unknown"],
                           "unknownWhy": ["banana:whatever"], "calls": [], "entryPoint": True}]},
           open(f"{_lkd}.app.scan.json", "w"))
@@ -583,7 +583,7 @@ check("§4 ⟨0.24⟩ --link: the foreign reason is NOT copied onto the inheriti
 def _linked_gate(tag, code_functions, rule, sidecar=None):
     """Scan the fleet against a linked CODE report under one policy rule → (exit code, verdict)."""
     pre = os.path.join(d, f"lk-{tag}")
-    json.dump({"candor": {"version": "x", "spec": "0.24"}, "functions": code_functions},
+    json.dump({"candor": {"version": "x", "spec": "0.25"}, "functions": code_functions},
               open(f"{pre}.app.scan.json", "w"))
     if sidecar is not None:
         json.dump(sidecar, open(f"{pre}.app.scan.callgraph.json", "w"))
@@ -715,8 +715,8 @@ with tempfile.TemporaryDirectory() as td:
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
     check("observe version is single-sourced from scan (no drift)",
           obs["candor"]["version"] == __import__("candor_agents.scan", fromlist=["VERSION"]).VERSION, obs["candor"]["version"])
-    check("observe: spec 0.24 envelope + hash + package",
-          obs["candor"]["spec"] == "0.24" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
+    check("observe: spec 0.25 envelope + hash + package",
+          obs["candor"]["spec"] == "0.25" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
           set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
 # bash_cmds: the observed-cmds extractor (first non-fixture run found it fabricating heads)
@@ -1029,7 +1029,7 @@ check("the wheel ships the candor_agents package (so agentsmd + the modules are 
       and os.path.exists(os.path.join(HERE, "candor_agents", "agentsmd.py")))
 r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
 check("--agents prints the version header + the exact installed contract",
-      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.24")
+      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.25")
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 # ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
@@ -1705,15 +1705,15 @@ print()
 _gj = os.path.join(_mkd(), "verdict.json")
 rgv = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", _gj)
 _gv = json.load(open(_gj))
-check("scan --gate-json <violating>: verdict {spec:0.24, ok:false} agrees with exit 1",
-      rgv.returncode == 1 and _gv["spec"] == "0.24" and _gv["ok"] is False, json.dumps(_gv))
+check("scan --gate-json <violating>: verdict {spec:0.25, ok:false} agrees with exit 1",
+      rgv.returncode == 1 and _gv["spec"] == "0.25" and _gv["ok"] is False, json.dumps(_gv))
 check("scan --gate-json: each violation carries {rule, fn, effects, detail} (fn = the unit name)",
       any(v["rule"] == "AS-EFF-006" and v["fn"] == "leaf" and v["effects"] == ["Net"]
           and "detail" in v for v in _gv["violations"]), json.dumps(_gv))
 _gj2 = os.path.join(_mkd(), "clean.json")
 check("scan --gate-json <clean policy>: ok:true, violations [], exit 0",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc, "--gate-json", _gj2).returncode == 0
-      and json.load(open(_gj2)) == {"spec": "0.24", "ok": True, "violations": []})
+      and json.load(open(_gj2)) == {"spec": "0.25", "ok": True, "violations": []})
 _gj3 = os.path.join(_mkd(), "nogate.json")
 check("scan --gate-json with NO gate configured: still writes the clean verdict (ok:true, [])",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--gate-json", _gj3).returncode == 0
@@ -2564,10 +2564,10 @@ def _wjson(d, name, obj):
 
 _lg = _mkd()
 # a BLOCKED gate: a deny-Net violation (AS-EFF-006) + a baseline-drift (AS-EFF-005) carrying the gained effect
-_gate_blocked = {"spec": "0.24", "ok": False, "violations": [
+_gate_blocked = {"spec": "0.25", "ok": False, "violations": [
     {"rule": "AS-EFF-006", "fn": "web.Ctl.fetch", "effects": ["Net"], "detail": "deny Net"},
     {"rule": "AS-EFF-005", "fn": "web.Ctl.fetch", "effects": ["Net"], "detail": "baseline drift"}]}
-_report = {"candor": {"version": "0.8.7", "toolchain": "candor-java 0.8.7", "spec": "0.24"},
+_report = {"candor": {"version": "0.8.7", "toolchain": "candor-java 0.8.7", "spec": "0.25"},
            "functions": [{"fn": "web.Ctl.fetch", "inferred": ["Net"]},
                          {"fn": "svc.Reflecty", "inferred": ["Unknown"]},
                          {"fn": "util.pure", "inferred": []}]}
@@ -2597,7 +2597,7 @@ check("log-gate: record keys are byte-for-byte the review-path record shape (no 
 
 # an OK gate → verdict=clean; the digest reads a log-gate record end-to-end ("held the line in CI" is real)
 _lg2 = _mkd()
-_gp2 = _wjson(_lg2, "gate.json", {"spec": "0.24", "ok": True, "violations": []})
+_gp2 = _wjson(_lg2, "gate.json", {"spec": "0.25", "ok": True, "violations": []})
 _lglog2 = os.path.join(_lg2, ".candor", "gate-log.jsonl")
 _loggate(_gp2, "--log", _lglog2)   # NO report arg — optional enrichment
 _rec2 = json.loads(open(_lglog2).readline())
