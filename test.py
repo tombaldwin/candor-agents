@@ -347,7 +347,7 @@ check("pure agent present in the callgraph sidecar", "pure" in cg)
 
 # ── 7. envelope + main ────────────────────────────────────────────────────────────────────────────
 rep, cg = scan({"a.md": agent("a", "Read")})
-check("spec envelope (candor.spec = 0.24)", rep["candor"]["spec"] == "0.25")
+check("spec envelope (candor.spec = 0.26)", rep["candor"]["spec"] == "0.26")
 check("hash join keys emitted (§2 MUST)", all("#" in f.get("hash", "") for f in rep["functions"]))
 check("unitKind names every fleet unit (spec ⟨0.5⟩: agent/session/hooks)",
       all(f.get("unitKind") in ("agent", "session", "hooks") for f in rep["functions"])
@@ -715,8 +715,8 @@ with tempfile.TemporaryDirectory() as td:
           "npm" in by["coder"].get("cmds", []) and "/repo/a.ts" in by["coder"].get("paths", []))
     check("observe version is single-sourced from scan (no drift)",
           obs["candor"]["version"] == __import__("candor_agents.scan", fromlist=["VERSION"]).VERSION, obs["candor"]["version"])
-    check("observe: spec 0.25 envelope + hash + package",
-          obs["candor"]["spec"] == "0.25" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
+    check("observe: spec 0.26 envelope + hash + package",
+          obs["candor"]["spec"] == "0.26" and by["session"]["hash"] == "fixture#session" and obs["package"] == "fixture")
     check("observe: session effects include the transitive delegate surface",
           set(by["session"]["inferred"]) >= {"Exec", "Fs", "Unknown"})
 # bash_cmds: the observed-cmds extractor (first non-fixture run found it fabricating heads)
@@ -1705,15 +1705,15 @@ print()
 _gj = os.path.join(_mkd(), "verdict.json")
 rgv = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", _gj)
 _gv = json.load(open(_gj))
-check("scan --gate-json <violating>: verdict {spec:0.25, ok:false} agrees with exit 1",
-      rgv.returncode == 1 and _gv["spec"] == "0.25" and _gv["ok"] is False, json.dumps(_gv))
+check("scan --gate-json <violating>: verdict {spec:0.26, ok:false} agrees with exit 1",
+      rgv.returncode == 1 and _gv["spec"] == "0.26" and _gv["ok"] is False, json.dumps(_gv))
 check("scan --gate-json: each violation carries {rule, fn, effects, detail} (fn = the unit name)",
       any(v["rule"] == "AS-EFF-006" and v["fn"] == "leaf" and v["effects"] == ["Net"]
           and "detail" in v for v in _gv["violations"]), json.dumps(_gv))
 _gj2 = os.path.join(_mkd(), "clean.json")
 check("scan --gate-json <clean policy>: ok:true, violations [], exit 0",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc, "--gate-json", _gj2).returncode == 0
-      and json.load(open(_gj2)) == {"spec": "0.25", "ok": True, "violations": []})
+      and json.load(open(_gj2)) == {"spec": "0.26", "ok": True, "violations": []})
 _gj3 = os.path.join(_mkd(), "nogate.json")
 check("scan --gate-json with NO gate configured: still writes the clean verdict (ok:true, [])",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--gate-json", _gj3).returncode == 0

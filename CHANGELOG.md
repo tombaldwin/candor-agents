@@ -10,6 +10,14 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
+## Unreleased — ⟨spec 0.26⟩
+
+### ⟨0.26⟩ floor bump to spec 0.26
+
+No engine work: this engine emits no §2.2 hierarchy sidecar and consumes none, so the rung's
+producer and consumer rules are both vacuous here. The declared `spec` moves to `0.26` so the family's
+floor stays uniform. See candor-spec/CHANGELOG.md for the measurement.
+
 ## [0.25.0] — 2026-08-02
 
 ⟨spec 0.25⟩ **Floor bump only — no behaviour change in this engine.** SPEC §2 chaining rule 1 now states
