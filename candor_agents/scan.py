@@ -22,8 +22,8 @@ import sys
 
 from candor_agents import policy as _policy
 
-SPEC = "0.24"
-VERSION = "agents-0.24.0"
+SPEC = "0.25"
+VERSION = "agents-0.25.0"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is

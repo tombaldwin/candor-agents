@@ -10,6 +10,13 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
+## [0.25.0] — 2026-08-02
+
+⟨spec 0.25⟩ **Floor bump only — no behaviour change in this engine.** SPEC §2 chaining rule 1 now states
+that an ambiguous join key is UNIONED rather than dropped; this engine already implemented the union
+(conformance PARTs 25/26 pin it four-way), so 0.25 records the contract catching up with the code. See
+candor-spec/CHANGELOG.md for the measurement and the reversal note.
+
 ## [0.24.0] — 2026-07-28
 
 Spec floor → **0.24**. Not a version-only bump: four ⟨0.24⟩ clauses genuinely bind this engine, and

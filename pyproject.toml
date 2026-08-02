@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "candor-agents"
-version = "0.24.0"
-description = "candor for agent fleets — declared vs observed effects, transitively, with a policy gate (candor-spec 0.24)"
+version = "0.25.0"
+description = "candor for agent fleets — declared vs observed effects, transitively, with a policy gate (candor-spec 0.25)"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 requires-python = ">=3.9"
