@@ -1028,8 +1028,13 @@ check("the wheel ships the candor_agents package (so agentsmd + the modules are 
       and "py-modules" not in open(os.path.join(HERE, "pyproject.toml")).read()
       and os.path.exists(os.path.join(HERE, "candor_agents", "agentsmd.py")))
 r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
+# The expected header is DERIVED from the installed VERSION, not hardcoded. It used to read
+# `startswith("<!-- candor-agents 0.25")`, which is a version-coupled assertion: every release breaks it,
+# and the fix each time is to edit a literal in a test — the same hand-edit class that cost the 0.25
+# release. Found by REHEARSING the 0.26 bump (release-stage.sh) and running the suite against it.
+_expect_hdr = "<!-- candor-%s ·" % __import__("candor_agents.scan", fromlist=["VERSION"]).VERSION.replace("-", " ", 1)
 check("--agents prints the version header + the exact installed contract",
-      r.returncode == 0 and r.stdout.startswith("<!-- candor-agents 0.25")
+      r.returncode == 0 and r.stdout.startswith(_expect_hdr)
       and r.stdout.endswith(agentsmd.AGENTS_MD), r.stdout[:120])
 
 # ══ permissions.deny (sound subtraction) + slash-commands/skills (0.4.7) ══════════════════════════
