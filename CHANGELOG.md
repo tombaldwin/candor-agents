@@ -10,7 +10,9 @@ candor-agents is the family's **domain engine** (SPEC §4): its units are *agent
 rides the spec ladder on its own schedule (it never holds the four code engines' floor back). Its
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
-## Unreleased — ⟨spec 0.26⟩
+## Unreleased
+
+## [0.26.0] — 2026-08-04 ⟨spec 0.26⟩
 
 ### ⟨0.26⟩ floor bump to spec 0.26
 
