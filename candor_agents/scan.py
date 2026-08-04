@@ -22,7 +22,7 @@ import sys
 
 from candor_agents import policy as _policy
 
-SPEC = "0.26"
+SPEC = "0.27"
 VERSION = "agents-0.26.0"
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
