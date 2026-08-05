@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.27.0] — 2026-08-05
+
 ### ⟨0.27⟩ `resolves` — declare which optional refinement surfaces this producer computes
 
 The envelope now carries `resolves`, a top-level array naming the optional SPEC §2 refinement surfaces
