@@ -104,7 +104,10 @@ TOOL_HOOK_EVENTS = {"PreToolUse", "PostToolUse"}
 # drive modes this engine does not have (baseline ratchet, JVM conformance, …) — a config carrying
 # one is warned LOUDLY (below), because a reader of the checked-in file could otherwise believe a
 # gate is active here that is not.
-CONFIG_KEYS = {"policy", "baseline", "strict", "no-ambient", "closed-world", "taint", "deps"}
+# ⟨0.28 PROPOSED⟩ `engine` is in the vocabulary and NOT implemented here on purpose: candor-java enforces
+# the pin, and a key this spec defines must never be reported as an unknown one — that would tell an
+# operator their pin was ignored while a sibling engine was enforcing it.
+CONFIG_KEYS = {"policy", "baseline", "strict", "no-ambient", "closed-world", "taint", "deps", "engine"}
 CONFIG_IMPLEMENTED = {"policy"}
 
 
