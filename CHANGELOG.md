@@ -12,6 +12,22 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+### ⟨0.27⟩ `resolves` — declare which optional refinement surfaces this producer computes
+
+The envelope now carries `resolves`, a top-level array naming the optional SPEC §2 refinement surfaces
+this producer actually computes. Absence of an optional field otherwise means two different things a
+consumer cannot separate — *"undetermined"* versus *"not computed here"* — and only the first licenses
+reading the absence as an answer. candor-agents declares the surfaces it resolves and no others; a
+producer MUST NOT list one it does not compute.
+
+### the spec declaration moved to 0.27, and the assertions that broke are a CLASS
+
+Bumping the declared spec turned this repo's own suite red on assertions that hardcoded the version
+string. That is not a one-off: the same shape broke six repos on the same bump. The assertions here now
+DERIVE the expected value from the engine's own constant, so the next rung moves one declaration rather
+than one edit per repo.
+
+
 ## [0.26.0] — 2026-08-04 ⟨spec 0.26⟩
 
 ### ⟨0.26⟩ floor bump to spec 0.26
