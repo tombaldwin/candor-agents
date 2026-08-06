@@ -150,9 +150,14 @@ def engine_pin_for(text, impl_name):
             bad = True
         elif len(rest) == 1:
             wild = slot(wild, rest[0])
-        elif len(rest) == 2 and rest[0].lower() in _PIN_IMPLS:
+        elif rest[0].lower() in _PIN_IMPLS:
+            # A KNOWN qualifier decides the line's OWNER first: a junked line naming ANOTHER engine is
+            # that engine's problem and it refuses on it (SPEC §3.4 whole-line skip).
             if rest[0].lower() == impl_name:
-                qual = slot(qual, rest[1])
+                if len(rest) == 2:
+                    qual = slot(qual, rest[1])
+                else:
+                    bad = True
         else:
             bad = True
     if bad:
@@ -164,7 +169,11 @@ def normalize_pin_version(raw):
     """A pin token -> its comparable form, or None when it is not a version at all. `latest` is
     MALFORMED rather than a version that can never match: the difference decides whether the operator
     reads "wrong version" or "that is not a version"."""
-    s = (raw or "").strip().lstrip("vV")
+    s = (raw or "").strip()
+    # AT MOST ONE leading `v` — `lstrip` removed every one, so `vv0.27.0` was a valid pin here and
+    # MALFORMED in three other engines.
+    if s[:1] in ("v", "V"):
+        s = s[1:]
     parts = s.split(".")
     if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
         return None
