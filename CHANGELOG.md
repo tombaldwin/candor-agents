@@ -14,6 +14,10 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## [0.27.0] — 2026-08-05
 
+- **An unreadable unqualified pin was hidden behind a qualified one.** `engine garbage` beside a good
+  qualified line passed silently here while candor-java exited 2 — unreadability is a property of the
+  line; precedence only decides which version applies.
+
 - **A bare `engine <impl>` still split the family five ways.** `engine swift` — an operator forgetting
   the version on a qualified line — was skipped by candor-java and treated by the other four as a
   WILDCARD pin whose version is the literal `swift`, so it exited 2 in every engine that is *not* swift:
