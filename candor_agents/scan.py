@@ -179,7 +179,13 @@ def normalize_pin_version(raw):
     if s[:1] in ("v", "V"):
         s = s[1:]
     parts = s.split(".")
-    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+    # ASCII DIGITS ONLY. `str.isdigit()` is Unicode-wide, so `٣.٣` (Arabic-Indic) and `².0` (a
+    # superscript) NORMALISED as versions — making them a MISMATCH rather than MALFORMED. That
+    # difference is load-bearing: the "an unreadable unqualified line is not hidden by a qualified pin"
+    # guard keys on the normaliser returning None, so a line that is not a version but parses as one was
+    # handed to the qualified pin and the run passed at exit 0 while four other engines exited 2. A
+    # version is ASCII digits.
+    if len(parts) not in (2, 3) or not all(p.isascii() and p.isdigit() for p in parts):
         return None
     return f"{s}.0" if len(parts) == 2 else s
 
