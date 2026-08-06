@@ -14,6 +14,14 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## [0.27.0] — 2026-08-05
 
+- **A bare `engine <impl>` still split the family five ways.** `engine swift` — an operator forgetting
+  the version on a qualified line — was skipped by candor-java and treated by the other four as a
+  WILDCARD pin whose version is the literal `swift`, so it exited 2 in every engine that is *not* swift:
+  one typo, a family-wide outage, on the exact property PART 33 exists to pin. The cause was arm ORDER —
+  arity was tested before ownership, so the one-token case was claimed by the wildcard arm before anyone
+  asked whose line it was. **A known qualifier now decides ownership first**, per §3.4's "whatever
+  follows it" — and nothing following it is a case of that too.
+
 - **Panel review: the pin grammar disagreed across engines on a shared config.** Three confirmed
   divergences, each a case conformance PART 33 had not thought of, all now fixed and pinned there:
   a junked line qualified for ANOTHER implementation (`engine swift 0.99.0 junk`) killed this engine's
