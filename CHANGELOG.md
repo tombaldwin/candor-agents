@@ -12,6 +12,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **A version is ASCII digits, and `str.isdigit()` is not.** `engine ٣.٣` (Arabic-Indic) and `engine ².0`
+  NORMALISED as versions, so they read as a MISMATCH rather than MALFORMED — and that difference decides
+  whether the "an unreadable unqualified line is not hidden by a qualified pin" rule fires. Beside a good
+  qualified pin the junk line was handed over silently and the run passed at **exit 0** while three
+  engines exited 2. Alone, every engine already refused; only the paired shape shows it. candor-swift had
+  the same defect via `Character.isNumber`; both fixed, five-way now, pinned by conformance PART 33.
+
 ## [0.27.0] — 2026-08-05
 
 - **An unreadable unqualified pin was hidden behind a qualified one.** `engine garbage` beside a good
