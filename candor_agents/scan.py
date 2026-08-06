@@ -146,18 +146,17 @@ def engine_pin_for(text, impl_name):
         def slot(cur, v):
             return f"{cur} / {v}" if cur is not None and cur != v else v
 
+        # A KNOWN QUALIFIER DECIDES OWNERSHIP BEFORE ARITY. Checking the one-token case first made `engine swift` a WILDCARD pin whose version is the literal "swift" -> MALFORMED -> exit 2 in every engine, so one operator forgetting a version on a qualified line killed the whole family. SPEC 3.4 says the skip is whole-line 'whatever follows it' -- and nothing following it is a case of that too.
+        if rest and rest[0].lower() in _PIN_IMPLS:
+            if rest[0].lower() == impl_name:
+                qual = slot(qual, rest[1]) if len(rest) == 2 else qual
+                if len(rest) != 2:
+                    bad = True
+            continue                     # another impl's line, whatever follows it
         if not rest:
             bad = True
         elif len(rest) == 1:
             wild = slot(wild, rest[0])
-        elif rest[0].lower() in _PIN_IMPLS:
-            # A KNOWN qualifier decides the line's OWNER first: a junked line naming ANOTHER engine is
-            # that engine's problem and it refuses on it (SPEC §3.4 whole-line skip).
-            if rest[0].lower() == impl_name:
-                if len(rest) == 2:
-                    qual = slot(qual, rest[1])
-                else:
-                    bad = True
         else:
             bad = True
     if bad:
