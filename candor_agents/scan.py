@@ -24,6 +24,11 @@ from candor_agents import policy as _policy
 
 SPEC = "0.27"
 VERSION = "agents-0.27.0"
+# ⟨0.27⟩ The clean RELEASE semver, derived from VERSION rather than restated — the §3.4 `engine` pin is
+# written by a human as `v0.27.0`, and VERSION carries the engine-qualified build id (`agents-0.27.0`)
+# that the report envelope wants. Comparing the pin against the build id read every correct pin as a
+# MISMATCH, which is the fail-CLOSED direction but still wrong: it would have made the key unusable here.
+RELEASE = VERSION.split("-", 1)[-1]
 
 # ── the classifier: tool name -> effect set ──────────────────────────────────────────────────────
 # The code engine's posture, ported: a small CURATED table at the boundary; never guess. `Bash` is
@@ -108,7 +113,95 @@ TOOL_HOOK_EVENTS = {"PreToolUse", "PostToolUse"}
 # the pin, and a key this spec defines must never be reported as an unknown one — that would tell an
 # operator their pin was ignored while a sibling engine was enforcing it.
 CONFIG_KEYS = {"policy", "baseline", "strict", "no-ambient", "closed-world", "taint", "deps", "engine"}
-CONFIG_IMPLEMENTED = {"policy"}
+CONFIG_IMPLEMENTED = {"policy", "engine"}
+
+
+# ── ⟨0.27⟩ SPEC §3.4 `engine` — the engine↔baseline coupling ────────────────────────────────────
+# The committed baseline is a snapshot of what ONE engine build reported, and an engine swap is
+# baseline-invalidating. What a PIN adds over a provenance check is that it is DECLARATIVE: a build id
+# is a hash nobody can write down, so the intended version lived in CI config, decoupled from the
+# baseline it belongs to. It also tells tooling which engine to FETCH.
+#
+# TWO OF THE FIVE VERDICTS MUST NOT CHANGE THE EXIT CODE: an ABSENT pin (opt-in by construction) and an
+# UNDETERMINED one, where §3.1's unanswerable-condition rule applies — disclosed, never scored,
+# INCLUDING as satisfied. A mismatch is exit 2, never 1: unevaluable, not violating.
+_PIN_IMPLS = {"java", "rust", "ts", "swift", "agents"}
+
+
+def engine_pin_for(text, impl_name):
+    """The pin that applies to `impl_name`: qualified beats unqualified. Two lines that DISAGREE about
+    one key keep BOTH values, so the result cannot parse as a version and surfaces as malformed —
+    one silently discarding the other is the failure this key exists to prevent."""
+    wild = qual = None
+    bad = False
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if parts[0].lower() != "engine":
+            continue
+        rest = parts[1:]
+
+        def slot(cur, v):
+            return f"{cur} / {v}" if cur is not None and cur != v else v
+
+        if not rest:
+            bad = True
+        elif len(rest) == 1:
+            wild = slot(wild, rest[0])
+        elif len(rest) == 2 and rest[0].lower() in _PIN_IMPLS:
+            if rest[0].lower() == impl_name:
+                qual = slot(qual, rest[1])
+        else:
+            bad = True
+    if bad:
+        return "<unreadable>"
+    return qual if qual is not None else wild
+
+
+def normalize_pin_version(raw):
+    """A pin token -> its comparable form, or None when it is not a version at all. `latest` is
+    MALFORMED rather than a version that can never match: the difference decides whether the operator
+    reads "wrong version" or "that is not a version"."""
+    s = (raw or "").strip().lstrip("vV")
+    parts = s.split(".")
+    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
+        return None
+    return f"{s}.0" if len(parts) == 2 else s
+
+
+def enforce_engine_pin(text, running):
+    """Exits 2 on a mismatched or unreadable pin. Returns None otherwise."""
+    pin = engine_pin_for(text, "agents")
+    if pin is None:
+        return
+    want = normalize_pin_version(pin)
+    if want is None:
+        print("candor-agents: .candor/config has an `engine` line that is not an engine version.",
+              file=sys.stderr)
+        print(f"        want `engine <version>` (e.g. `engine v{running}`) or `engine <impl> <version>`",
+              file=sys.stderr)
+        print("        Failing (exit 2) rather than ignoring it: a pin that cannot be read is a guard",
+              file=sys.stderr)
+        print("        the operator believes is on.", file=sys.stderr)
+        sys.exit(2)
+    r = (running or "").strip()
+    if not r or r == "unknown":
+        print(f"candor-agents: .candor/config pins engine {pin}, and this build does not know its own",
+              file=sys.stderr)
+        print("        release, so the pin CANNOT be checked. Disclosed, not scored.", file=sys.stderr)
+        return
+    if want == (normalize_pin_version(r) or r):
+        return
+    print(f"candor-agents: .candor/config pins engine {pin} but this build is candor-agents {running}.",
+          file=sys.stderr)
+    print("        The pin and the committed baseline move together — regenerate the baseline with the",
+          file=sys.stderr)
+    print("        pinned engine, or update the pin and regenerate in the same change. Exit 2",
+          file=sys.stderr)
+    print("        (unevaluable), not 1 — this is not a policy violation.", file=sys.stderr)
+    sys.exit(2)
 
 
 def load_candor_config(target):
@@ -167,6 +260,9 @@ def load_candor_config(target):
             print(f"candor-agents: config key '{key}' is recognized by the candor family but not "
                   f"implemented by candor-agents — this gate is NOT active here ({file})", file=sys.stderr)
         cfg[key] = val
+    # ⟨0.27⟩ §3.4 — the engine pin, from the config TEXT (it is MULTI-VALUE: one line per engine in a
+    # polyglot repo, which the single-value `cfg` map above cannot hold).
+    enforce_engine_pin(text, RELEASE)
     base = os.path.dirname(os.path.abspath(file))
     if os.path.basename(base) == ".candor":
         base = os.path.dirname(base)  # the canonical <root>/.candor/config: values are root-relative
