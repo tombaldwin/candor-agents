@@ -161,6 +161,11 @@ def engine_pin_for(text, impl_name):
             bad = True
     if bad:
         return "<unreadable>"
+    # AN UNREADABLE UNQUALIFIED LINE IS NOT HIDDEN BY A QUALIFIED PIN. `qual ?? wild` returned the qualifi
+    # ed value, so `engine garbage` beside a good qualified line passed SILENTLY here while candor-java exited 
+    # 2 — the exact mirror of the bug just fixed in java, four engines the other way. Unreadability is a property of the LINE; precedence only decides which VERSION applies.
+    if wild is not None and normalize_pin_version(wild) is None:
+        return wild
     return qual if qual is not None else wild
 
 
