@@ -11,15 +11,19 @@ rides the spec ladder on its own schedule (it never holds the four code engines'
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
-- **⟨0.28 PROPOSED⟩ `engine` is now a recognized `.candor/config` key here, and disclosed as INERT.**
-  candor-java enforces the pin (a build that is not the pinned one exits 2, so the engine and the
-  committed baseline cannot drift apart); this engine does not enforce it yet. It accepts the key
-  regardless, because a key the spec defines must never be reported as an *unknown* one — that would
-  tell an operator their pin was ignored while a sibling engine was enforcing it, which is the
-  false-disclosure class this project already got wrong once with `net-partner`.
-
 
 ## [0.27.0] — 2026-08-05
+
+- **⟨0.27⟩ SPEC §3.4 `engine` — the engine↔baseline coupling, enforced here too.** A build that is not
+  the pinned one FAILS with exit 2 (UNEVALUABLE, never 1 — a machine consumer must not read "I could not
+  trust this result" as "your code broke a rule"). Two of the five verdicts deliberately do NOT change
+  the exit code: an absent pin (the key is opt-in by construction) and one this build cannot check,
+  which is §3.1's unanswerable-condition rule — disclosed, never scored, *including* as satisfied. An
+  unreadable pin (`engine latest`) exits 2 rather than being skipped: this is the one place §6.2's
+  warn-and-skip inverts, because skipping a PIN hands the operator a guard they believe is on. A pin
+  qualified for another implementation is ignored — one config serves the family, which versions as a
+  ladder. Pinned four-way by conformance **PART 33**.
+
 
 ### ⟨0.27⟩ `resolves` — declare which optional refinement surfaces this producer computes
 
