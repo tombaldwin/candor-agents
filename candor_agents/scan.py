@@ -1561,6 +1561,16 @@ def main():
         arm_gate_json(_pre_gate)
     opts = parse_args(sys.argv[1:])
     if isinstance(opts, int):
+        # ⟨0.27⟩ SPEC §3.1's stream-sink clause: `--gate-json -` cannot be armed (a stream has no stale
+        # previous document, and a placeholder would put two documents in the pipe), but the
+        # document-on-every-exit rule has no exempt cause — an unknown flag or a valueless gate-adjacent
+        # flag exiting 2 here must still leave the fail-closed refusal as stdout's only content, or the
+        # consumer of the stream is thrown back to scraping stderr. File sinks are already armed above.
+        if opts == 2 and _pre_gate == "-":
+            print(json.dumps({"spec": SPEC, "ok": False, "refused": True,
+                              "reason": "the gate did not complete — this run exited on a usage error "
+                                        "before a verdict could be decided; see stderr for the cause"},
+                             indent=1))
         return opts
     root, out, fleet, link, nested, as_json, gate_json, policy_path = opts
     # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-

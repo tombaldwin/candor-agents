@@ -98,8 +98,21 @@ def reason_class_matches(classes, want):
 
 def parse_policy(text):
     """Parse a §6.2 policy into {'deny':[…], 'allow':[…], 'forbid':[…]}. Malformed rules are dropped
-    with a stderr note (the shared parser's behaviour); `pure <scope>` is a `deny` with no effects."""
+    with a stderr note (the shared parser's behaviour); `pure <scope>` is a `deny` with no effects.
+
+    ⟨0.24⟩ FATAL vs REPORTED — a distinction this engine did not make, and the gap was a fail-open.
+    `deny Frobnicate` was dropped with a note and the run exited 0 with `policy ✓`: a policy silently
+    REWRITTEN into a different (weaker) policy, which is the same shape as the AS-EFF-005 dropped-rule
+    hazard SPEC §6.2 already refuses at exit 2 in the four code engines. The fatal set here is theirs,
+    token for token (candor-classify `policy.rs` `not_honoured!(true, …)`): a `deny` whose effect list
+    ends up EMPTY, an `allow` naming an effect outside the four literal surfaces, and an unrecognised
+    reason-class/alias inside `Unknown[…]`. Everything else stays REPORTED-and-survivable, because the
+    rest of the policy still means exactly what it says. Errors land in `LAST_POLICY_ERRORS`; `run_gate`
+    refuses on the fatal ones before any of them is used as a verdict."""
     import sys
+    global LAST_POLICY_ERRORS
+    LAST_POLICY_ERRORS = []
+    errors = LAST_POLICY_ERRORS
     deny, allow, forbid = [], [], []
     # Normalise CRLF/CR to LF first: a bare-\r (classic-Mac) file would otherwise collapse to one line
     # (\r is also an in-line separator), gluing every later rule into the first and dropping it.
@@ -109,8 +122,11 @@ def parse_policy(text):
             continue
         t = _ASCII_WS.split(line)
 
-        def warn(why):
-            sys.stderr.write(f"candor-agents: ignoring policy rule ({why}): {line}\n")
+        def warn(why, fatal=False, _line=None):
+            _line = line if _line is None else _line
+            sys.stderr.write(f"candor-agents: {'policy error' if fatal else 'ignoring policy rule'} "
+                             f"({why}): {_line}\n")
+            errors.append({"raw": _line, "why": why, "fatal": fatal})
 
         if t[0] == "deny":
             effects, scope = [], ""
@@ -132,15 +148,16 @@ def parse_policy(text):
                         elif cn in REASON_CLASSES:
                             classes.add(cn)
                         else:
-                            # The CLASS is dropped and the rule KEEPS its recognized ones — so this
-                            # must NOT use warn(), whose wording is "ignoring policy rule": the rule
-                            # survives, and a message claiming otherwise would send a reader looking
-                            # for a gate that is in fact still enforced. If dropping leaves no class
-                            # at all the filter falls back to ALL (below), never to "matches nothing".
-                            sys.stderr.write(
-                                f"candor-agents: policy rule names unknown reason-class `{cn}` "
-                                f"(known: {','.join(REASON_CLASSES)}; aliases: dynamic,*) — that class "
-                                f"is dropped, the rest of the rule stands: {line}\n")
+                            # ⟨0.24⟩ FATAL, not a note. This used to drop the class and keep the rule,
+                            # on the reasoning that the surviving filter is still enforced — but the
+                            # rule that RAN is then not the rule that was WRITTEN, and the direction
+                            # that matters NARROWS it: `deny Unknown[dispatch,nativ]` ran as
+                            # `Unknown[dispatch]` and let every `native` hole through, green. The four
+                            # code engines refuse this (candor-classify KIND_REASON_CLASS, fatal), and
+                            # a silently narrowed gate is exactly the fail-open §6.2 exists to close.
+                            warn(f"unrecognised reason-class/alias `{cn}` — accepted: "
+                                 f"{', '.join(REASON_CLASSES)}, plus the aliases `dynamic` and `*`",
+                                 fatal=True)
                     continue
                 me = _EFFECT_SCOPED.fullmatch(tok)
                 if me and me.group(1) in _VOCAB:
@@ -167,7 +184,7 @@ def parse_policy(text):
                     scope = tok  # first non-effect token is the scope and ENDS the rule
                     break
             if not effects:
-                warn("deny names no known effect"); continue
+                warn("deny names no known effect", fatal=True); continue
             if star:
                 classes = set()  # `*` / bare `Unknown` ⇒ empty filter ⇒ matches any Unknown
             elif classes and "unresolved" not in classes:
@@ -192,7 +209,7 @@ def parse_policy(text):
             if len(t) < 3:
                 warn("allow names no values"); continue
             if t[1] not in ALLOW_EFFECTS:
-                warn("allow supports only Net hosts / Exec commands / Fs paths / Db tables"); continue
+                warn("allow supports only Net hosts / Exec commands / Fs paths / Db tables", fatal=True); continue
             scope, vi = "", 2
             if t[2] == "in":
                 scope = t[3] if len(t) > 3 else ""; vi = 4
@@ -361,11 +378,16 @@ def evaluate_policy(pol, functions, callgraph, incomplete=None, reason_seed=None
         for r in pol["deny"]:
             if r.get("scope") and scope_matches(f["fn"], r["scope"]):
                 scope_hits[r["raw"]] = scope_hits.get(r["raw"], 0) + 1
-    for raw, n in scope_hits.items():
-        if n == 0:
-            print(f"candor-agents: policy rule matched NO unit — `{raw}`. It was evaluated and bound "
-                  f"nothing, so it cannot have caught anything. Legitimate when one policy is shared "
-                  f"across fleets; a typo'd agent name otherwise.", file=sys.stderr)
+    # ⟨0.27⟩ code-point sorted + deduplicated (Python str sort IS code-point order; the dict keys are
+    # unique by construction) — the SPEC §4 `zeroMatch` collation. Stashed module-wide so `run_gate` can
+    # put the SAME list on the verdict document without changing `evaluate_policy`'s return shape, which
+    # is a documented embedder surface. Safe for the same reason the CLI is: one gate evaluation per run.
+    global LAST_ZERO_MATCH
+    LAST_ZERO_MATCH = sorted(raw for raw, n in scope_hits.items() if n == 0)
+    for raw in LAST_ZERO_MATCH:
+        print(f"candor-agents: policy rule matched NO unit — `{raw}`. It was evaluated and bound "
+              f"nothing, so it cannot have caught anything. Legitimate when one policy is shared "
+              f"across fleets; a typo'd agent name otherwise.", file=sys.stderr)
 
     for f in functions:
         inferred = f.get("inferred", [])
@@ -442,7 +464,21 @@ def render(v):
     return f"[{v['rule']}] {v['detail']}"
 
 
-def write_gate_json(path, violations, spec, stdout_is_json=False):
+# ⟨0.27⟩ SPEC §4 `zeroMatch` — the raw text of every rule whose SCOPE bound no unit, stashed by the one
+# `evaluate_policy` call a run performs and read by `run_gate` so the disclosure reaches the verdict
+# document. The stderr lines alone left a machine consumer unable to see that a rule bound nothing —
+# the typo'd-scope silent green, one channel over. Empty until a gate evaluates, which is also why a
+# refusal (written when the gate never evaluated) can never carry it.
+LAST_ZERO_MATCH = []
+
+# ⟨0.24⟩ The policy errors of the last `parse_policy` — [{raw, why, fatal}]. A FATAL entry means the
+# policy cannot be honoured AS WRITTEN, so every gate route MUST refuse (exit 2, the unreadable-policy
+# posture) rather than enforce the rewritten remainder. Kept beside the parser rather than returned,
+# so no caller can read the rules without the errors being reachable.
+LAST_POLICY_ERRORS = []
+
+
+def write_gate_json(path, violations, spec, stdout_is_json=False, zero_match=()):
     """`--gate-json <file>` (spec §3.3 ⟨0.8⟩): write the structured gate verdict
     {spec, ok, violations:[{rule, fn, effects, detail}]} from the SAME violation records that set
     the exit code — a consumer can never see a verdict that disagrees with the gate. Written
@@ -452,7 +488,12 @@ def write_gate_json(path, violations, spec, stdout_is_json=False):
     the run, never silently drop the machine surface a CI consumer is reading."""
     import json
     import sys
-    verdict = json.dumps({"spec": spec, "ok": not violations, "violations": violations}, indent=1)
+    doc = {"spec": spec, "ok": not violations, "violations": violations}
+    # ⟨0.27⟩ SPEC §4 `zeroMatch` — the same list the stderr lines carry, in the machine channel.
+    # Omitted when empty (byte-compatible verdict); never consulted for `ok` or the exit code.
+    if zero_match:
+        doc["zeroMatch"] = list(zero_match)
+    verdict = json.dumps(doc, indent=1)
     if path == "-":
         if stdout_is_json:
             sys.stderr.write("candor-agents: --gate-json - conflicts with --json "
@@ -470,6 +511,25 @@ def write_gate_json(path, violations, spec, stdout_is_json=False):
         return False
 
 
+def _write_refusal(gate_json, spec, reason):
+    """⟨0.27⟩ The fail-closed refusal document, on whichever sink was named (SPEC §3.1 — the refusal
+    document has no exempt cause AND no exempt sink). A file sink already holds the armed placeholder,
+    so this replaces it with the SPECIFIC reason; `--gate-json -` is not armed, so without this write
+    the stream carried NOTHING on this cause and the consumer was thrown back to scraping stderr."""
+    import json
+    if gate_json is None:
+        return
+    refusal = json.dumps({"spec": spec, "ok": False, "refused": True, "reason": reason}, indent=1)
+    if gate_json == "-":
+        print(refusal)
+        return
+    try:
+        with open(gate_json, "w", encoding="utf-8") as fh:
+            fh.write(refusal + "\n")
+    except OSError:
+        pass  # the armed placeholder still holds; the caller's exit is already 2
+
+
 def run_gate(policy_path, gate_json, functions, callgraph, spec, stdout_is_json=False, incomplete=None,
              reason_seed=None):
     """The standing §6.2 gate + §3.3 verdict — ONE implementation, shared by scan (declared) and
@@ -483,21 +543,44 @@ def run_gate(policy_path, gate_json, functions, callgraph, spec, stdout_is_json=
     `incomplete` is observe's truncated-literal-surface map and `reason_seed` scan's `--link`
     pseudo-node reason classes (both see evaluate_policy). Returns the process exit code: 0 clean
     (or no gate configured), 1 violation(s), 2 gate-infrastructure failure."""
+    import json
     import sys
     violations = []
     if policy_path is not None:
         try:
             ptext = open(policy_path, encoding="utf-8").read()
         except OSError as e:
-            print(f"candor-agents: policy {policy_path} could not be read ({e}) — gate NOT enforced "
-                  f"(exit 2)", file=sys.stderr)
+            reason = f"policy {policy_path} could not be read ({e}) — gate NOT enforced (exit 2)"
+            print(f"candor-agents: {reason}", file=sys.stderr)
+            # ⟨0.27⟩ the refusal document has no exempt cause AND no exempt sink (SPEC §3.1): a file
+            # sink already holds the armed placeholder, but `--gate-json -` is not armed, so without
+            # this write the stream carried NOTHING on this cause and the consumer was thrown back to
+            # scraping stderr. Writing here also replaces the file placeholder with the specific reason.
+            _write_refusal(gate_json, spec, reason)
             return 2
-        violations = evaluate_policy(parse_policy(ptext), functions, callgraph, incomplete=incomplete,
+        parsed = parse_policy(ptext)
+        # ⟨0.24⟩ A POLICY THAT CANNOT BE HONOURED AS WRITTEN IS REFUSED, NOT REWRITTEN (SPEC §6.2).
+        # `parsed` holds what the text WOULD mean if the fatal error were tolerated, and tolerating it
+        # is the defect: `deny Frobnicate` used to reach here as a deny of nothing and the run printed
+        # `policy ✓` at exit 0. Same posture as the unreadable policy above — refuse before any of the
+        # remainder is used as a verdict. There is no composed case to weigh here: this engine has no
+        # AS-EFF-005 baseline producer, so every violation it can establish comes from the policy that
+        # is being refused, and a bad token establishes nothing from the policy itself (§3.1). Should a
+        # non-policy violation producer ever land, this is the site that must consult it.
+        fatal = [e for e in LAST_POLICY_ERRORS if e["fatal"]]
+        if fatal:
+            reason = ("refusing to evaluate a policy that cannot be honoured AS WRITTEN (exit 2, gate "
+                      "NOT enforced): " + "; ".join(f"{e['why']}: {e['raw']}" for e in fatal))
+            print(f"candor-agents: {reason}", file=sys.stderr)
+            _write_refusal(gate_json, spec, reason)
+            return 2
+        violations = evaluate_policy(parsed, functions, callgraph, incomplete=incomplete,
                                      reason_seed=reason_seed)
         for v in violations:
             print(render(v), file=sys.stderr)  # keep stdout pure JSON in --json mode
     if gate_json is not None:
-        if not write_gate_json(gate_json, violations, spec, stdout_is_json=stdout_is_json):
+        if not write_gate_json(gate_json, violations, spec, stdout_is_json=stdout_is_json,
+                               zero_match=LAST_ZERO_MATCH):
             return 2
     if policy_path is not None:
         if violations:
