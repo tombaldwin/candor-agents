@@ -1,0 +1,22 @@
+{
+ "coder": [
+  "mailer",
+  "orchestrator",
+  "researcher",
+  "triage"
+ ],
+ "mailer": [],
+ "orchestrator": [
+  "coder",
+  "researcher"
+ ],
+ "researcher": [],
+ "session": [
+  "coder",
+  "mailer",
+  "orchestrator",
+  "researcher",
+  "triage"
+ ],
+ "triage": []
+}
