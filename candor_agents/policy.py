@@ -14,6 +14,7 @@ A fleet report has no `tables` surface (no Db literal is observable from a tool 
 reads as uncertifiable (no visible literal) — under-report, never a fabricated clean pass.
 """
 import re
+import sys
 
 # SPEC §1's effect table, minus the `Unknown` visibility marker — "every effect in the table above,
 # excluding `Unknown`" ⟨0.24⟩, which is the phrasing that replaced the stale "the ten" (it went stale
@@ -346,6 +347,25 @@ def evaluate_policy(pol, functions, callgraph, incomplete=None, reason_seed=None
         if reason_class:
             v["reasonClass"] = list(reason_class)  # §3.3/§6.2 ⟨0.19⟩, omitted when empty
         out.append(v)
+
+    # ⟨0.24⟩ §4 ZERO-MATCH DISCLOSURE. A rule whose SCOPE binds no unit is scored as satisfied, so a
+    # one-character typo in an agent name (`deny Exec orchestratr`) turns a failing gate green — and the
+    # asymmetry is the tell: a typo'd EFFECT token exits 2 naming the accepted vocabulary, a typo'd
+    # SCOPE binds nothing and passes. The remedy is DISCLOSURE, not refusal: a zero-match rule is
+    # legitimate when one policy is shared across fleets and an agent exists in only some of them.
+    #
+    # Four engines gained this at ⟨0.24⟩ and this one did not, while declaring the same spec —
+    # conformance PART 32 runs four engines, so nothing caught it.
+    scope_hits = {r["raw"]: 0 for r in pol["deny"] if r.get("scope")}
+    for f in functions:
+        for r in pol["deny"]:
+            if r.get("scope") and scope_matches(f["fn"], r["scope"]):
+                scope_hits[r["raw"]] = scope_hits.get(r["raw"], 0) + 1
+    for raw, n in scope_hits.items():
+        if n == 0:
+            print(f"candor-agents: policy rule matched NO unit — `{raw}`. It was evaluated and bound "
+                  f"nothing, so it cannot have caught anything. Legitimate when one policy is shared "
+                  f"across fleets; a typo'd agent name otherwise.", file=sys.stderr)
 
     for f in functions:
         inferred = f.get("inferred", [])

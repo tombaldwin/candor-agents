@@ -1440,7 +1440,125 @@ def collect_kappa(agents, commands, skills, hook_cmds, HOOKS):
     return unit_heads, pure_used
 
 
+SINK_ARMED_REASON = (
+    "the gate did not complete — this document was written when the run STARTED and was never replaced "
+    "by a verdict, so the run failed, crashed or was killed before it could decide. It is NOT a verdict "
+    "about the code; see the run's stderr for the cause."
+)
+
+
+def _same_artifact(a, b):
+    """Are these two path spellings the SAME FILE? (SPEC §3.3.1 ⟨0.27⟩)
+
+    Not a string comparison: `--policy /w/P --gate-json ./P` from `/w` names one file twice, and the
+    engine that already had this guard was defeated by exactly that spelling. `realpath` resolves `.`,
+    `..` and symlinks; a sink that does not exist yet has its PARENT resolved instead.
+    """
+    if not a or not b or a == "-" or b == "-":
+        return False
+
+    def resolve(x):
+        try:
+            return os.path.realpath(x)
+        except OSError:
+            return None
+    ra, rb = resolve(a), resolve(b)
+    return ra is not None and ra == rb
+
+
+def _refuse_sink_over_input(gate_json, other, flag):
+    """Refuse a sink that names an INPUT of this run, having written nothing (exit 2)."""
+    if not _same_artifact(gate_json, other):
+        return None
+    print(f"candor-agents: --gate-json {gate_json} names the SAME FILE as {flag} {other} — refusing "
+          f"(exit 2). The verdict is armed before the policy is read, so this would overwrite your "
+          f"policy and then gate on the wreckage. Nothing was written; give the verdict its own path.",
+          file=sys.stderr)
+    return 2
+
+
+def arm_gate_json(gate_json):
+    """Write the fail-closed refusal every later exit inherits unless a verdict replaces it.
+
+    THIS ENGINE HAD NONE OF THIS LAYER while declaring `spec 0.27`, which claims it. Measured: an
+    unknown flag beside `--gate-json G` exited 2 and left the PREVIOUS run's green at G, and
+    `--policy P --gate-json P` DESTROYED P — so the very next run of the same command exited 0 on a
+    fleet that violates, the gate silently gone. Four engines gained the guard in this release and the
+    fifth declared the same contract without it; PARTs 32/34 run four engines, so nothing caught it.
+    """
+    if not gate_json or gate_json == "-":
+        return
+    try:
+        with open(gate_json, "w", encoding="utf-8") as fh:
+            json.dump({"spec": SPEC, "ok": False, "refused": True, "reason": SINK_ARMED_REASON}, fh, indent=1)
+            fh.write("\n")
+    except OSError as e:
+        print(f"candor-agents: could not arm --gate-json {gate_json} fail-closed ({e}) — if this run "
+              f"does not complete, that path may still hold a PREVIOUS run's verdict", file=sys.stderr)
+
+
+def _prescan_sink_and_inputs(argv):
+    """Learn `--gate-json` and `--policy` from argv with NO side effects.
+
+    A pre-pass, so the collision refusal and the arming both precede EVERY other exit — including the
+    unknown-flag exit, which SPEC §3.3 names as a broken-gate-config exit-2 cause that must leave a
+    refusal. Arming inside the parse loop would make the contract depend on argv ORDER.
+    """
+    gate = policy = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--gate-json", "--policy") and i + 1 < len(argv):
+            v = argv[i + 1]
+            if v == "-" or not v.startswith("--"):
+                if a == "--gate-json":
+                    gate = v
+                else:
+                    policy = v
+                i += 2
+                continue
+        i += 1
+    return gate, policy
+
+
 def main():
+    # ── SPEC §3.3.1 ⟨0.27⟩ ARM FIRST, AND NEVER OVER AN INPUT — before `parse_args`, whose own exits
+    # would otherwise leave a stale green behind.
+    _pre_gate, _pre_policy = _prescan_sink_and_inputs(sys.argv[1:])
+    if _pre_gate:
+        for other, flag in ((_pre_policy, "--policy"),
+                            (os.environ.get("CANDOR_POLICY"), "CANDOR_POLICY"),
+                            (os.environ.get("CANDOR_CONFIG"), "CANDOR_CONFIG")):
+            rc = _refuse_sink_over_input(_pre_gate, other, flag)
+            if rc is not None:
+                return rc
+        # `.candor/config` is never a verdict sink, wherever it is: the config is DISCOVERED by walking
+        # up from the target, so a path comparison cannot see it until arming has already destroyed it.
+        _abs = os.path.abspath(_pre_gate)
+        if os.path.basename(_abs) == "config" and os.path.basename(os.path.dirname(_abs)) == ".candor":
+            print(f"candor-agents: --gate-json {_pre_gate} is a .candor/config — refusing (exit 2). "
+                  f"This would destroy the config that configures this run. Nothing was written.",
+                  file=sys.stderr)
+            return 2
+        # …AND THE CONFIG-DECLARED POLICY, which is the CHECKED-IN form and therefore the one CI has.
+        # Keying the guard on the FLAG alone is the exact defect the four code engines shipped and had
+        # to fix: with `policy P` in `.candor/config`, `--gate-json P` destroyed P and the run went
+        # green. The config is read LENIENTLY here — this runs before the real load and must not
+        # pre-empt its refusal.
+        _pre_root = next((a for a in sys.argv[1:] if not a.startswith("-")), ".")
+        try:
+            _cfg, _base = load_candor_config(_pre_root)
+            _cfg_pol = _cfg.get("policy")
+            if _cfg_pol and not os.path.isabs(_cfg_pol):
+                _cfg_pol = os.path.join(_base, _cfg_pol)
+            rc = _refuse_sink_over_input(_pre_gate, _cfg_pol, "the config's `policy`")
+            if rc is not None:
+                return rc
+        except SystemExit:
+            raise
+        except Exception:
+            pass   # lenient: the real load refuses on its own terms
+        arm_gate_json(_pre_gate)
     opts = parse_args(sys.argv[1:])
     if isinstance(opts, int):
         return opts

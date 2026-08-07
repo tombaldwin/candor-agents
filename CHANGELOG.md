@@ -12,6 +12,22 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⚠ This engine declared `spec 0.27` and implemented none of the gate-sink layer that release adds.**
+  Measured: `--policy P --gate-json P` DESTROYED `P`, so the very next run of the same command exited 0
+  on a fleet that violates — the gate silently gone, which is the machine-readable false all-clear the
+  ⟨0.27⟩ rung exists to close. And an unknown flag beside `--gate-json G` exited 2 leaving the PREVIOUS
+  run's green at `G`. Four engines gained the guard in this release; this one declared the same contract
+  without it, and conformance PARTs 32/34 ran four engines, so nothing caught it.
+  Now: the sink is armed fail-closed at the instant it is known — before `parse_args`, whose own exits
+  would otherwise leave a stale green — and a sink naming an INPUT is refused with nothing written. Every
+  channel: `--policy`, `CANDOR_POLICY`, `CANDOR_CONFIG`, the config's own `policy` key (the checked-in
+  form, i.e. the one CI has), and any `.candor/config` by shape. Sameness resolves artifacts, not strings.
+- **⚠ §4 zero-match: a rule whose scope bound no unit was scored as SATISFIED.** `deny Exec orchestratr`
+  — one character — turned a failing gate green, silently. Now disclosed on stderr with the verdict and
+  exit code untouched, because a zero-match rule is legitimate when one policy is shared across fleets.
+
+## [0.27.0] — 2026-08-07
+
 - **A version is ASCII digits, and `str.isdigit()` is not.** `engine ٣.٣` (Arabic-Indic) and `engine ².0`
   NORMALISED as versions, so they read as a MISMATCH rather than MALFORMED — and that difference decides
   whether the "an unreadable unqualified line is not hidden by a qualified pin" rule fires. Beside a good
@@ -19,7 +35,6 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   engines exited 2. Alone, every engine already refused; only the paired shape shows it. candor-swift had
   the same defect via `Character.isNumber`; both fixed, five-way now, pinned by conformance PART 33.
 
-## [0.27.0] — 2026-08-05
 
 - **An unreadable unqualified pin was hidden behind a qualified one.** `engine garbage` beside a good
   qualified line passed silently here while candor-java exited 2 — unreadability is a property of the
