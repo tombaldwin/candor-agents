@@ -12,6 +12,29 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⟨0.27⟩ The stream sink and `zeroMatch` (SPEC §3.1/§4, conformance PART 36).** (1) `--gate-json -`
+  now carries the fail-closed refusal document on the exit-2 causes that fired before the gate tail —
+  a usage error (unknown flag, valueless flag, missing target) and an unreadable policy — instead of
+  leaving stdout empty; a file sink gets the specific reason in place of the armed placeholder on the
+  unreadable-policy cause. (2) `zeroMatch`: the §4 zero-match list now rides the verdict document
+  (code-point sorted, deduplicated, omitted when empty); it was stderr-only in all five engines.
+
+- **⚠ ⟨0.24⟩ A POLICY THIS ENGINE COULD NOT HONOUR WAS SILENTLY REWRITTEN INTO A WEAKER ONE.**
+  `deny Frobnicate` was dropped with a stderr note and the run exited **0 printing `policy ✓`** — the
+  operator reads an armed gate that does not exist, which is the fail-open SPEC §6.2 ⟨0.24⟩ closed in
+  the four code engines by refusing (exit 2, the unreadable-policy posture). Found while measuring the
+  PART 36 cells. The FATAL set is now theirs token for token (candor-classify `not_honoured!(true, …)`):
+  a `deny` whose effect list ends up EMPTY, an `allow` naming an effect outside the four literal
+  surfaces, and an unrecognised reason-class/alias inside `Unknown[…]` — that last one is the dangerous
+  direction, since `deny Unknown[dispatch,nativ]` ran as `Unknown[dispatch]` and let every `native` hole
+  through green. Everything else stays reported-and-survivable (`allow` with no values, a malformed
+  `forbid`, an unknown rule kind), because the rest of the policy still means what it says. The refusal
+  reaches BOTH sinks: the file placeholder is replaced with the specific reason, and `--gate-json -`
+  carries the refusal document as stdout's only content. There is no composed case to weigh — this
+  engine has no AS-EFF-005 baseline producer, so every violation it can establish comes from the policy
+  being refused, and a bad token establishes nothing from the policy itself (§3.1); the site that would
+  have to consult one is marked.
+
 - **⚠ This engine declared `spec 0.27` and implemented none of the gate-sink layer that release adds.**
   Measured: `--policy P --gate-json P` DESTROYED `P`, so the very next run of the same command exited 0
   on a fleet that violates — the gate silently gone, which is the machine-readable false all-clear the

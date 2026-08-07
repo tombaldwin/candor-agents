@@ -1617,6 +1617,26 @@ check("cli scan --policy <violating>: exit 1 with the AS-EFF-006 line on stderr"
       rpv.returncode == 1 and "AS-EFF-006" in rpv.stderr, f"rc={rpv.returncode} err={rpv.stderr[-160:]!r}")
 check("cli scan --policy <missing>: exit 2 (gate NOT enforced, never a silent pass)",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _missing).returncode == 2)
+# ⟨0.24⟩ …and a policy that PARSES but cannot be honoured AS WRITTEN takes the same posture. This
+# engine used to drop `deny Frobnicate` with a stderr note and exit 0 printing `policy ✓` — the
+# silently-rewritten-policy fail-open the four code engines refuse. The gate-json rows below cover the
+# document; these two cover the exit code on both the file and the stream sink.
+_pbad = os.path.join(_mkd(), "bad.policy"); open(_pbad, "w").write("deny Frobnicate\n")
+_rbad = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pbad)
+check("cli scan --policy <unhonourable token>: exit 2, never a green `policy ✓` over a rewritten policy",
+      _rbad.returncode == 2 and "cannot be honoured" in _rbad.stderr and "policy ✓" not in _rbad.stderr,
+      f"rc={_rbad.returncode} err={_rbad.stderr[-200:]!r}")
+_pbadc = os.path.join(_mkd(), "badclass.policy"); open(_pbadc, "w").write("deny Unknown[dispatch,nativ] t\n")
+check("cli scan --policy <unrecognised reason-class>: exit 2 — a NARROWED rewrite is the dangerous one",
+      cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pbadc).returncode == 2)
+_rbadj = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pbad, "--gate-json", "-")
+try:
+    _bd = json.loads(_rbadj.stdout)
+except Exception:
+    _bd = {}
+check("cli scan --policy <unhonourable> --gate-json -: the refusal document is stdout's only content",
+      _rbadj.returncode == 2 and _bd.get("refused") is True and _bd.get("ok") is False
+      and "violations" not in _bd, f"rc={_rbadj.returncode} out={_rbadj.stdout[:200]!r}")
 # $CANDOR_POLICY is honoured when the flag is absent (the flag wins); a violation via the env exits 1
 check("cli scan: $CANDOR_POLICY (no flag) gates too — a violation exits 1",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--fleet", "t",
@@ -2188,11 +2208,11 @@ check("policy parse §6.2: narrowing `Unknown[…]` without `unresolved` emits t
       _pp["deny"] == [{"effects": ["Unknown"], "scope": "x", "unknownClasses": ["dispatch"],
                        "raw": "deny Unknown[dispatch] x"}] and "UNDER-gate" in _w, (_pp, _w))
 _pp, _w = _parse_warn("deny Unknown[dispatch,banana] x")
-check("policy parse §6.2: an unrecognized class token is DROPPED and the rule keeps its recognized "
-      "ones — the warning says exactly that, not `ignoring policy rule`, which would be false",
+check("policy parse §6.2 ⟨0.24⟩: an unrecognized class token is a FATAL policy error — the rule that "
+      "would RUN is narrower than the one WRITTEN, so the gate refuses rather than silently rewriting",
       _pp["deny"][0]["unknownClasses"] == ["dispatch"]
-      and "that class is dropped, the rest of the rule stands" in _w
-      and "ignoring policy rule" not in _w, (_pp, _w))
+      and any(e["fatal"] and "banana" in e["why"] for e in _pol.LAST_POLICY_ERRORS)
+      and "policy error" in _w, (_pp, _w, _pol.LAST_POLICY_ERRORS))
 _pp, _w = _parse_warn("deny Unknown[banana] x")
 check("policy parse §6.2: a bracket whose classes are ALL unrecognized falls back to the BARE form "
       "(all classes), never to a filter that matches nothing — fail-closed",
