@@ -223,7 +223,21 @@ def enforce_engine_pin(text, running):
     sys.exit(2)
 
 
-def load_candor_config(target):
+class _ConfigUnreadable(Exception):
+    """Raised INSTEAD of SystemExit when `load_candor_config(..., lenient=True)` cannot read the config.
+
+    The collision pre-pass needs the config's declared inputs before the gate sink is armed, and it
+    wrapped this call in `except SystemExit: raise` — so an unreadable config exited THERE, before
+    `arm_gate_json`, leaving a pre-seeded green verdict intact at the file sink. SPEC §3.3 names that
+    outcome exactly: "a refusal that writes nothing leaves the previous run's green document on disk."
+
+    Nothing is lost by being lenient here. An unreadable config declares no inputs anyone can name, so
+    the collision check over them is vacuous; arming proceeds and the REAL load refuses a moment later,
+    now with the sink armed so the refusal reaches it. Same fix, same reasoning, as candor-ts.
+    """
+
+
+def load_candor_config(target, lenient=False):
     """Locate + parse `.candor/config` for a scan of `target` (spec §3.4). Returns (cfg, base_dir).
 
     Discovery is anchored to the SCAN TARGET, never the CWD: walk UP from the target to the nearest
@@ -242,7 +256,7 @@ def load_candor_config(target):
         if not os.path.isfile(file):
             print(f"candor-agents: CANDOR_CONFIG set but {file or '(empty)'} is not a readable file "
                   f"— failing (exit 2)", file=sys.stderr)
-            raise SystemExit(2)
+            raise (_ConfigUnreadable() if lenient else SystemExit(2))
     else:
         d = os.path.abspath(target)
         if not os.path.isdir(d):
@@ -263,7 +277,7 @@ def load_candor_config(target):
     except OSError as e:
         print(f"candor-agents: config {file} exists but could not be read ({e}) — failing (exit 2), "
               f"a configured gate source must not vanish silently", file=sys.stderr)
-        raise SystemExit(2)
+        raise (_ConfigUnreadable() if lenient else SystemExit(2))
     cfg = {}
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()  # `#` begins a comment, inline too (§6.2 lexical)
@@ -1547,7 +1561,7 @@ def main():
         # pre-empt its refusal.
         _pre_root = next((a for a in sys.argv[1:] if not a.startswith("-")), ".")
         try:
-            _cfg, _base = load_candor_config(_pre_root)
+            _cfg, _base = load_candor_config(_pre_root, lenient=True)
             _cfg_pol = _cfg.get("policy")
             if _cfg_pol and not os.path.isabs(_cfg_pol):
                 _cfg_pol = os.path.join(_base, _cfg_pol)
@@ -1557,7 +1571,7 @@ def main():
         except SystemExit:
             raise
         except Exception:
-            pass   # lenient: the real load refuses on its own terms
+            pass   # lenient: the real load refuses on its own terms — see _ConfigUnreadable
         arm_gate_json(_pre_gate)
     opts = parse_args(sys.argv[1:])
     if isinstance(opts, int):

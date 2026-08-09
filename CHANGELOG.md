@@ -12,6 +12,14 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+
+- **A config-driven exit no longer leaves a stale GREEN verdict at the file sink.** The collision
+  pre-pass loads `.candor/config` to learn what the sink must not overwrite, and re-raised `SystemExit`
+  — so an unreadable config exited THERE, before `arm_gate_json`, leaving a previous run's `ok: true`
+  intact on disk. SPEC §3.3 names that outcome: "a refusal that writes nothing leaves the previous run's
+  green document on disk." The pre-pass now loads leniently and the arming happens; the real load
+  refuses a moment later with the sink armed. Nothing is lost, because a config nobody can read declares
+  no inputs anyone can name. Same defect, same fix, as candor-ts.
 - **⟨0.27⟩ The stream sink and `zeroMatch` (SPEC §3.1/§4, conformance PART 36).** (1) `--gate-json -`
   now carries the fail-closed refusal document on the exit-2 causes that fired before the gate tail —
   a usage error (unknown flag, valueless flag, missing target) and an unreadable policy — instead of
@@ -23,7 +31,20 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   `deny Frobnicate` was dropped with a stderr note and the run exited **0 printing `policy ✓`** — the
   operator reads an armed gate that does not exist, which is the fail-open SPEC §6.2 ⟨0.24⟩ closed in
   the four code engines by refusing (exit 2, the unreadable-policy posture). Found while measuring the
-  PART 36 cells. The FATAL set is now theirs token for token (candor-classify `not_honoured!(true, …)`):
+  PART 36 cells. The FATAL set now matches theirs on every token it shares, which is not the same as "token for
+  token" — an earlier draft of this sentence said that and it was false in two places, both deliberate
+  and both worth stating rather than quietly matching:
+
+  - `deny Net[<class>]` is FATAL in candor-classify and is WIDENED here (the filter dropped, the rule
+    enforced unscoped) with a stderr line saying so. This engine emits no `netClass`, so honouring the
+    filter would match an absent field and PASS — fail-open — and dropping the whole rule fails open
+    too. §3.1's policy-side rule is that a dropped token leaves a WIDER rule standing, so widening is
+    the third road and the only closed one. A bracketed **allow** is refused outright rather than
+    widened, because widening an allow is the direction that hides a violation.
+  - `allow Llm` is honoured by candor-classify and refused here: `ALLOW_EFFECTS` is the four literal
+    surfaces (`Net`, `Exec`, `Fs`, `Db`) and Llm is not among them.
+
+  Otherwise the set is theirs (candor-classify `not_honoured!(true, …)`):
   a `deny` whose effect list ends up EMPTY, an `allow` naming an effect outside the four literal
   surfaces, and an unrecognised reason-class/alias inside `Unknown[…]` — that last one is the dangerous
   direction, since `deny Unknown[dispatch,nativ]` ran as `Unknown[dispatch]` and let every `native` hole
