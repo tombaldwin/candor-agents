@@ -11,6 +11,8 @@ rides the spec ladder on its own schedule (it never holds the four code engines'
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
+## [0.27.0] — 2026-08-07
+
 
 
 - **A config-driven exit no longer leaves a stale GREEN verdict at the file sink.** The collision
@@ -78,7 +80,6 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   — one character — turned a failing gate green, silently. Now disclosed on stderr with the verdict and
   exit code untouched, because a zero-match rule is legitimate when one policy is shared across fleets.
 
-## [0.27.0] — 2026-08-07
 
 - **A version is ASCII digits, and `str.isdigit()` is not.** `engine ٣.٣` (Arabic-Indic) and `engine ².0`
   NORMALISED as versions, so they read as a MISMATCH rather than MALFORMED — and that difference decides
