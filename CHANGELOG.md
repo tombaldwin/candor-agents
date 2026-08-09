@@ -35,8 +35,16 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   token" — an earlier draft of this sentence said that and it was false in two places, both deliberate
   and both worth stating rather than quietly matching:
 
-  - `deny Net[<class>]` is FATAL in candor-classify and is WIDENED here (the filter dropped, the rule
-    enforced unscoped) with a stderr line saying so. This engine emits no `netClass`, so honouring the
+  - `deny Net[<class>]` is HONOURED (scoped, exit 0) by candor-classify for a class it recognises and
+    FATAL only for one it does not; here EVERY bracketed form is WIDENED — the filter dropped, the rule
+    enforced unscoped — with a stderr line saying so. So the divergence is wider than a fatal-set
+    mismatch: a filter candor-classify would apply, this engine discards.
+
+    (This sentence has now been wrong twice. It first claimed parity "token for token"; the correction
+    then said candor-classify treats the whole bracketed form as fatal, which is true only for an
+    unrecognised class — measured: `deny Net[known-telemetry]` and `deny Net[*]` exit 0 there,
+    `deny Net[telemetry]` exits 2. Writing a comparison to another engine without running that engine
+    is what produced both.) This engine emits no `netClass`, so honouring the
     filter would match an absent field and PASS — fail-open — and dropping the whole rule fails open
     too. §3.1's policy-side rule is that a dropped token leaves a WIDER rule standing, so widening is
     the third road and the only closed one. A bracketed **allow** is refused outright rather than
