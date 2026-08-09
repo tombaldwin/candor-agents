@@ -1,0 +1,70 @@
+{
+ "candor": {
+  "version": "agents-0.27.0",
+  "toolchain": "claude-code",
+  "spec": "0.27"
+ },
+ "package": "fleet",
+ "functions": [
+  {
+   "fn": "helper",
+   "loc": "helper.md",
+   "inferred": [
+    "Fs"
+   ],
+   "direct": [
+    "Fs"
+   ],
+   "declared": [],
+   "undeclared": [
+    "Fs"
+   ],
+   "overdeclared": [],
+   "unresolved": false,
+   "unitKind": "agent",
+   "calls": [],
+   "fs": [
+    "read"
+   ],
+   "hash": "fleet#helper"
+  },
+  {
+   "fn": "session",
+   "loc": "(session root)",
+   "inferred": [
+    "Clock",
+    "Exec",
+    "Fs",
+    "Ipc",
+    "Net"
+   ],
+   "direct": [
+    "Clock",
+    "Exec",
+    "Fs",
+    "Ipc",
+    "Net"
+   ],
+   "declared": [],
+   "undeclared": [
+    "Clock",
+    "Exec",
+    "Fs",
+    "Ipc",
+    "Net"
+   ],
+   "overdeclared": [],
+   "unresolved": false,
+   "unitKind": "session",
+   "calls": [
+    "helper"
+   ],
+   "fs": [
+    "read",
+    "write"
+   ],
+   "entryPoint": true,
+   "hash": "fleet#session"
+  }
+ ]
+}
