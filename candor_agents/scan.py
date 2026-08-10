@@ -1575,16 +1575,11 @@ def main():
         arm_gate_json(_pre_gate)
     opts = parse_args(sys.argv[1:])
     if isinstance(opts, int):
-        # ⟨0.27⟩ SPEC §3.1's stream-sink clause: `--gate-json -` cannot be armed (a stream has no stale
-        # previous document, and a placeholder would put two documents in the pipe), but the
-        # document-on-every-exit rule has no exempt cause — an unknown flag or a valueless gate-adjacent
-        # flag exiting 2 here must still leave the fail-closed refusal as stdout's only content, or the
-        # consumer of the stream is thrown back to scraping stderr. File sinks are already armed above.
-        if opts == 2 and _pre_gate == "-":
-            print(json.dumps({"spec": SPEC, "ok": False, "refused": True,
-                              "reason": "the gate did not complete — this run exited on a usage error "
-                                        "before a verdict could be decided; see stderr for the cause"},
-                             indent=1))
+        # ⟨0.27⟩ SPEC §3.1's stream-sink clause used to be honoured HERE, and only here — which is why
+        # it covered the usage errors and nothing else. `_main_streaming_verdict` now guarantees it at
+        # the entry for every exit-2 path, so this copy is gone rather than kept as a second, narrower
+        # statement of the same rule. Every place this family wrote one rule twice, the copies diverged
+        # and the divergence was a silent green.
         return opts
     root, out, fleet, link, nested, as_json, gate_json, policy_path = opts
     # `.candor/config` (spec §3.4): loaded target-anchored BEFORE any scanning, so a configured-but-
@@ -1684,5 +1679,35 @@ def main():
                             reason_seed=linked_classes)
 
 
+def _main_streaming_verdict():
+    """Run `main`, and guarantee the STREAM sink's refusal on every exit-2 path.
+
+    A file sink is armed (`arm_gate_json`) and every later exit inherits the placeholder. A stream has
+    no placeholder, and until now its refusal was written at exactly ONE site — the `parse_args` usage
+    error. Everything the run meets afterwards exits through a bare `sys.exit(2)`, so measured against
+    `--gate-json -`: a nonexistent fleet path, an unreadable `.candor/config` and an unsatisfied engine
+    pin each exited 2 with ZERO bytes, while the other four engines wrote a document on the same inputs.
+
+    ONE SITE, AT THE BOUNDARY, deliberately. Patching the three known causes would leave the fourth
+    nobody has thought of — and this project measured that exact thing today, when a generated argv
+    sweep found an exit-2 cause absent from a hand-written list of twelve. Wrapping the entry covers
+    every cause, present and future, including the ones that are not usage errors at all.
+
+    The previous attempt at this fix edited several sites at once, matched two replacements to one
+    location, and left a `raise` outside its guard so ANY set `CANDOR_CONFIG` exited 2. Hence one edit,
+    at the outermost point, with the measurement repeated after it.
+    """
+    gate = _prescan_sink_and_inputs(sys.argv[1:])[0]
+    try:
+        code = main()
+    except SystemExit as e:                    # every internal `sys.exit(2)`
+        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    if code == 2 and gate == "-" and not _policy.STREAM_VERDICT_WRITTEN:
+        print(json.dumps({"spec": SPEC, "ok": False, "refused": True,
+                          "reason": "the gate did not complete — this run exited before a verdict could "
+                                    "be decided; see stderr for the cause"}, indent=1))
+    return code
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main_streaming_verdict())
