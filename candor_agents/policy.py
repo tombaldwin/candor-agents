@@ -488,6 +488,7 @@ def write_gate_json(path, violations, spec, stdout_is_json=False, zero_match=())
     the run, never silently drop the machine surface a CI consumer is reading."""
     import json
     import sys
+    global STREAM_VERDICT_WRITTEN
     doc = {"spec": spec, "ok": not violations, "violations": violations}
     # ⟨0.27⟩ SPEC §4 `zeroMatch` — the same list the stderr lines carry, in the machine channel.
     # Omitted when empty (byte-compatible verdict); never consulted for `ok` or the exit code.
@@ -498,8 +499,12 @@ def write_gate_json(path, violations, spec, stdout_is_json=False, zero_match=())
         if stdout_is_json:
             sys.stderr.write("candor-agents: --gate-json - conflicts with --json "
                              "(stdout already carries the report envelope)\n")
+            # STDOUT IS ALREADY SPOKEN FOR. The report envelope went out before this, so the entry
+            # wrapper must not append its refusal: two concatenated JSON documents parse as neither, and
+            # the wrapper was added to stop exactly that outcome. Marking the stream written is what tells
+            # it so — without this the fix for an EMPTY stream produced an UNPARSEABLE one.
+            STREAM_VERDICT_WRITTEN = True
             return False
-        global STREAM_VERDICT_WRITTEN
         print(verdict)
         STREAM_VERDICT_WRITTEN = True
         return True

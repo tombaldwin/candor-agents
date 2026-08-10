@@ -386,5 +386,39 @@ def main(argv=None):
                             stdout_is_json=as_json, incomplete=incomplete)
 
 
+def _main_streaming_verdict():
+    """`observe` is a first-class gate surface and had NONE of the §3.3.1 sink layer.
+
+    `--policy` and `--gate-json` are in its CLI, `cli._run` reaches it, and until now it did not arm the
+    sink, did not guard a sink that names an input, did not implement the ⟨0.28⟩ duplicate rule, and had
+    no stream guarantee. Measured: `observe … --gate-json A --gate-json B` on a FIRING gate exited 1,
+    wrote red to B and left A holding a pre-seeded `{"ok": true}`; `--gate-json <policy>` overwrote the
+    policy; and any exit-2 cause with `--gate-json -` gave zero bytes.
+
+    Every one of those was fixed in `scan.py` and nowhere else — the sibling route, one file across. The
+    shared helpers live in scan.py precisely so this cannot drift again.
+    """
+    from candor_agents import policy as _policy
+    from candor_agents.scan import (arm_gate_json, _prescan_sink_and_inputs, _all_gate_sinks,
+                                    _distinct_gate_sinks, refuse_duplicate_gate_sinks, SPEC)
+    argv = sys.argv[1:]
+    gate, _pol = _prescan_sink_and_inputs(argv)
+    named = _distinct_gate_sinks(_all_gate_sinks(argv))
+    if gate:
+        rc = refuse_duplicate_gate_sinks(named, _pol)
+        if rc is not None:
+            return rc
+        arm_gate_json(gate)
+    try:
+        code = main()
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    if code == 2 and gate == "-" and not _policy.STREAM_VERDICT_WRITTEN:
+        print(json.dumps({"spec": SPEC, "ok": False, "refused": True,
+                          "reason": "the gate did not complete — this run exited before a verdict could "
+                                    "be decided; see stderr for the cause"}, indent=1))
+    return code
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main_streaming_verdict())
