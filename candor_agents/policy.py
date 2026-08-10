@@ -499,7 +499,9 @@ def write_gate_json(path, violations, spec, stdout_is_json=False, zero_match=())
             sys.stderr.write("candor-agents: --gate-json - conflicts with --json "
                              "(stdout already carries the report envelope)\n")
             return False
+        global STREAM_VERDICT_WRITTEN
         print(verdict)
+        STREAM_VERDICT_WRITTEN = True
         return True
     try:
         with open(path, "w", encoding="utf-8") as fh:
@@ -509,6 +511,14 @@ def write_gate_json(path, violations, spec, stdout_is_json=False, zero_match=())
         sys.stderr.write(f"candor-agents: could not write --gate-json {path} ({e}) — "
                          f"failing (exit 2), the verdict surface must not vanish silently\n")
         return False
+
+
+# ONE FLAG, SET AT EVERY WRITE TO THE STREAM. `scan.py`'s entry guarantees the stream carries a document
+# on EVERY exit-2 path, which means it must be able to tell "nothing was written" from "a refusal was
+# already written here". Two concatenated JSON objects are not a document — a consumer parsing one gets
+# "extra data" and no verdict at all, which is a worse answer than the zero bytes the guarantee exists to
+# fix. Set here rather than at the exits, so a future write site inherits it by construction.
+STREAM_VERDICT_WRITTEN = False
 
 
 def _write_refusal(gate_json, spec, reason):
@@ -521,7 +531,9 @@ def _write_refusal(gate_json, spec, reason):
         return
     refusal = json.dumps({"spec": spec, "ok": False, "refused": True, "reason": reason}, indent=1)
     if gate_json == "-":
+        global STREAM_VERDICT_WRITTEN
         print(refusal)
+        STREAM_VERDICT_WRITTEN = True
         return
     try:
         with open(gate_json, "w", encoding="utf-8") as fh:
