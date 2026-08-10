@@ -12,6 +12,22 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⚠ `observe` had none of the §3.3.1 sink layer.** It is a first-class gate surface — `--policy` and
+  `--gate-json` are both in its CLI — with no arming, no input guard, no ⟨0.28⟩ duplicate rule and no
+  stream guarantee. Measured: a FIRING gate wrote red to the last sink and left the first holding a
+  pre-seeded `{"ok": true}`; `--gate-json <the policy>` overwrote the policy and exited 0; every exit-2
+  cause with `--gate-json -` gave zero bytes. All of it had been fixed in `scan.py` and nowhere else.
+- **⚠ Two regressions from the same day, both found by a release panel.** The ⟨0.28⟩ per-sink loop copied
+  four of the five input checks and omitted the `.candor/config` SHAPE test, so a duplicate sink naming
+  the config DESTROYED it — through the refusal added to protect operators' files. And `--json
+  --gate-json -` emitted TWO documents (parseable before, `Extra data` after) because the conflict return
+  never marked the stream written, so the entry wrapper appended a refusal after the report envelope.
+- The duplicate rule now lives in ONE function both routes call. It was briefly two — an inline copy plus
+  the extracted helper — and a conformance falsifiability check caught it in minutes: disabling the helper
+  changed nothing on the scan route, so the row pinning it was vacuous.
+- Conformance PART 36 now runs (b18)/(b20)/(b22) and an observe row against this engine, so the rung is
+  pinned five-way rather than claimed five-way.
+
 - **⚠ Three exit-2 causes left `--gate-json -` EMPTY**: a nonexistent fleet path, an unreadable
   `.candor/config`, and an unsatisfied engine pin — while the other four engines wrote a refusal on the
   same inputs. A file sink was already covered (arming leaves a placeholder every later exit inherits); a
