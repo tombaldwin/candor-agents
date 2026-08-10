@@ -1566,6 +1566,64 @@ def _distinct_gate_sinks(all_sinks):
     return out
 
 
+def refuse_duplicate_gate_sinks(named, pre_policy, cfg_policy=None):
+    """⟨0.28⟩ Refuse a repeated `--gate-json`, writing the refusal to every path that is not an INPUT.
+
+    Returns 2 when the run must stop, else None. SHARED by `scan` and `observe`: the rung shipped in
+    scan.py alone and observe kept last-wins, which is the sibling-route mistake this family keeps
+    making. One copy, so the two cannot diverge again.
+    """
+    # SINGLE SINK IS THE SAME QUESTION. §3.3.1 (2) binds one sink as much as two, and `observe` had no
+    # guard at all — `observe … --gate-json <the policy>` overwrote the policy and exited 0. Handling
+    # both arities here is what lets a second route inherit the whole rule from one call.
+    if not named:
+        return None
+    offending = []
+    for s_named in named:
+        bad = False
+        for other, flag in ((pre_policy, "--policy"),
+                            (os.environ.get("CANDOR_POLICY"), "CANDOR_POLICY"),
+                            (os.environ.get("CANDOR_CONFIG"), "CANDOR_CONFIG"),
+                            (cfg_policy, "the config's `policy`")):
+            if other and _same_artifact(s_named, other):
+                print(f"candor-agents: --gate-json {s_named} names the SAME FILE as {flag} {other} — "
+                      f"refusing (exit 2). Nothing was written there.", file=sys.stderr)
+                bad = True
+        if s_named != "-":
+            sabs = os.path.abspath(s_named)
+            if os.path.basename(sabs) == "config" and os.path.basename(os.path.dirname(sabs)) == ".candor":
+                print(f"candor-agents: --gate-json {s_named} is a .candor/config — refusing (exit 2). "
+                      f"Nothing was written there.", file=sys.stderr)
+                bad = True
+        if bad:
+            offending.append(s_named)
+    # The exemption covers the offending PATH, not the run.
+    safe = [x for x in named if x not in offending]
+    if not safe:
+        return 2                      # every named sink was an input: refuse, having written nothing
+    if len(named) < 2:
+        return None                   # one sink, not an input: nothing to refuse here
+    listed = ", ".join(named)
+    print(f"candor-agents: --gate-json given more than once ({listed}) — refusing (exit 2). A gate "
+          f"publishes ONE verdict. Naming two sinks says where it goes twice, and the reader of the path "
+          f"that loses cannot tell it lost. Name one, or run the gate twice.", file=sys.stderr)
+    doc = json.dumps({"spec": SPEC, "ok": False, "refused": True,
+                      "reason": f"--gate-json was given more than once ({listed}) — a run publishes one "
+                                f"verdict to one sink"}, indent=1)
+    for s_named in safe:
+        if s_named == "-":
+            _policy.STREAM_VERDICT_WRITTEN = True
+            print(doc)
+            continue
+        try:
+            with open(s_named, "w", encoding="utf-8") as fh:
+                fh.write(doc + "\n")
+        except OSError as e:
+            print(f"candor-agents: could not write the refusal to --gate-json {s_named} ({e})",
+                  file=sys.stderr)
+    return 2
+
+
 def main():
     # ── SPEC §3.3.1 ⟨0.27⟩ ARM FIRST, AND NEVER OVER AN INPUT — before `parse_args`, whose own exits
     # would otherwise leave a stale green behind.
@@ -1605,45 +1663,15 @@ def main():
             raise
         except Exception:
             pass   # lenient: the real load refuses on its own terms — see _ConfigUnreadable
-        # ⟨0.28⟩ A REPEATED `--gate-json` IS REFUSED, AND EVERY PATH NAMED GETS THE REFUSAL. After the
-        # input-collision guards above and before arming: a sink that is an INPUT is refused having
-        # written nothing, and that exemption outranks this one — this write must not be the thing that
-        # destroys a policy. Refusing without telling the LOSING sink is most of the defect: its reader
-        # has no way to learn that it lost, so whatever it held before is published as this run's answer.
-        _named = _distinct_gate_sinks(_all_gate_sinks(sys.argv[1:]))
-        if len(_named) > 1:
-            _list = ", ".join(_named)
-            # Each named sink gets the SAME input checks `_pre_gate` got above — never a comparison of
-            # the sinks against each other, which was the first draft and was wrong: one of them IS
-            # `_pre_gate`, so the self-comparison tripped the guard and returned before anything was
-            # written, leaving exactly the stale green this refusal exists to replace.
-            for _s in _named:
-                for _other, _flag in ((_pre_policy, "--policy"),
-                                      (os.environ.get("CANDOR_POLICY"), "CANDOR_POLICY"),
-                                      (os.environ.get("CANDOR_CONFIG"), "CANDOR_CONFIG"),
-                                      (_cfg_pol_for_guard, "the config's `policy`")):
-                    rc = _refuse_sink_over_input(_s, _other, _flag)
-                    if rc is not None:
-                        return rc
-            print(f"candor-agents: --gate-json given more than once ({_list}) — refusing (exit 2). A gate "
-                  f"publishes ONE verdict. Naming two sinks says where it goes twice, and the reader of "
-                  f"the path that loses cannot tell it lost. Name one, or run the gate twice.",
-                  file=sys.stderr)
-            _doc = json.dumps({"spec": SPEC, "ok": False, "refused": True,
-                               "reason": f"--gate-json was given more than once ({_list}) — a run "
-                                         f"publishes one verdict to one sink"}, indent=1)
-            for _s in _named:
-                if _s == "-":
-                    _policy.STREAM_VERDICT_WRITTEN = True
-                    print(_doc)
-                    continue
-                try:
-                    with open(_s, "w", encoding="utf-8") as fh:
-                        fh.write(_doc + "\n")
-                except OSError as e:
-                    print(f"candor-agents: could not write the refusal to --gate-json {_s} ({e})",
-                          file=sys.stderr)
-            return 2
+        # ⟨0.28⟩ A REPEATED `--gate-json` IS REFUSED — through the SHARED helper, which `observe` also
+        # calls. This block used to be an inline copy: extracting the helper for observe and leaving the
+        # copy here meant the rule existed twice in one file, and a conformance falsifiability check
+        # proved it immediately — disabling the helper changed nothing on the scan route, so the row
+        # pinning it was vacuous. One copy, or the two drift.
+        _rc_dup = refuse_duplicate_gate_sinks(
+            _distinct_gate_sinks(_all_gate_sinks(sys.argv[1:])), _pre_policy, _cfg_pol_for_guard)
+        if _rc_dup is not None:
+            return _rc_dup
         arm_gate_json(_pre_gate)
     opts = parse_args(sys.argv[1:])
     if isinstance(opts, int):
