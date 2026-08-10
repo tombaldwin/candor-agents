@@ -1535,6 +1535,37 @@ def _prescan_sink_and_inputs(argv):
     return gate, policy
 
 
+def _all_gate_sinks(argv):
+    """SPEC §3.3.1 ⟨0.28⟩ — every `--gate-json` this argv names, duplicates kept.
+
+    `_prescan_sink_and_inputs` keeps only the last, which is what the parse honours. That is the
+    behaviour this rung refuses: measured across the four code engines, three wrote the verdict to the
+    LAST path and one refused — and all four left the FIRST path exactly as they found it, so a previous
+    run's `{"ok": true}` survived a gate that fired.
+    """
+    out = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--gate-json" and i + 1 < len(argv):
+            v = argv[i + 1]
+            if v == "-" or not v.startswith("--"):
+                out.append(v)
+                i += 2
+                continue
+        i += 1
+    return out
+
+
+def _distinct_gate_sinks(all_sinks):
+    """Two spellings of one path are ONE sink (the §3.3.1 artifact rule); two artifacts are the
+    ambiguity this refuses."""
+    out = []
+    for s in all_sinks:
+        if not any(k == s or (k != "-" and s != "-" and _same_artifact(k, s)) for k in out):
+            out.append(s)
+    return out
+
+
 def main():
     # ── SPEC §3.3.1 ⟨0.27⟩ ARM FIRST, AND NEVER OVER AN INPUT — before `parse_args`, whose own exits
     # would otherwise leave a stale green behind.
@@ -1560,11 +1591,13 @@ def main():
         # green. The config is read LENIENTLY here — this runs before the real load and must not
         # pre-empt its refusal.
         _pre_root = next((a for a in sys.argv[1:] if not a.startswith("-")), ".")
+        _cfg_pol_for_guard = None
         try:
             _cfg, _base = load_candor_config(_pre_root, lenient=True)
             _cfg_pol = _cfg.get("policy")
             if _cfg_pol and not os.path.isabs(_cfg_pol):
                 _cfg_pol = os.path.join(_base, _cfg_pol)
+            _cfg_pol_for_guard = _cfg_pol
             rc = _refuse_sink_over_input(_pre_gate, _cfg_pol, "the config's `policy`")
             if rc is not None:
                 return rc
@@ -1572,6 +1605,45 @@ def main():
             raise
         except Exception:
             pass   # lenient: the real load refuses on its own terms — see _ConfigUnreadable
+        # ⟨0.28⟩ A REPEATED `--gate-json` IS REFUSED, AND EVERY PATH NAMED GETS THE REFUSAL. After the
+        # input-collision guards above and before arming: a sink that is an INPUT is refused having
+        # written nothing, and that exemption outranks this one — this write must not be the thing that
+        # destroys a policy. Refusing without telling the LOSING sink is most of the defect: its reader
+        # has no way to learn that it lost, so whatever it held before is published as this run's answer.
+        _named = _distinct_gate_sinks(_all_gate_sinks(sys.argv[1:]))
+        if len(_named) > 1:
+            _list = ", ".join(_named)
+            # Each named sink gets the SAME input checks `_pre_gate` got above — never a comparison of
+            # the sinks against each other, which was the first draft and was wrong: one of them IS
+            # `_pre_gate`, so the self-comparison tripped the guard and returned before anything was
+            # written, leaving exactly the stale green this refusal exists to replace.
+            for _s in _named:
+                for _other, _flag in ((_pre_policy, "--policy"),
+                                      (os.environ.get("CANDOR_POLICY"), "CANDOR_POLICY"),
+                                      (os.environ.get("CANDOR_CONFIG"), "CANDOR_CONFIG"),
+                                      (_cfg_pol_for_guard, "the config's `policy`")):
+                    rc = _refuse_sink_over_input(_s, _other, _flag)
+                    if rc is not None:
+                        return rc
+            print(f"candor-agents: --gate-json given more than once ({_list}) — refusing (exit 2). A gate "
+                  f"publishes ONE verdict. Naming two sinks says where it goes twice, and the reader of "
+                  f"the path that loses cannot tell it lost. Name one, or run the gate twice.",
+                  file=sys.stderr)
+            _doc = json.dumps({"spec": SPEC, "ok": False, "refused": True,
+                               "reason": f"--gate-json was given more than once ({_list}) — a run "
+                                         f"publishes one verdict to one sink"}, indent=1)
+            for _s in _named:
+                if _s == "-":
+                    _policy.STREAM_VERDICT_WRITTEN = True
+                    print(_doc)
+                    continue
+                try:
+                    with open(_s, "w", encoding="utf-8") as fh:
+                        fh.write(_doc + "\n")
+                except OSError as e:
+                    print(f"candor-agents: could not write the refusal to --gate-json {_s} ({e})",
+                          file=sys.stderr)
+            return 2
         arm_gate_json(_pre_gate)
     opts = parse_args(sys.argv[1:])
     if isinstance(opts, int):
