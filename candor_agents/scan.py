@@ -1668,6 +1668,21 @@ def main():
         # copy here meant the rule existed twice in one file, and a conformance falsifiability check
         # proved it immediately — disabling the helper changed nothing on the scan route, so the row
         # pinning it was vacuous. One copy, or the two drift.
+        # ⟨0.28⟩ `--json` BESIDE `--gate-json -`: a report and a verdict cannot share one stream. This
+        # engine already refused the combination — but from inside `write_gate_json`, i.e. AFTER the report
+        # envelope had gone to stdout, so the stream still carried a document the consumer did not ask for
+        # and the exit-2 story arrived second. Decided here instead, so the refusal is stdout's only
+        # content.
+        if _pre_gate == "-" and "--json" in sys.argv[1:]:
+            print("candor-agents: --json and --gate-json - both name STDOUT — refusing (exit 2). `--json` "
+                  "writes the REPORT there and `--gate-json -` the VERDICT, so this would put two JSON "
+                  "documents on one stream and a consumer parsing it gets neither. Send one to a file, or "
+                  "run the scan twice.", file=sys.stderr)
+            _policy.STREAM_VERDICT_WRITTEN = True
+            print(json.dumps({"spec": SPEC, "ok": False, "refused": True,
+                              "reason": "--json and --gate-json - both name stdout — a report and a "
+                                        "verdict cannot share one stream"}, indent=1))
+            return 2
         _rc_dup = refuse_duplicate_gate_sinks(
             _distinct_gate_sinks(_all_gate_sinks(sys.argv[1:])), _pre_policy, _cfg_pol_for_guard)
         if _rc_dup is not None:
