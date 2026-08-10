@@ -11,6 +11,20 @@ rides the spec ladder on its own schedule (it never holds the four code engines'
 major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
+
+- **⚠ Three exit-2 causes left `--gate-json -` EMPTY**: a nonexistent fleet path, an unreadable
+  `.candor/config`, and an unsatisfied engine pin — while the other four engines wrote a refusal on the
+  same inputs. A file sink was already covered (arming leaves a placeholder every later exit inherits); a
+  stream has no placeholder, and its refusal was written at exactly ONE site, the `parse_args` usage
+  error. Everything met afterwards left through a bare `sys.exit(2)`.
+
+  Fixed with ONE wrapper at the module entry rather than three patched sites, because the fourth cause
+  nobody enumerated is the one that matters — measured the same day, when a generated argv sweep found an
+  exit-2 cause absent from a hand-written list of twelve. The narrower copy inside `main` is removed
+  rather than kept beside it. Conformance PART 36 rows (b4)/(b5)/(b6) pin the three, and were proven to
+  fail against the pre-fix entry before being believed.
+- **⟨0.28⟩ a repeated `--gate-json` is refused, and every path named gets the refusal** (SPEC §3.3.1). Two
+  spellings of one path stay ONE sink; a sink that is an input is refused having written nothing.
 ## [0.27.0] — 2026-08-07
 
 
