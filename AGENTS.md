@@ -7,6 +7,13 @@ language-agnostic consumption contract is
 [candor-spec/AGENTS.md](https://github.com/tombaldwin/candor-spec/blob/main/AGENTS.md); this file
 is the fleet-specific surface.
 
+> **The fleet is rarely the only thing worth scanning — start at the umbrella:**
+> [candor/AGENTS.md](https://github.com/tombaldwin/candor/blob/main/AGENTS.md). `candor` is one
+> command in front of every engine — this one over the fleet, plus JVM, Rust, TypeScript and Swift
+> over the code the fleet's agents actually touch. `candor update` installs and upgrades them, and
+> `candor doctor` checks that every installed engine agrees on a spec version. A fleet answer alone
+> says what the agents MAY do, and nothing about what their tools reach.
+
 > **This document ships inside the package.** `candor-agents --agents` prints the contract for the
 > *installed* version — always prefer that over a vendored or fetched copy, which can describe a
 > different candor-agents than the one you are running.
