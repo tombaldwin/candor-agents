@@ -12,6 +12,11 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.28.0] — 2026-08-14
+
+- **AGENTS.md points at the umbrella** — this engine answers what a fleet MAY do, and says nothing about
+  what the code its agents touch actually reaches; the umbrella is where the other four engines are.
+
 - **⚠ `observe` had none of the §3.3.1 sink layer.** It is a first-class gate surface — `--policy` and
   `--gate-json` are both in its CLI — with no arming, no input guard, no ⟨0.28⟩ duplicate rule and no
   stream guarantee. Measured: a FIRING gate wrote red to the last sink and left the first holding a
