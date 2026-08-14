@@ -14,6 +14,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## [0.28.0] — 2026-08-14
 
+- **Two committed scan OUTPUTS removed** (`report.agc.Fleet.json`, `report.fixture.Fleet.json`). Nothing
+  referenced them; the `.gitignore` meant to exclude them named a single package (`report.fleet.Fleet.*`)
+  and missed these two, so they were committed by accident and went stale at the next floor bump, where
+  release-preflight flagged them as artifacts declaring the previous contract. Pattern widened to
+  `report.*.Fleet.*`.
+- **The pyproject description** named the previous floor.
+
 - **AGENTS.md points at the umbrella** — this engine answers what a fleet MAY do, and says nothing about
   what the code its agents touch actually reaches; the umbrella is where the other four engines are.
 
