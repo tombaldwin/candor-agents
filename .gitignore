@@ -3,4 +3,8 @@ __pycache__/
 *.egg-info/
 *.pyc
 build/
-report.fleet.Fleet.*
+# Scan OUTPUTS, never inputs. This pattern named one package (`fleet`) and so let two other scans'
+# reports — `report.agc.Fleet.json`, `report.fixture.Fleet.json` — be committed by accident in
+# b5de79a. They were referenced by nothing and went stale at the next floor bump, where
+# release-preflight flagged them as engine artifacts declaring the previous contract.
+report.*.Fleet.*
