@@ -12,6 +12,16 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.28.2] — 2026-08-15
+
+_A cardinal-sin fix. 0.28.1's body-less-declaration pass reopened, in two shapes, the hole it was
+written to close — both found by a max-effort review of that patch, both live on npm and crates.io
+until this release. The spec floor is unchanged at 0.28._
+
+- **Version-aligned only, no functional change.** The cardinal-sin fix this release carries is in
+  candor-ts; `release-preflight` [4] requires every engine's build version to agree, so this arm
+  moves with the family. The spec floor is unchanged at 0.28.
+
 ## [0.28.1] — 2026-08-15
 
 - **Version-aligned only, no functional change.** `release-preflight` [4] requires every engine's
