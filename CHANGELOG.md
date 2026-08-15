@@ -12,6 +12,12 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.28.1] — 2026-08-15
+
+- **Version-aligned only, no functional change.** `release-preflight` [4] requires every engine's
+  build version to agree, so this arm moves with the family's post-release review patch even
+  though none of those fixes were here. The spec floor is unchanged at 0.28.
+
 ## [0.28.0] — 2026-08-14
 
 - **Two committed scan OUTPUTS removed** (`report.agc.Fleet.json`, `report.fixture.Fleet.json`). Nothing
