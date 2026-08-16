@@ -224,6 +224,22 @@ def parse_policy(text):
             if not a or arrow != "->" or not b:
                 warn("malformed forbid (want `forbid <scope> -> <scope>`)"); continue
             forbid.append({"from": a, "to": b, "raw": line})
+        elif t[0] == "only":
+            # ⟨0.29⟩ THE PERMISSION FORM — SPEC §6.2. This engine analyses an AGENT FLEET (declared vs
+            # observed tool reach), not a call graph, so it has no `from`-reaches-`to` relation to evaluate
+            # `only` against and does not implement it.
+            #
+            # IT REFUSES RATHER THAN DROPPING, and the distinction is the whole point. Dropped, it fell to
+            # the `unknown rule kind` arm below with `fatal=False` — a warning on stderr and a GREEN
+            # verdict over a policy whose permission rule was never enforced. `only` exists precisely
+            # because `forbid` fails open; silently ignoring it is that failure in its purest form, in the
+            # fifth §6.2 implementation nobody counted when this rung was called "four-way". A rule this
+            # engine cannot answer is exactly what §3.1's answerability MUST covers.
+            warn("`only` is a §6.2 permission rule this engine cannot evaluate — it analyses an agent "
+                 "fleet, not a call graph, so it has no dependency relation to check the permission "
+                 "against. Refusing rather than ignoring: a permission rule that is silently dropped "
+                 "leaves a gate green over an unenforced boundary. Gate `only` with a code engine",
+                 fatal=True)
         else:
             warn("unknown rule kind")
     return {"deny": deny, "allow": allow, "forbid": forbid}

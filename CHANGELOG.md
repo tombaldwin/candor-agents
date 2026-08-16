@@ -12,6 +12,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⟨0.29⟩ `only` is REFUSED, not dropped.** SPEC §6.2's permission form landed in the four code engines;
+  this is the FIFTH §6.2 implementation, and it fell to the `unknown rule kind` arm — a warning on stderr
+  and a GREEN verdict over a policy whose permission rule was never enforced. `only` exists precisely
+  because `forbid` fails open, so silently ignoring it is that failure in its purest form. This engine
+  analyses an agent fleet, not a call graph, so it has no dependency relation to evaluate the rule against
+  and refuses under §3.1's answerability rule rather than pretending. Found by review, which counted the
+  engines and got five where the rung had said four.
 ## [0.28.2] — 2026-08-15
 
 _A cardinal-sin fix. 0.28.1's body-less-declaration pass reopened, in two shapes, the hole it was
