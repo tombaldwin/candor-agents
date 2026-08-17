@@ -25,8 +25,6 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   fails if any scan-route unit carries `hosts`/`cmds`/`paths`/`tables`, and names the call site that must
   change first. A comment alone rots; this rung already shipped one that contradicted its code for weeks.
 
-## Unreleased
-
 - **⟨0.29⟩ `only` is REFUSED, not dropped.** SPEC §6.2's permission form landed in the four code engines;
   this is the FIFTH §6.2 implementation, and it fell to the `unknown rule kind` arm — a warning on stderr
   and a GREEN verdict over a policy whose permission rule was never enforced. `only` exists precisely
