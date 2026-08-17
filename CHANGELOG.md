@@ -14,6 +14,9 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## [0.29.0] — 2026-08-17
 
+- **The packaging description names the current contract (candor-spec 0.29).** It is what PyPI and
+  `pipx` show, so a stale floor there is the version claim a user reads first.
+
 - **⟨0.29⟩ the precondition under which `scan`'s gate may omit `incomplete` is now ASSERTED, not assumed.**
   `observe.py` passes `incomplete=` to the shared `run_gate`; `scan.py` does not, and today that is
   correct rather than an oversight — `propagate`'s contract says the scan route carries effects and fs
