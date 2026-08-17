@@ -1790,6 +1790,17 @@ def main():
     # ONE shared run_gate() — scan and observe must never diverge in wording or exit-code contract.
     # `reason_seed`: the linked pseudo-nodes' classes. The cross edge is in `callgraph`, so the
     # `Unknown` reach already crosses the boundary; this is what makes its CLASS cross with it.
+    # ⟨0.29⟩ NO `incomplete=` HERE, DELIBERATELY, and the reason is a PRECONDITION rather than a
+    # judgement: `propagate`'s contract above says this route carries effects and fs kinds only, while
+    # observe.py carries hosts/cmds/paths — so a scan-route report has NO literal surface, every `allow`
+    # rule already fails closed with "no visible literal", and there is nothing a benign literal could
+    # certify. Measured, including across `--link` against a code report whose entry declares
+    # `incomplete: ["Fs"]`.
+    #
+    # THE DAY THIS ROUTE GROWS A LITERAL SURFACE, that stops being true and a linked report's `incomplete`
+    # will stop crossing — the ⟨0.29⟩ dep-join defect (PART 50) one join over. The precondition is
+    # ASSERTED in test.py (a comment alone rots; this rung already shipped one that contradicted the code
+    # for weeks), and that row names this call site.
     return _policy.run_gate(policy_path, gate_json, functions, callgraph, SPEC, stdout_is_json=as_json,
                             reason_seed=linked_classes)
 
