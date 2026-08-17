@@ -2649,6 +2649,39 @@ check("log-gate: --log off is a no-op (exit 0, nothing written)",
 
 print()
 
+# ── ⟨0.29⟩ THE PRECONDITION UNDER WHICH `scan`'s GATE MAY OMIT `incomplete` ──────────────────────────
+# `observe.py` passes `incomplete=` to the shared `run_gate`; `scan.py` does NOT, and today that is
+# CORRECT rather than an oversight: `propagate`'s own contract says the scan route carries effects and
+# fs kinds only, while observe carries hosts/cmds/paths too. With no literal surface in a scan-route
+# report there is nothing for a benign literal to certify from, so every `allow` rule already fails
+# closed with "no visible literal" — measured, including across `--link` with a code report whose entry
+# declares `incomplete: ["Fs"]`.
+#
+# THAT MAKES IT A LATENT HOLE, NOT A LIVE ONE, and latent is exactly the shape this project keeps being
+# bitten by: the day the scan route grows a literal surface (the declared half of the drift comparison
+# is the obvious candidate — observe already has one), a linked report's `incomplete` will stop crossing
+# and a benign declared literal will certify a masked locator. The ⟨0.29⟩ dep-join defect (PART 50) one
+# join over.
+#
+# A COMMENT ALONE ROTS — this rung has already shipped one that contradicted the code for weeks. So the
+# precondition is asserted instead: if a scan-route unit ever carries a literal surface, THIS row fails
+# and names the call site that must change.
+_lat = _mkd()
+os.makedirs(os.path.join(_lat, ".claude", "agents"), exist_ok=True)
+open(os.path.join(_lat, ".claude", "agents", "w.md"), "w").write(
+    "---\nname: writer\ntools: Bash\n---\nAn agent that writes files.\n")
+_lo = os.path.join(_lat, "o")
+subprocess.run([sys.executable, "-m", "candor_agents.scan", _lat, "--out", _lo, "--fleet", "t"],
+               capture_output=True, text=True)
+_latrep = json.load(open(f"{_lo}.t.Fleet.json"))
+_latkeys = set().union(*[set(f.keys()) for f in _latrep["functions"]]) if _latrep["functions"] else set()
+check("⟨0.29⟩ scan-route units carry NO literal surface — the precondition letting scan's run_gate omit "
+      "`incomplete`; if this fails, pass an incomplete map at scan.py's run_gate call (see the comment "
+      "there) before shipping the surface",
+      not (_latkeys & {"hosts", "cmds", "paths", "tables"}), f"surfaces present: {sorted(_latkeys)}")
+
+print()
+
 
 print(f"test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -12,6 +12,21 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⟨0.29⟩ the precondition under which `scan`'s gate may omit `incomplete` is now ASSERTED, not assumed.**
+  `observe.py` passes `incomplete=` to the shared `run_gate`; `scan.py` does not, and today that is
+  correct rather than an oversight — `propagate`'s contract says the scan route carries effects and fs
+  kinds only, while observe also carries hosts/cmds/paths, so a scan-route report has no literal surface
+  and every `allow` rule already fails closed with *"no visible literal"*. Measured, including across
+  `--link` against a code report whose entry declares `incomplete: ["Fs"]`.
+
+  That makes it a LATENT hole: the day this route grows a literal surface (the declared half of the drift
+  comparison is the obvious candidate), a linked report's `incomplete` stops crossing and a benign
+  declared literal certifies a masked locator — the ⟨0.29⟩ dep-join defect one join over. A test now
+  fails if any scan-route unit carries `hosts`/`cmds`/`paths`/`tables`, and names the call site that must
+  change first. A comment alone rots; this rung already shipped one that contradicted its code for weeks.
+
+## Unreleased
+
 - **⟨0.29⟩ `only` is REFUSED, not dropped.** SPEC §6.2's permission form landed in the four code engines;
   this is the FIFTH §6.2 implementation, and it fell to the `unknown rule kind` arm — a warning on stderr
   and a GREEN verdict over a policy whose permission rule was never enforced. `only` exists precisely
