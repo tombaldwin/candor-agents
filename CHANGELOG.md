@@ -12,6 +12,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **Family build bump only — no engine changes in this repo.** 0.29.1 is a WITHIN-SPEC patch cut across
+  the family; the floor is unchanged at 0.29 and this engine's behaviour is identical to 0.29.0. The
+  patch carries fixes in candor-ts, candor-java and candor-rust (see their changelogs) plus the Claude
+  Code stop-hook work in the umbrella. Written explicitly because an EMPTY `## Unreleased` is left
+  alone by the stager, and `release.sh` then falls through to "the newest non-empty section" — which
+  would have published a v0.29.1 release carrying 0.29.0's notes verbatim.
+
 ## [0.29.0] — 2026-08-17
 
 - **The packaging description names the current contract (candor-spec 0.29).** It is what PyPI and
