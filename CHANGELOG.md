@@ -12,6 +12,9 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **Spec floor 0.30.** The declaration this build emits as `candor.spec` moves with the family; see
+  candor-spec's changelog for the rung.
+
 - **Spec floor moved to 0.30.** No behaviour change in this engine: ⟨0.30⟩ governs the code engines'
   gate verdict over out-of-scope findings, a surface candor-agents does not emit. The declared `spec`
   moves with the family so a consumer reading it against a 0.30 report is not told the producer is older
