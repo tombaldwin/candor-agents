@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.31.0] — 2026-08-20
+
 - **⟨0.31⟩ — this engine is unchanged.** The rung's two halves are the scan route's unevaluable-target
   refusal and the `netPartners` disclosure, and neither touches a domain engine whose units are agents
   rather than functions. The declared spec moves to `0.31` so the family agrees on one floor; nothing
