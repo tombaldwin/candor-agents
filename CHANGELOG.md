@@ -12,6 +12,19 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⟨0.31⟩ — this engine is unchanged.** The rung's two halves are the scan route's unevaluable-target
+  refusal and the `netPartners` disclosure, and neither touches a domain engine whose units are agents
+  rather than functions. The declared spec moves to `0.31` so the family agrees on one floor; nothing
+  about what this engine analyses or reports changed.
+
+  Written by hand rather than left empty on purpose: `release-stage.sh` skips a changelog whose
+  `## Unreleased` is empty ("nothing would ship unlabelled"), and `release.sh` then refuses to publish a
+  release with no notes. An empty section is not a quiet no-op here — it stops the cut.
+
+- **CI: every workflow declares `timeout-minutes`.** Gated by `release-preflight [7b]`. Without it
+  GitHub's six-hour default applies, so a stuck runner blocks a release while looking exactly like a slow
+  job — measured twice at 3h45m and 54m against runtimes of minutes.
+
 ## [0.30.0] — 2026-08-19
 
 - **Spec floor 0.30.** The declaration this build emits as `candor.spec` moves with the family; see
