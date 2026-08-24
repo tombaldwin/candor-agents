@@ -12,6 +12,21 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⟨0.32⟩ — this engine is unchanged; only the declared spec moves.** The rung is about the CODE engines'
+  file set: a class the scan did not read makes the verdict INCOMPLETE, the carve-out keys on the policy in
+  force rather than on the producing scan's history, a multi-report verdict joins by `hash` instead of bare
+  `fn`, and `Exec` reaches the subprocess capability rather than only the launch. None of those has a
+  surface in a domain engine whose units are agents: candor-agents reads a declared manifest and the
+  observed tool calls beside it, so it has no excluded-file census, no peek, and no cross-report join. The
+  `SPEC` declaration in `candor_agents/scan.py` moves to `0.32` so the family agrees on one floor; nothing
+  about what this engine analyses or reports changed.
+
+- Written by hand rather than left empty ON PURPOSE, and the hazard is armed rather than theoretical:
+  `_stage_changelogs.py` SKIPS a changelog whose `## Unreleased` is empty ("nothing would ship
+  unlabelled"), so no `## [0.32.0]` heading is created — and `release.sh` then falls through to the newest
+  NON-EMPTY section, which is 0.31.0's. An empty section does not publish nothing here; it publishes the
+  PREVIOUS version's notes under this version's tag.
+
 ## [0.31.0] — 2026-08-20
 
 - `pyproject.toml`'s description said `candor-spec 0.30` — a contract claim, and the one that reaches
