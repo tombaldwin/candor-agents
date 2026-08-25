@@ -23,6 +23,21 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   `SPEC` declaration in `candor_agents/scan.py` moves to `0.32` so the family agrees on one floor; nothing
   about what this engine analyses or reports changed.
 
+- **`pyproject.toml`'s description had been left behind by two floor bumps running, and nothing read it.**
+  It is a CONTRACT CLAIM — what PyPI and `pipx` show — and it said `candor-spec 0.31` while
+  `candor_agents/scan.py` said `SPEC = "0.32"`. 124012a caught the same string one bump earlier, by hand,
+  from the umbrella's preflight rather than from this suite. Every spec assertion in `test.py` reads the
+  report ENVELOPE, and the envelope was correct each time, so the packaging text drifted unwatched.
+
+  Now swept, and UNIVERSALLY rather than by grepping the current value: a positive `contains "spec 0.32"`
+  is satisfied by one correct mention and stays blind to a second, stale one in the same file — which is
+  exactly how candor-rust's and candor-java's READMEs kept a `"spec": "0.31"` gate-output example through
+  this same bump. Every `spec <X.Y>` in README.md, AGENTS.md and pyproject.toml — prose, hyphenated, or
+  `"spec": "X.Y"` — must equal `scan.SPEC`, DERIVED, never a literal. A CONTROL runs first, because a
+  pattern that stopped matching finds nothing and so does a clean sweep. README's `(spec 0.8)` note on the
+  CI surface is a historical marker and takes the family's `(spec 0.8, informative)` form, which is what
+  the exemption keys on — not a list of tolerated old versions.
+
 - Written by hand rather than left empty ON PURPOSE, and the hazard is armed rather than theoretical:
   `_stage_changelogs.py` SKIPS a changelog whose `## Unreleased` is empty ("nothing would ship
   unlabelled"), so no `## [0.32.0]` heading is created — and `release.sh` then falls through to the newest

@@ -43,7 +43,7 @@ python3 test.py    # 276 behavioral checks, incl. the unmodified-candor-query in
 python3 fuzz.py    # soundness fuzzer (default 40 seeds = 80 lanes), teeth verified per mechanism
 ```
 
-**The CI surface (spec 0.8):** `scan` and `observe` take `--policy <file>` (honouring
+**The CI surface (spec 0.8, informative):** `scan` and `observe` take `--policy <file>` (honouring
 `$CANDOR_POLICY`; exit 1 on a violation, 2 when the policy is unreadable — never a silent
 gate-pass) and `--gate-json <file>` — the structured verdict
 `{spec, ok, violations:[{rule, fn, effects, detail}]}` (spec §3.3 ⟨0.8⟩), emitted from the same
