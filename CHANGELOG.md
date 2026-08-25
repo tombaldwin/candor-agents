@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.32.0] — 2026-08-25
+
 - **⟨0.32⟩ — this engine is unchanged; only the declared spec moves.** The rung is about the CODE engines'
   file set: a class the scan did not read makes the verdict INCOMPLETE, the carve-out keys on the policy in
   force rather than on the producing scan's history, a multi-report verdict joins by `hash` instead of bare
