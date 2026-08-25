@@ -14,6 +14,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## [0.32.1] — 2026-08-25
 
+- Build version → 0.32.1; the `SPEC` declaration does not move.
+
 - **Family build bump — the domain engine is unchanged, and the spec it declares does not move.** `SPEC`
   in `candor_agents/scan.py` stays `0.32`, `pyproject.toml`'s description with it; only the build id
   moves. Nothing about the declared-versus-observed drift analysis changed, and no drift result differs.
