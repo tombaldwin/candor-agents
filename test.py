@@ -1032,6 +1032,49 @@ check("the wheel ships the candor_agents package (so agentsmd + the modules are 
       '"candor_agents"' in open(os.path.join(HERE, "pyproject.toml")).read()
       and "py-modules" not in open(os.path.join(HERE, "pyproject.toml")).read()
       and os.path.exists(os.path.join(HERE, "candor_agents", "agentsmd.py")))
+
+# ── EVERY spec-version claim in the shipped text must equal the spec this build speaks ────────────
+#
+# `pyproject.toml`'s DESCRIPTION is a contract claim — it is what PyPI and `pipx` show — and it has now
+# been left behind by two floor bumps in a row (124012a caught 0.30 late; the ⟨0.32⟩ bump left it saying
+# 0.31 while `scan.SPEC` said 0.32). Nothing in this suite read it, because every other spec assertion
+# here reads the ENVELOPE, and the envelope was right each time.
+#
+# The check is UNIVERSAL, not a grep for the current value: a positive `contains "spec 0.32"` is
+# satisfied by one correct mention and stays blind to a second, stale one in the same file, which is
+# exactly how candor-rust's and candor-java's READMEs kept a `"spec": "0.31"` gate-output example
+# through the same bump. Ported from candor-swift's AgentsDocDriftTests, which was clean for that reason.
+#
+# DERIVED from `scan.SPEC`, like `_expect_hdr` below: a literal here breaks on every floor bump and its
+# fix each release is to edit a literal in a test — the hand-edit class that cost the 0.25 release.
+#
+# `spec` + one to four of [-: "] + <digits>.<digits> covers `spec 0.32`, `spec-0.32` and
+# `"spec": "0.32"`, while `spec §6.1` — a SECTION reference — never reads as a version. Historical
+# markers naming the rung a feature arrived at keep the family's `(spec X.Y, informative)` form; a note
+# about the past must not move with the floor.
+_claim = re.compile(r'spec[-: "]{1,4}([0-9]+\.[0-9]+)')
+def _spec_claims(text):
+    return [(m.group(1), text[m.start():m.end() + 16]) for m in _claim.finditer(text)
+            if not text[m.end():m.end() + 16].startswith(", informative)")]
+# THE CONTROL FIRST. A pattern that stopped matching, or an exemption that matched everything, finds
+# nothing — which is what a CLEAN sweep also finds. Silence is only evidence once the instrument has
+# been shown to fire, so calibrate before reading it.
+_ctl = [v for v, _ in _spec_claims(
+    'carrying `unitKind` (spec 0.8, informative); ordinary\n'
+    'This project is on candor-agents 9.9.9 (spec 0.9).\n'
+    'a section reference, spec §6.1, is not a version\n'
+    'the gate prints { "spec": "0.7", "ok": true }\n'
+    'and the hyphenated attributive spec-0.6 form\n')]
+check("CONTROL: the spec-claim sweep discriminates (JSON + hyphenated + prose seen, `spec §6.1` is "
+      "not a version, `, informative)` exempted) — without this the sweep below is vacuous",
+      _ctl == ["0.9", "0.7", "0.6"], str(_ctl))
+_stale = [(d, v, ctx) for d in ("README.md", "AGENTS.md", "pyproject.toml")
+          for v, ctx in _spec_claims(open(os.path.join(HERE, d), encoding="utf-8").read())
+          if v != _SPEC]
+check("every spec claim in README/AGENTS/pyproject equals the declared spec (%s), in every spelling — "
+      "pyproject's description is a CONTRACT CLAIM and moves with the floor" % _SPEC,
+      not _stale, "; ".join("%s claims %s at %r" % s for s in _stale))
+
 r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
 # The expected header is DERIVED from the installed VERSION, not hardcoded. It used to read
 # `startswith("<!-- candor-agents 0.25")`, which is a version-coupled assertion: every release breaks it,
