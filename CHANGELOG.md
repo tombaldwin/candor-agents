@@ -12,6 +12,14 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **`candor_agents/__init__.py` joins the spec-claim sweep, and the sweep reads two more spellings.** The
+  module docstring carries the contract claim — it is what `help()` and every doc renderer show — and it
+  was the one literal in this repo no gate read, beside three that were already covered. The claim
+  grammar also widened from `spec` + one to FOUR of `[-: "]` to one to EIGHT of `[-: "*)\]]`, so an
+  ALIGNED envelope column and a markdown-linked version are visible; both were live in shipped documents
+  in this family. Still derived from `scan.SPEC`, with the control extended to discriminate the wide
+  grammar from the narrow one.
+
 ## [0.32.1] — 2026-08-25
 
 - Build version → 0.32.1; the `SPEC` declaration does not move.

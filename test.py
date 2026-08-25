@@ -1048,11 +1048,18 @@ check("the wheel ships the candor_agents package (so agentsmd + the modules are 
 # DERIVED from `scan.SPEC`, like `_expect_hdr` below: a literal here breaks on every floor bump and its
 # fix each release is to edit a literal in a test — the hand-edit class that cost the 0.25 release.
 #
-# `spec` + one to four of [-: "] + <digits>.<digits> covers `spec 0.32`, `spec-0.32` and
-# `"spec": "0.32"`, while `spec §6.1` — a SECTION reference — never reads as a version. Historical
-# markers naming the rung a feature arrived at keep the family's `(spec X.Y, informative)` form; a note
-# about the past must not move with the floor.
-_claim = re.compile(r'spec[-: "]{1,4}([0-9]+\.[0-9]+)')
+# THE FAMILY'S SHARED CLAIM GRAMMAR: `spec` + one to EIGHT of [-: "*)\]] + <digits>.<digits>. Covers
+# `spec 0.32`, `spec-0.32`, `"spec": "0.32"`, the ALIGNED `"spec":    "0.32"` and the markdown-link
+# `[candor-spec](…) 0.32`, while `spec §6.1` — a SECTION reference — never reads as a version.
+# Historical markers naming the rung a feature arrived at keep the family's `(spec X.Y, informative)`
+# form; a note about the past must not move with the floor.
+#
+# The last two spellings are the ⟨0.32⟩ widening, and each was live in a shipped doc that every gate in
+# the family read clean over: SPEC.md's own aligned envelope column puts SIX characters between the word
+# and the version, which `{1,4}` cannot cross, and candor-swift/README.md line 3 separates them with
+# `) `. The control below is the same fixture in all five engines, so a widening applied in one and
+# forgotten in another reddens rather than going quiet.
+_claim = re.compile(r'spec[-: "*)\]]{1,8}([0-9]+\.[0-9]+)')
 def _spec_claims(text):
     return [(m.group(1), text[m.start():m.end() + 16]) for m in _claim.finditer(text)
             if not text[m.end():m.end() + 16].startswith(", informative)")]
@@ -1064,15 +1071,23 @@ _ctl = [v for v, _ in _spec_claims(
     'This project is on candor-agents 9.9.9 (spec 0.9).\n'
     'a section reference, spec §6.1, is not a version\n'
     'the gate prints { "spec": "0.7", "ok": true }\n'
-    'and the hyphenated attributive spec-0.6 form\n')]
-check("CONTROL: the spec-claim sweep discriminates (JSON + hyphenated + prose seen, `spec §6.1` is "
-      "not a version, `, informative)` exempted) — without this the sweep below is vacuous",
-      _ctl == ["0.9", "0.7", "0.6"], str(_ctl))
-_stale = [(d, v, ctx) for d in ("README.md", "AGENTS.md", "pyproject.toml")
+    'and the hyphenated attributive spec-0.6 form\n'
+    'an aligned envelope column, { "spec":    "0.5" }\n'
+    'a markdown link [candor-spec](https://example.org/candor-spec) 0.4\n')]
+check("CONTROL: the spec-claim sweep discriminates (prose + JSON + hyphenated + ALIGNED-JSON + "
+      "markdown-link seen, `spec §6.1` is not a version, `, informative)` exempted) — without this "
+      "the sweep below is vacuous",
+      _ctl == ["0.9", "0.7", "0.6", "0.5", "0.4"], str(_ctl))
+# `candor_agents/__init__.py`'s module docstring carries the contract claim too — it is what `help()`
+# and every doc renderer show — and no gate read it. It was a fourth literal in a repo whose other
+# three were already covered, which is the shape this whole class keeps taking: the sweep is widened
+# in SPELLING and left narrow in FILE SET.
+_stale = [(d, v, ctx) for d in ("README.md", "AGENTS.md", "pyproject.toml",
+                                os.path.join("candor_agents", "__init__.py"))
           for v, ctx in _spec_claims(open(os.path.join(HERE, d), encoding="utf-8").read())
           if v != _SPEC]
-check("every spec claim in README/AGENTS/pyproject equals the declared spec (%s), in every spelling — "
-      "pyproject's description is a CONTRACT CLAIM and moves with the floor" % _SPEC,
+check("every spec claim in README/AGENTS/pyproject/__init__ equals the declared spec (%s), in every "
+      "spelling — pyproject's description is a CONTRACT CLAIM and moves with the floor" % _SPEC,
       not _stale, "; ".join("%s claims %s at %r" % s for s in _stale))
 
 r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "--agents"], capture_output=True, text=True)
