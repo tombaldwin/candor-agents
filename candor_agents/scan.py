@@ -22,7 +22,7 @@ import sys
 
 from candor_agents import policy as _policy
 
-SPEC = "0.31"
+SPEC = "0.32"
 VERSION = "agents-0.31.0"
 # ⟨0.27⟩ The clean RELEASE semver, derived from VERSION rather than restated — the §3.4 `engine` pin is
 # written by a human as `v0.27.0`, and VERSION carries the engine-qualified build id (`agents-0.27.0`)
