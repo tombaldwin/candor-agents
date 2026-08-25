@@ -12,6 +12,17 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.32.1] — 2026-08-25
+
+- **Family build bump — the domain engine is unchanged, and the spec it declares does not move.** `SPEC`
+  in `candor_agents/scan.py` stays `0.32`, `pyproject.toml`'s description with it; only the build id
+  moves. Nothing about the declared-versus-observed drift analysis changed, and no drift result differs.
+  This is a CODE-engine patch: candor-java's v0.32.0 native binaries were withheld by its parity gate
+  after the image reported `0 functions` over a tree the jar found 210 in, and the front door reaches the
+  rebuilt ones only when `ENGINE_PIN` moves for the family at once. `adopt/candor-digest.yml`'s
+  `candor-agents@v` pin travels with it, so this package is republished at 0.32.1 to keep
+  `pipx install "git+https://github.com/tombaldwin/candor-agents@v0.32.1"` resolvable beside it.
+
 ## [0.32.0] — 2026-08-25
 
 - **⟨0.32⟩ — this engine is unchanged; only the declared spec moves.** The rung is about the CODE engines'
