@@ -12,13 +12,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
-## [0.33.0] — 2026-08-26
-
 - **`ci.yml` gains `workflow_dispatch`.** Audit of the family's recovery gap after the 0.33.0 cut's
   Actions stall (three tag-triggered runs across three repos created, never expanded into jobs, and
   left neither cancellable — 409 "has not been queued yet" — nor rerunnable). This repo has no
   tag-triggered workflow to fix in the same way, but its only workflow had no `workflow_dispatch`
   either, so the same stall on a push/PR run here would have forced an empty commit to re-trigger it.
+
+## [0.33.0] — 2026-08-26
 
 - **MIGRATION — ⟨0.33⟩ IS NOT ADDITIVE, and the cost is measured, not estimated.** If you gate a
   **STORED** report that a pre-0.33 engine produced — committed to a repo, cached between CI jobs, or
