@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.33.1] — 2026-08-27
+
 - **`ci.yml` gains `workflow_dispatch`.** Audit of the family's recovery gap after the 0.33.0 cut's
   Actions stall (three tag-triggered runs across three repos created, never expanded into jobs, and
   left neither cancellable — 409 "has not been queued yet" — nor rerunnable). This repo has no
