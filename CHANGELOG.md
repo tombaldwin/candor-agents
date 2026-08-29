@@ -12,6 +12,12 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **Declare spec `0.34`.** `candor_agents/__init__.py`, `candor_agents/scan.py` and `pyproject.toml`
+  move with the family floor. ⟨0.34⟩ adds nothing this engine emits or consumes — its three parts are
+  the cross-policy refusal's cause-naming remedy, the `zeroMatch` §3.1 carve-out, and the `--policy`
+  usage-error rule, none of which candor-agents' declared-vs-observed drift surface touches. The
+  declaration moves because the floor is conformance-pinned and every engine declares the same rung.
+
 ## [0.33.1] — 2026-08-27
 
 - **`ci.yml` gains `workflow_dispatch`.** Audit of the family's recovery gap after the 0.33.0 cut's
