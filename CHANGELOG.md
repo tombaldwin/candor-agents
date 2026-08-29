@@ -24,6 +24,25 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   explicitly instead of going quiet. `deny Net Unknown` now enforces `Net` fleet-wide as it should.
   Three new regression checks in `test.py`, each falsified against the pre-fix parser first.
 
+- **`guard`: that same fix had the identical hole one keystroke over — `deny Net UNKNOWN` (or
+  `unknown`/`UnKnown`) silently dropped the fleet-wide `Net` denial too, with no signal that a typo had
+  occurred.** `Unknown`-token matching stays exact-literal (case-sensitive, matching `policy.py`'s own
+  `tok == "Unknown"` — a miscased effect reads as a SCOPE there too, never case-folded, so `guard` must
+  not case-fold it either or its runtime enforcement would answer a different question than the gate
+  does for the same policy text). The gap was disclosure: `guard` already has a case-fold *warning* for
+  exactly this confusion on the 11 named effects (`VOCAB_LOWER`/`suspects`, catching `deny net`) and it
+  simply wasn't extended to `Unknown`. It now is — `VOCAB_LOWER["unknown"] = "Unknown"` shares the one
+  map rather than adding a second mechanism — so `deny Net UNKNOWN` now warns ("effects are
+  case-sensitive... use `deny Unknown`") instead of reading identically to a genuine `deny Net
+  researcher`. No enforcement semantics changed; a real agent scoped literally `unknown` is unaffected.
+  A sweep of every other token `guard`'s positional parser reads found one more instance of the same
+  root cause, unrelated to casing: the §6.2 ⟨0.20⟩ destination-class filter on a concrete effect
+  (`deny Net[unknown-host]`) matched neither `VOCAB` (exact, brackets included) nor the `Unknown` token,
+  so a bare `deny Net[unknown-host]` silently collected zero effects and vanished — the same
+  whole-rule-drop shape, on a legal policy line rather than a typo. Fixed the way `policy.py` handles
+  it: keep the effect, drop the filter (widen, never narrow), and disclose it. Six new regression checks
+  in `test.py`.
+
 - **Declare spec `0.34`.** `candor_agents/__init__.py`, `candor_agents/scan.py` and `pyproject.toml`
   move with the family floor. ⟨0.34⟩ adds nothing this engine emits or consumes — its three parts are
   the cross-policy refusal's cause-naming remedy, the `zeroMatch` §3.1 carve-out, and the `--policy`

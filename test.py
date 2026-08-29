@@ -1429,6 +1429,37 @@ check("guard: `deny Net Unknown` still enforces Net fleet-wide (Unknown isn't mi
 g_unk3 = guard.compile_guard("deny Unknown[dispatch] researcher")
 check("guard: `deny Unknown[dispatch] researcher` scopes Unknown to researcher, disclosed not silent",
       not g_unk3["deny"] and any("researcher" in n for n in g_unk3["notes"]), json.dumps(g_unk3))
+# (7) THE FIX'S OWN BLIND SPOT: a MISCASED `Unknown` (`UNKNOWN`/`unknown`/`UnKnown`) in a compound rule
+# is read as a scope (matching policy.py exactly — effect tokens are case-sensitive there too, no
+# fold), but must now WARN like `deny net` already does — before this it vanished with NO signal at
+# all, indistinguishable on stderr from a genuine `deny Net researcher` (g3 above). The fleet-wide Net
+# denial from `deny Net UNKNOWN`/etc. is correctly NOT emitted (that's the case-sensitive reading), but
+# the operator must be told why, not left to think they wrote a scoped rule for a real agent.
+for _tok in ("UNKNOWN", "unknown", "UnKnown"):
+    g_mc = guard.compile_guard(f"deny Net {_tok}")
+    check(f"guard: `deny Net {_tok}` (miscased Unknown) warns case-sensitive, doesn't silently drop the Net denial",
+          not g_mc["deny"]
+          and any("case-sensitive" in w and "Unknown" in w for w in g_mc["warnings"]),
+          json.dumps(g_mc))
+# and a REAL agent-scoped rule must still work exactly as before — the over-charge control: this must
+# not start case-folding genuine agent names into effects, nor warn about them.
+g_real = guard.compile_guard("deny Net researcher")
+check("guard: `deny Net researcher` (a real agent scope) is unaffected — no case-sensitive warning fires",
+      not g_real["deny"] and not any("case-sensitive" in w for w in g_real["warnings"])
+      and any("researcher" in n for n in g_real["notes"]), json.dumps(g_real))
+# (8) WIDER SWEEP: the §6.2 ⟨0.20⟩ destination-class filter on a CONCRETE effect (`Net[unknown-host]`)
+# shares the identical defect shape one bracket-form over — before this it matched neither VOCAB (exact,
+# brackets included) nor the Unknown token, so a BARE `deny Net[unknown-host]` (no scope at all)
+# silently collected zero effects and vanished outright, same as the original bare-`Unknown` bug.
+# policy.py keeps the effect and drops the filter (widen, never narrow); guard must match that, not
+# leave a legal policy line silently unenforced at runtime.
+g_dc = guard.compile_guard("deny Net[unknown-host]")
+check("guard: `deny Net[unknown-host]` (destination-class filter) widens to a fleet-wide Net deny, disclosed",
+      "WebFetch" in g_dc["deny"]
+      and any("destination-class filter" in w for w in g_dc["warnings"]), json.dumps(g_dc))
+g_dcs = guard.compile_guard("deny Net[unknown-host] researcher")
+check("guard: `deny Net[unknown-host] researcher` widens the effect AND keeps the real scope",
+      not g_dcs["deny"] and any("researcher" in n for n in g_dcs["notes"]), json.dumps(g_dcs))
 
 # ── guard as a PROCESS surface (`candor-agents guard …` — cli.py dispatch + guard.main) ──────────
 # The compile_guard logic above is unit-covered; this is the user-facing CLI contract (exit codes,
