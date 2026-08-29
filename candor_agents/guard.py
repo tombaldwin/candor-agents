@@ -33,12 +33,29 @@ from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE
 # silently mis-read as the rule's scope token.
 VOCAB = set(EFFECTS)
 VOCAB_LOWER = {e.lower(): e for e in VOCAB}  # case-fold map, to catch a miscased `deny net`
+# `Unknown` shares the same miscasing hazard as the 11 named effects but is deliberately absent from
+# VOCAB itself (see _UNKNOWN_TOKEN below), so it needs its own entry in the SAME map rather than a
+# second one — `deny UNKNOWN`/`deny unknown` must warn exactly like `deny net` does, not silently
+# vanish into "scope" with no signal at all (see parse_denies).
+VOCAB_LOWER["unknown"] = "Unknown"
 # `Unknown` (bare, or the §6.2 ⟨0.19⟩ bracketed reason-class form `Unknown[dispatch]`) is a LEGAL deny
 # token in the shared grammar (policy.parse_policy accepts it: "bare `Unknown` ⇒ all classes") but is
 # deliberately absent from EFFECTS/VOCAB (policy.py's own comment: "minus the Unknown visibility
 # marker"). Recognise it as its own token class here — never as a candidate SCOPE — so `deny Unknown`
-# and a compound `deny Net Unknown` parse the same way the engine's own parser does.
+# and a compound `deny Net Unknown` parse the same way the engine's own parser does. Case-sensitive,
+# matching policy.py exactly (`tok == "Unknown"`, no fold): a miscased `deny UNKNOWN` is NOT silently
+# upgraded into the real token here either — that would make guard's runtime enforcement answer a
+# DIFFERENT question than policy.py's gate asks of the identical policy text, the exact divergence
+# guard exists to not have. It only earns the VOCAB_LOWER warning above, same as any other effect.
 _UNKNOWN_TOKEN = re.compile(r"Unknown(\[[^\]]*\])?")
+# The §6.2 ⟨0.20⟩ destination-class filter on a CONCRETE effect (`Net[unknown-host]`) — mirrors
+# policy.py's `_EFFECT_SCOPED`. Before this, a bracket-scoped effect token matched neither VOCAB (exact
+# string, brackets included) nor _UNKNOWN_TOKEN, so it fell straight to "this must be the scope" and a
+# bare `deny Net[unknown-host]` (no scope) silently collected ZERO effects and was dropped whole — the
+# identical failure shape the bare-`Unknown` fix above closes, one bracket-shape over, and unlike that
+# one this one wasn't even a typo: it's a legal policy line. `policy.py` keeps the effect and drops the
+# filter (widen, never narrow — the family's rule for a token this layer can't honour); do the same.
+_EFFECT_SCOPED = re.compile(r"([A-Za-z]+)\[([^\]]*)\]")
 
 
 def effect_tools():
@@ -66,28 +83,40 @@ def parse_denies(text):
     then collected zero effects and was dropped outright (`if effs:` below never emits it) — silent,
     with no warning and no note, unlike every other unenforceable shape this parser is asked to
     handle. Worse, a compound `deny Net Unknown` (both effects, no scope — a legal §6.2 line) read
-    `Unknown` as a fictitious agent SCOPE and lost the real `Net` denial along with it."""
-    out, suspects = [], []
+    `Unknown` as a fictitious agent SCOPE and lost the real `Net` denial along with it.
+
+    A MISCASED `Unknown` (`UNKNOWN`, `unknown`, `UnKnown`) is not corrected into the real token — that
+    would make this engine's runtime enforcement answer a different question than policy.py's gate asks
+    of the same text (see the comment on `_UNKNOWN_TOKEN`). It is read as a scope, exactly as policy.py
+    reads it, and flagged via the same `suspects`/VOCAB_LOWER mechanism the 11 named effects already
+    use — so `deny Net UNKNOWN` warns instead of silently compiling away the fleet-wide `Net` denial."""
+    out, suspects, widened = [], [], []
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line.lower().startswith("deny "):
             continue
         effs, scope = [], None
         for t in line.split()[1:]:
+            m = _EFFECT_SCOPED.fullmatch(t)
             if t in VOCAB:
                 effs.append(t)
             elif _UNKNOWN_TOKEN.fullmatch(t):
                 effs.append("Unknown")
+            elif m and m.group(1) in VOCAB:
+                effs.append(m.group(1))
+                widened.append((t, m.group(1)))
             else:
                 scope = t  # first non-effect token is the scope and ends the rule
-                # Effect tokens are case-SENSITIVE but `deny ` isn't: a miscased `deny net` would
-                # otherwise read `net` as a scope and enforce nothing, silently. Flag the look-alike.
-                if t.lower() in VOCAB_LOWER:
-                    suspects.append((t, VOCAB_LOWER[t.lower()]))
+                # Effect tokens are case-SENSITIVE but `deny ` isn't: a miscased `deny net` (or `deny
+                # UNKNOWN`) would otherwise read as a scope and enforce nothing, silently. Flag the
+                # look-alike — strip an optional `[…]` suffix first so `UNKNOWN[dispatch]` is caught too.
+                base = t[:t.index("[")] if "[" in t and t.endswith("]") else t
+                if base.lower() in VOCAB_LOWER:
+                    suspects.append((t, VOCAB_LOWER[base.lower()]))
                 break
         if effs:
             out.append((effs, scope))
-    return out, suspects
+    return out, suspects, widened
 
 
 def compile_guard(policy_text, project_dir=None):
@@ -121,10 +150,13 @@ def compile_guard(policy_text, project_dir=None):
                 # silent would emit an under-protective permissions.deny with no disclosure (a deny rule
                 # against an mcp server would simply be missing). Warn, mirroring scan.py's reader.
                 warnings.append(f".mcp.json unreadable ({e}) — mcp server denies omitted; verify manually")
-    rules, suspects = parse_denies(policy_text)
+    rules, suspects, widened = parse_denies(policy_text)
     for tok, proper in suspects:
         warnings.append(f"`deny {tok}`: effects are case-sensitive — `{tok}` was read as a scope name, not "
                         f"the effect `{proper}`; use `deny {proper}` to enforce it fleet-wide.")
+    for tok, eff in widened:
+        warnings.append(f"`deny {tok}`: a destination-class filter isn't recognised at this layer — "
+                        f"enforced as the unscoped `deny {eff}` (widened, never narrowed).")
     deny, notes, cliff = set(), [], set()
     for effs, scope in rules:
         for e in effs:
