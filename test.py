@@ -143,6 +143,26 @@ check("declared Agent(allowlist) narrows soundly — no spawn residual, allowlis
       cg["orch"] == ["helper"] and "Unknown" not in entry(rep, "orch")["inferred"],
       f"got inferred={entry(rep, 'orch')['inferred']} edges={cg['orch']}")
 
+# THE ALLOWLIST-RESIDUAL FIND: `Agent(general-purpose)` is a common real pattern (allowlisting a
+# harness BUILTIN subagent, which has no `.md` in this fleet) — the allowlist member matches no
+# declared agent, so rung 1's "no residual" claim doesn't hold: the runtime enforces the allowlist,
+# not that every member is analyzable HERE. Before the fix, an unresolved member silently produced
+# ZERO edges and no Unknown — a fully-pure read of an agent that can spawn an unanalyzed subagent.
+rep, cg = scan({"boss.md": agent("boss", "Agent(general-purpose), Read", body="Spawn a general-purpose helper.")})
+check("Agent(builtin) with no matching fleet agent discloses Unknown, not a silent fully-pure read",
+      cg["boss"] == [] and "Unknown" in entry(rep, "boss")["inferred"]
+      and any("general-purpose" in w for w in entry(rep, "boss").get("unknownWhy", [])),
+      f"got inferred={entry(rep, 'boss') and entry(rep, 'boss')['inferred']} edges={cg['boss']}")
+# a PARTIAL allowlist — one member resolves, one doesn't — keeps the precise edge to the one that
+# resolves (for map/blast-radius) AND discloses the unresolved member (no silent narrowing).
+rep, cg = scan({
+    "boss.md": agent("boss", "Agent(helper, general-purpose), Read", body="Spawn helper or a general-purpose one."),
+    "helper.md": agent("helper", "TodoWrite"),
+})
+check("a partially-resolved allowlist keeps the real edge AND discloses the unresolved member",
+      cg["boss"] == ["helper"] and "Unknown" in entry(rep, "boss")["inferred"],
+      f"got inferred={entry(rep, 'boss')['inferred']} edges={cg['boss']}")
+
 # a name embedded in a LONGER name is NOT a mention (boundary holds the precise direction too)
 rep, cg = scan({
     "boss.md": agent("boss", "Agent", body="Only ever use code-reviewer here."),
@@ -508,6 +528,28 @@ check("--link: Bash agent edges to the code entryPoint", "main" in cg["runner"],
 check("--link: Bash agent inherits the code's recorded effects", "Db" in er["inferred"], f"got {er['inferred']}")
 check("--link: non-Bash agent does NOT inherit", "Db" not in entry(rep, "watcher")["inferred"])
 check("--link: pseudo-node not re-emitted as a fleet row", entry(rep, "main") is None)
+
+# --link + an AMBIENT agent whose Bash is DENIED via permissions.deny: `runs_code` for an ambient
+# agent is decided by "Bash not in denied_tools" (an ambient agent's own `lt` stays None either way,
+# so that clause is the ONLY place a denied Bash is honoured here) — a denied Bash means the agent
+# cannot actually invoke the linked code, so it must NOT inherit the code's effects (an over-charge
+# were this dropped, the opposite direction from most findings in this sweep, but still a soundness
+# regression the family cares about — see `deny Exec` in DESIGN.md's precision goals).
+d2 = tempfile.mkdtemp()
+adir2 = os.path.join(d2, ".claude", "agents")
+os.makedirs(adir2)
+open(os.path.join(adir2, "ambient.md"), "w").write(agent("ambient", None))  # no `tools:` line = ambient
+json.dump({"permissions": {"deny": ["Bash"]}}, open(os.path.join(d2, ".claude", "settings.json"), "w"))
+json.dump(code, open(os.path.join(d2, "c.app.scan.json"), "w"))
+json.dump({"main": []}, open(os.path.join(d2, "c.app.scan.callgraph.json"), "w"))
+out2 = os.path.join(d2, "r")
+r2 = subprocess.run([sys.executable, "-m", "candor_agents.scan", d2, "--out", out2, "--fleet", "t",
+                     "--link", os.path.join(d2, "c")], capture_output=True, text=True)
+rep2 = json.load(open(f"{out2}.t.Fleet.json"))
+cg2 = json.load(open(f"{out2}.t.Fleet.callgraph.json"))
+check("--link: an ambient agent with Bash DENIED does not edge to the linked code (can't run it)",
+      "main" not in cg2.get("ambient", []) and "Db" not in entry(rep2, "ambient")["inferred"],
+      f"got calls={cg2.get('ambient')} inferred={entry(rep2, 'ambient')['inferred']}")
 
 from candor_agents import scan as _sc
 
@@ -891,6 +933,26 @@ with tempfile.TemporaryDirectory() as td:
     check("hooks: a non-matching agent (Read/Grep) does NOT edge to a Write|Edit hook",
           rd is not None and "hooks" not in rd["calls"] and "Exec" not in rd["inferred"], json.dumps(rd))
 
+# hooks: a COMMAND or SKILL whose tools match a tool-event hook's matcher edges to `hooks` too — the
+# matcher fires on ANY unit's matching tool use, not just agents (build_edges' `holders` dict covers
+# agents/commands/skills alike; only the agent case had a regression test before this).
+with tempfile.TemporaryDirectory() as td:
+    os.makedirs(os.path.join(td, ".claude", "commands"))
+    os.makedirs(os.path.join(td, ".claude", "skills", "s"))
+    open(os.path.join(td, ".claude", "commands", "edit.md"), "w").write("---\nallowed-tools: Edit\n---\nEdit.\n")
+    open(os.path.join(td, ".claude", "skills", "s", "SKILL.md"), "w").write("---\nallowed-tools: Grep\n---\nSearch.\n")
+    json.dump({"hooks": {"PostToolUse": [{"matcher": "Write|Edit",
+                         "hooks": [{"type": "command", "command": "./check.sh"}]}]}},
+              open(os.path.join(td, ".claude", "settings.json"), "w"))
+    out = os.path.join(td, "r")
+    r = subprocess.run([sys.executable, "-m", "candor_agents.scan", td, "--out", out, "--fleet", "t"], capture_output=True, text=True)
+    rep = json.load(open(f"{out}.t.Fleet.json"))
+    ce, sk = entry(rep, "command:edit"), entry(rep, "skill:s")
+    check("hooks: a command whose tools MATCH the matcher edges to hooks and inherits Exec",
+          ce is not None and "hooks" in ce["calls"] and "Exec" in ce["inferred"], json.dumps(ce))
+    check("hooks: a skill whose tools do NOT match the matcher does not edge to hooks",
+          sk is not None and "hooks" not in sk["calls"] and "Exec" not in sk["inferred"], json.dumps(sk))
+
 # tools_match_matcher mirrors Claude Code's THREE-TIER matcher semantics (hooks reference). The
 # tier-2 PARTIAL regex was the bug: force-anchoring `^(?:m)$` made `^Notebook` / `Edit$` UNDER-match,
 # silently dropping a hook's Exec reach from an agent the harness really fires the hook on.
@@ -1229,6 +1291,24 @@ rep, r = build(agents_files={"a.md": agent("a", "Read")}, crons={"not": "a list 
 check("a malformed scheduled_tasks.json does not crash the scan (no cron units, scan still succeeds)",
       rep is not None and not any(f["fn"].startswith("cron:") for f in rep["functions"]), r.stderr)
 
+# TWO scheduled tasks sharing the same declared id/name must NEVER silently clobber each other (the
+# same class as duplicate agent names) — keep BOTH, disambiguated, so the second task's own
+# schedule/prompt never vanishes from the report.
+rep, r = build(crons=[{"id": "nightly", "cron": "0 1 * * *", "prompt": "first", "durable": True},
+                      {"id": "nightly", "cron": "0 2 * * *", "prompt": "second", "durable": True}])
+_cron_units = sorted(f["fn"] for f in rep["functions"] if f["fn"].startswith("cron:")) if rep else []
+check("two scheduled tasks sharing an id are BOTH kept (disambiguated), never silently clobbered",
+      rep is not None and len(_cron_units) == 2, (r.stderr, _cron_units))
+
+# scheduled_tasks.json as an object wrapping the task list under a NON-first key (or several keys)
+# must not silently drop any of them — a denylist read (union every list found), not "the first list
+# this reader happened to notice".
+rep, r = build(crons={"tasksA": [{"id": "x1", "cron": "0 * * * *", "prompt": "p1", "durable": True}],
+                      "tasksB": [{"id": "x2", "cron": "1 * * * *", "prompt": "p2", "durable": True}]})
+check("scheduled_tasks.json with MULTIPLE list-valued keys unions all of them (neither is dropped)",
+      rep is not None and entry(rep, "cron:x1") is not None and entry(rep, "cron:x2") is not None,
+      r.stderr)
+
 # ══ Exec-cliff refinement: known sub-command heads classify (spec §4 ⟨0.5⟩) ═══════════════════════
 # a known head ADDS its effect and keeps Exec (a subprocess was still spawned)
 rep, r = build(commands={"net.md": "---\nallowed-tools: Bash(curl:*)\n---\nFetch:\n!`curl https://x`\n"})
@@ -1538,6 +1618,15 @@ check("stats: distinct files/sessions/max-blast; bool blastRadius NOT counted as
       _sj["filesTouched"] == 4 and _sj["sessions"] == 2 and _sj["largestBlastRadius"] == 5, json.dumps(_sj))
 check("stats: deepestPropagation aggregated from maxHops (FEEDBACK-SPEC P2.2)",
       _sj["deepestPropagation"] == 4, json.dumps(_sj))
+
+# bool-as-int on maxHops specifically (the #16 fixture above only covered blastRadius/unknowns — a
+# bare `isinstance(h, int)` on maxHops missed that `bool` subclasses `int`, so a malformed/adversarial
+# `"maxHops": true` record would have counted as a 1-hop propagation instead of being ignored).
+_sd3 = _mkd(); os.makedirs(os.path.join(_sd3, ".candor"))
+open(os.path.join(_sd3, ".candor", "activity.jsonl"), "w").write(
+    '{"ts":"2026-06-23T19:40:00Z","sessionId":"s1","verdict":"clean","violations":[],"maxHops":true}\n')
+check("stats: bool maxHops is NOT counted as a 1-hop propagation (bool subclasses int)",
+      json.loads(_stats(_sd3, "--json").stdout)["deepestPropagation"] == 0)
 check("stats: unknownsMax + candorMs; a 0-reviewMs turn doesn't hide the line (#13)",
       _sj["unknownsMax"] == 6 and _sj["hasUnknowns"] is True and _sj["candorMs"] == 3000 and _sj["hasReviewMs"] is True, json.dumps(_sj))
 check("stats: effects-present (trailer) surfaced, distinct from effects-introduced (#7)",

@@ -80,8 +80,8 @@ def _summary(recs):
         if _is_int(b):
             max_blast = max(max_blast, b)
         h = r.get("maxHops")
-        if isinstance(h, int):
-            max_hops = max(max_hops, h)
+        if _is_int(h):   # bool subclasses int — reject True/False like blastRadius/unknowns/reviewMs (was
+            max_hops = max(max_hops, h)   # a bare isinstance() here, the one field this guard missed)
         if (r.get("gained") or []) or (_is_int(b) and b > 0):
             introduced_turns += 1
         u = r.get("unknowns")

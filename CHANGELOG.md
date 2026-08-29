@@ -43,6 +43,48 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   it: keep the effect, drop the filter (widen, never narrow), and disclose it. Six new regression checks
   in `test.py`.
 
+- **`scan`: a declared `Agent(x, y)` spawn-allowlist member that names no known fleet agent is now
+  disclosed as `Unknown`, not silently read as a fully-pure "no residual" edge.** The resolution
+  ladder's rung 1 treats an allowlist as harness-enforced and sound, so it narrowed to exactly the
+  members that matched a declared `.claude/agents/*.md` name and stopped there — but the allowlist is
+  a list of NAMES, and a member can legitimately name a harness BUILTIN subagent
+  (`Agent(general-purpose)`, `Agent(Explore)`, `Agent(Plan)` — a common real pattern, since builtins
+  have no `.md` file to declare in this fleet) or simply be a typo. Either way the member is real to
+  the runtime and unanalyzable by this scan, so treating it as "no residual" vanished the whole
+  delegation surface behind it: `boss.md` with `tools: Agent(general-purpose)` reported ZERO edges,
+  ZERO effects, and no disclosure at all — a `deny Exec boss` gate would pass clean over an agent that
+  can spawn an unrestricted subagent. Now: edges are kept for whatever DOES resolve to a declared
+  agent (unchanged, still sound), and any allowlist member that doesn't resolve adds `Unknown` with a
+  named `agent-spawn:` reason. Two new regression checks in `test.py`, each falsified against the
+  pre-fix ladder.
+
+- **`scan`: `.claude/scheduled_tasks.json` shaped as an object with MORE THAN ONE list-valued key
+  silently dropped every task under any key but the first.** `read_crons` tolerates either a bare
+  top-level list or an object wrapping the list under a conventional key, and resolved the latter with
+  `next(v for v in sdata.values() if isinstance(v, list))` — an allowlist of "the first list this
+  reader happens to notice". A second (or third) list-valued key's scheduled tasks never became
+  `cron:` units: no error, no disclosure, just fewer autonomous entry points in the report than the
+  file actually declares. Changed to union every list-valued key found (a denylist posture — over-read
+  a shape we didn't anticipate rather than silently narrow to one). One new regression check.
+
+- **`scan`: three correct-but-untested guards found by the guard-deletion attack (delete the guard,
+  confirm the suite goes red — none did) now have regression coverage**, so a future refactor that
+  breaks any of them will be caught instead of shipping silently:
+  - the duplicate-cron-id disambiguation in `read_crons` (two scheduled tasks sharing an explicit
+    `id`/`name` are kept as distinct `cron:` units, the same silent-clobber class the duplicate-agent-name
+    guard already covers) — deleting it dropped the second task's report row entirely, 478/478 still green;
+  - a command or skill (not just an agent) whose tools match a `PostToolUse`/`PreToolUse` hook matcher
+    edging to the `hooks` unit and inheriting its `Exec` — only the agent case had a test before this;
+  - the `--link` Exec-boundary exemption for an AMBIENT agent whose `Bash` is removed by
+    `permissions.deny` — it must not inherit the linked code report's effects (it can no longer invoke
+    the code), and nothing exercised that combination before.
+
+- **`stats`: `"maxHops": true` in an activity-log record was counted as a 1-hop deepest-propagation
+  reading.** `bool` subclasses `int` in Python, and every other numeric field here (`blastRadius`,
+  `unknowns`, `reviewMs`) already guards against it via `_is_int()` — `maxHops` used a bare
+  `isinstance(h, int)` and was the one field the earlier bool-as-int hardening missed. Fixed to use the
+  same `_is_int()` guard as its siblings. One new regression check, falsified against the pre-fix guard.
+
 - **Declare spec `0.34`.** `candor_agents/__init__.py`, `candor_agents/scan.py` and `pyproject.toml`
   move with the family floor. ⟨0.34⟩ adds nothing this engine emits or consumes — its three parts are
   the cross-policy refusal's cause-naming remedy, the `zeroMatch` §3.1 carve-out, and the `--policy`

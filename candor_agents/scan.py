@@ -1090,10 +1090,17 @@ def read_crons(root):
         except Exception as e:
             print(f"candor-agents: unreadable .claude/scheduled_tasks.json ({e}) — scheduled tasks UNKNOWN", file=sys.stderr)
             sdata = None
-        # Tolerate a top-level list OR an object wrapping the list under a conventional key.
-        tasks = (sdata if isinstance(sdata, list)
-                 else next((v for v in sdata.values() if isinstance(v, list)), []) if isinstance(sdata, dict)
-                 else [])
+        # Tolerate a top-level list OR an object wrapping the list under a conventional key. A dict
+        # with MORE THAN ONE list-valued key used to take only the first (`next(...)`) and silently
+        # drop every task under any other key — a denylist posture (take every list found), never an
+        # allowlist of "the one true key", so a shape this reader didn't anticipate under-reports
+        # loudly (extra tasks show up) rather than vanishing a whole list of autonomous triggers.
+        if isinstance(sdata, list):
+            tasks = sdata
+        elif isinstance(sdata, dict):
+            tasks = [t for v in sdata.values() if isinstance(v, list) for t in v]
+        else:
+            tasks = []
         for i, t in enumerate(tasks):
             if not isinstance(t, dict):
                 continue
@@ -1140,8 +1147,9 @@ def build_edges(agents, commands, skills, crons, nested, denied_tools, denied_se
     name_re = {n: re.compile(rf"(?<!{_NC}){re.escape(n)}(?!{_NC})") for n in names}
     # Bare-`Agent` agents narrowed by a PROMPT MENTION: the mention is advisory text, not proof of the
     # spawn set, so the narrowed reach is a lower bound — the residual must be disclosed (Unknown), not
-    # silently dropped. Collected here, applied to `direct` after effects are classified below.
-    unresolved_spawn = set()
+    # silently dropped. Collected here (name -> why-key), applied to `direct` after effects are
+    # classified below. Two distinct causes share this disclosure — see rungs 1 and 2 below.
+    unresolved_spawn = {}
     for name, a in agents.items():
         lt = a["lt"]  # deny-filtered: a denied `Agent`/`Task` grant can no longer delegate
         # base-strip the specifier: `Agent(worker)` (documented spawn-allowlist syntax) still grants the
@@ -1153,7 +1161,15 @@ def build_edges(agents, commands, skills, crons, nested, denied_tools, denied_se
         if has_agent_tool:
             # Resolution ladder, mirroring the code engine's dyn dispatch:
             #  1. A declared `Agent(x,y)` spawn-allowlist is HARNESS-ENFORCED — the sound devirt analog.
-            #     Narrow to it with NO residual (the runtime cannot spawn outside the allowlist).
+            #     Narrow to it with NO residual, PROVIDED every allowlisted name resolves to a fleet
+            #     agent. A member that does NOT resolve (`Agent(general-purpose)` naming a harness
+            #     BUILTIN with no `.md` here, or a plain typo) is exactly as unprovable as rung 2's
+            #     mention — the runtime enforces the allowlist, not that every member is analyzable BY
+            #     US, so treating an unresolved member as "no residual" silently vanished the whole
+            #     delegation surface behind it (a common real pattern: allowlisting `general-purpose`/
+            #     `Explore`/`Plan` read as a fully pure agent, no Unknown, no edge — the exact
+            #     casing/identity-keyed silent miss this family keeps finding). Keep the edges to
+            #     whatever DOES resolve and disclose the rest.
             #  2. Bare `Agent` + a PROMPT MENTION: the mention narrows for precision but does NOT prove
             #     the agent won't spawn an unmentioned (possibly effectful) one — so keep the precise
             #     edges AND disclose the residual as Unknown (the code engine's unresolvable-dispatch
@@ -1163,12 +1179,15 @@ def build_edges(agents, commands, skills, crons, nested, denied_tools, denied_se
             allowlist = agent_spawn_allowlist(lt)
             if allowlist:
                 edges = [n for n in names if n != name and n in allowlist]
+                unresolved = allowlist - set(names) - {name}
+                if unresolved:
+                    unresolved_spawn[name] = ("allowlist", sorted(unresolved))
             else:
                 hay = a["body"] + " " + a["desc"] + " "
                 mentioned = [n for n in names if n != name and name_re[n].search(hay)]
                 if mentioned:
                     edges = mentioned
-                    unresolved_spawn.add(name)
+                    unresolved_spawn[name] = ("mention", None)
                 else:
                     edges = [n for n in names if n != name]  # CHA fallback (sound; no residual)
         calls[name] = sorted(edges)
@@ -1234,14 +1253,19 @@ def classify_units(agents, commands, skills, crons, ROOT, HOOKS, has_hooks, hook
         else:
             effs, fs, why = classify(a["lt"], live_servers, declared_mcp, declared_bad)
         direct[name], fs_detail[name], why_map[name] = effs, fs, why
-    # Disclose the unprovable spawn residual on bare-`Agent` agents narrowed by a prompt mention (ladder
-    # rung 2 above): they CAN spawn an unmentioned, possibly effectful agent at runtime, so a narrowed
-    # reach that omits it would be a silent under-report — Unknown blocks a false `deny` certification
-    # while the precise mentioned edges stay for map / blast-radius. (Allowlisted `Agent(x,y)` and the
-    # CHA fallback are sound, so they're not flagged.)
-    for name in unresolved_spawn:
+    # Disclose the unprovable spawn residual (ladder rungs 1 and 2 above): either cause means the
+    # analyzable edges are a lower bound, so a narrowed reach that omits the rest would be a silent
+    # under-report — Unknown blocks a false `deny` certification while the precise edges that DID
+    # resolve stay for map / blast-radius. (A fully-resolved allowlist and the CHA fallback are sound,
+    # so they're not flagged.)
+    for name, (kind, extra) in unresolved_spawn.items():
         direct[name].add("Unknown")
-        why_map[name].add("agent-spawn:bare `Agent` narrowed by prompt mention (can spawn an unmentioned agent)")
+        if kind == "allowlist":
+            why_map[name].add(f"agent-spawn:declared allowlist names {', '.join(extra)}, which matches no "
+                              f"agent in this fleet (a harness builtin such as `general-purpose`, or a "
+                              f"typo) — its reach is not analyzed here")
+        else:
+            why_map[name].add("agent-spawn:bare `Agent` narrowed by prompt mention (can spawn an unmentioned agent)")
     # Commands / skills: effects from their (deny-filtered) allowed-tools; a command's shell heads add
     # Exec + the heads' REFINED effects (spec §4 ⟨0.5⟩: a known head classifies — `curl`→Net,
     # `candor*`→Fs/Env; an unknown head keeps the bare Exec cliff), unless Bash is denied (the shell
