@@ -20,6 +20,7 @@ guard produces the permissions.deny that removes the capability.
 """
 import json
 import os
+import re
 import sys
 
 from candor_agents.policy import EFFECTS
@@ -32,6 +33,12 @@ from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE
 # silently mis-read as the rule's scope token.
 VOCAB = set(EFFECTS)
 VOCAB_LOWER = {e.lower(): e for e in VOCAB}  # case-fold map, to catch a miscased `deny net`
+# `Unknown` (bare, or the §6.2 ⟨0.19⟩ bracketed reason-class form `Unknown[dispatch]`) is a LEGAL deny
+# token in the shared grammar (policy.parse_policy accepts it: "bare `Unknown` ⇒ all classes") but is
+# deliberately absent from EFFECTS/VOCAB (policy.py's own comment: "minus the Unknown visibility
+# marker"). Recognise it as its own token class here — never as a candidate SCOPE — so `deny Unknown`
+# and a compound `deny Net Unknown` parse the same way the engine's own parser does.
+_UNKNOWN_TOKEN = re.compile(r"Unknown(\[[^\]]*\])?")
 
 
 def effect_tools():
@@ -51,7 +58,15 @@ def parse_denies(text):
     effect tokens are collected, and the FIRST non-effect token is the scope and ENDS the rule — a
     later effect-looking token (`deny Net foo Db`) is NOT collected. A set-membership partition would
     diverge here (it would treat the trailing `Db` as a scoped deny the engine never gates), so guard
-    would no longer be the faithful dual of the engine's §6.2 enforcement."""
+    would no longer be the faithful dual of the engine's §6.2 enforcement.
+
+    `Unknown` (bare or `Unknown[<class>]`) is an EFFECT TOKEN here too, not a candidate scope — before
+    this, guard's VOCAB check only knew the 11 EFFECTS (which deliberately excludes `Unknown`), so a
+    `deny Unknown` line's first token failed the effect check, was taken as the SCOPE, and the rule
+    then collected zero effects and was dropped outright (`if effs:` below never emits it) — silent,
+    with no warning and no note, unlike every other unenforceable shape this parser is asked to
+    handle. Worse, a compound `deny Net Unknown` (both effects, no scope — a legal §6.2 line) read
+    `Unknown` as a fictitious agent SCOPE and lost the real `Net` denial along with it."""
     out, suspects = [], []
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
@@ -61,6 +76,8 @@ def parse_denies(text):
         for t in line.split()[1:]:
             if t in VOCAB:
                 effs.append(t)
+            elif _UNKNOWN_TOKEN.fullmatch(t):
+                effs.append("Unknown")
             else:
                 scope = t  # first non-effect token is the scope and ends the rule
                 # Effect tokens are case-SENSITIVE but `deny ` isn't: a miscased `deny net` would
@@ -111,6 +128,20 @@ def compile_guard(policy_text, project_dir=None):
     deny, notes, cliff = set(), [], set()
     for effs, scope in rules:
         for e in effs:
+            if e == "Unknown":
+                # `Unknown` names an UNRESOLVED capability (an uncurated MCP server, an unlisted tool),
+                # never a concrete tool grant — there is no permissions.deny entry that removes "the
+                # ability to reach something the classifier couldn't resolve". Disclose that plainly
+                # rather than silently dropping the rule (the guard-as-enforcer analog of the scan
+                # classifier's own under-report rule).
+                target = f"deny Unknown {scope}" if scope else "deny Unknown"
+                dest = notes if scope else warnings
+                dest.append(f"{target}: guard cannot bind `Unknown` at runtime — it marks an "
+                            f"unresolved capability, not a concrete tool grant permissions.deny can "
+                            f"remove. Curate the MCP server (DECLARING.md) or read the flagged unit's "
+                            f"`unknownWhy` in the scan/observe report and tighten its `tools:` grants "
+                            f"instead.")
+                continue
             if scope:
                 notes.append(f"deny {e} {scope}: per-agent runtime enforcement isn't expressible via the "
                              f"harness's project-wide permissions.deny — remove {sorted(inv.get(e, set()))} "

@@ -12,6 +12,18 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **`guard`: `deny Unknown` (bare or `Unknown[<class>]`) is no longer silently dropped.** Adversarial
+  review of the enforcement surface: `guard`'s own hand-rolled positional deny-parser only recognised
+  the 11 named EFFECTS, so a `deny Unknown` policy line's first token failed that check, was read as a
+  SCOPE, collected zero effects, and vanished — no deny compiled, no warning, no note, and the CLI
+  printed the same "no fleet-wide deny rule to enforce" line it prints for an empty policy. A compound
+  `deny Net Unknown` was worse: `Unknown` was misread as a fictitious agent scope and the real `Net`
+  denial was dropped along with it. `Unknown` is a legal §6.2 deny token (`policy.parse_policy` already
+  accepts it) — `guard` now recognises it as its own token class, still can't bind it to a
+  `permissions.deny` entry (there's no tool that produces "an unresolved capability"), and says so
+  explicitly instead of going quiet. `deny Net Unknown` now enforces `Net` fleet-wide as it should.
+  Three new regression checks in `test.py`, each falsified against the pre-fix parser first.
+
 - **Declare spec `0.34`.** `candor_agents/__init__.py`, `candor_agents/scan.py` and `pyproject.toml`
   move with the family floor. ⟨0.34⟩ adds nothing this engine emits or consumes — its three parts are
   the cross-policy refusal's cause-naming remedy, the `zeroMatch` §3.1 carve-out, and the `--policy`

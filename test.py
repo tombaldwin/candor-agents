@@ -1407,6 +1407,28 @@ check("guard: `deny net` (miscased) warns it's case-sensitive, not the effect `N
 g_ed = guard.compile_guard("deny Exec Db")
 check("guard: deny Exec Db still discloses Db's residual reach (not suppressed by Bash being denied)",
       "Bash" in g_ed["deny"] and any("no built-in tool produces Db" in w for w in g_ed["warnings"]), json.dumps(g_ed))
+# (5) guard: `deny Unknown` is a valid §6.2 deny token (policy.parse_policy accepts bare `Unknown` as
+# an effect) but guard's own hand-rolled positional parser didn't know it, so the token fell into the
+# "this must be a scope" branch and vanished the moment it appeared — no deny, no warning, no note at
+# all, and `guard`'s CLI printed the same "no fleet-wide deny rule to enforce" line it prints for an
+# empty policy. Guard can't actually BIND `Unknown` at runtime (there's no tool that produces it), but
+# that must be DISCLOSED like the Db residual-reach case above, never silently dropped.
+g_unk = guard.compile_guard("deny Unknown")
+check("guard: `deny Unknown` is disclosed as unenforceable at runtime, not silently dropped",
+      not g_unk["deny"] and any("Unknown" in w for w in g_unk["warnings"]), json.dumps(g_unk))
+# (6) the compound form `deny Net Unknown` (both effects, no scope, a legal §6.2 line) must still
+# enforce Net fleet-wide — the pre-fix parser read the bare `Unknown` token as a SCOPE name (a
+# fictitious agent called "Unknown"), which routed the whole rule down the scoped-note path and
+# dropped the Net denial along with it.
+g_unk2 = guard.compile_guard("deny Net Unknown")
+check("guard: `deny Net Unknown` still enforces Net fleet-wide (Unknown isn't misread as a scope)",
+      "WebFetch" in g_unk2["deny"] and not any("Unknown's" in n for n in g_unk2["notes"]), json.dumps(g_unk2))
+# and the bracketed reason-class form (`Unknown[dispatch]`, §6.2 ⟨0.19⟩) must be recognised the same
+# way, not misread as a scope literally named "Unknown[dispatch]" (which then silently swallowed the
+# REAL scope token that followed it, `researcher`).
+g_unk3 = guard.compile_guard("deny Unknown[dispatch] researcher")
+check("guard: `deny Unknown[dispatch] researcher` scopes Unknown to researcher, disclosed not silent",
+      not g_unk3["deny"] and any("researcher" in n for n in g_unk3["notes"]), json.dumps(g_unk3))
 
 # ── guard as a PROCESS surface (`candor-agents guard …` — cli.py dispatch + guard.main) ──────────
 # The compile_guard logic above is unit-covered; this is the user-facing CLI contract (exit codes,
