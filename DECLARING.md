@@ -26,17 +26,33 @@ Annotate the server's entry in your project's `.mcp.json` with a `candorEffects`
   request in every instance, so §6.1 has the two co-emitted. `Db` is *not* co-emitted with `Net` —
   an embedded, file-backed store has no egress.
 - `"candorEffects": []` declares a **pure** server (it computes; it reaches nothing).
-- An unknown effect name **voids the declaration** — the server stays `Unknown` with
-  `unknownWhy: ["mcp-decl-invalid:<server>:<name>"]`. A typo (`"net"`) must never silently narrow
-  the reported surface; that is the §4 trust contract's forbidden direction.
+- An unknown effect name **voids the declaration** — the server reads `Unknown` with
+  `unknownWhy: ["mcp-decl-invalid:<server>:<name>"]`, *in addition to* anything the curated table
+  already knows about that name. A typo (`"net"`) must never silently narrow the reported surface;
+  that is the §4 trust contract's forbidden direction.
 - Unrecognized keys are ignored by every MCP client we know of, so the annotation is inert outside
   candor.
 
 **Trust semantics — declared, not verified.** This is the project owner's claim, exactly like the
 code engines' project-supplied classifier rules (`classify_extra`) and cross-report trust
 (`CANDOR_DEPS`): candor propagates it faithfully and the report is only as true as the declaration.
-candor's own curated table (gmail, slack, github, …) outranks a declaration when both exist —
-candor's claim is the one it can stand behind.
+
+**When both exist, the two tiers are UNIONED, not ranked.** Each is a *lower bound* on the server's
+surface — candor's curated claim about a conventionally-named server, and the project's claim about
+the server it actually runs — and the sound combination of two lower bounds is their union. So a
+declaration can only ever **add**:
+
+- it cannot subtract candor's claim: `github` declaring `["Fs"]` still reports (and is still gated
+  on) `Net`, and `"candorEffects": []` on a curated server is inert. A project-controlled file must
+  not be able to narrow the reported surface — the paragraph above is the whole reason.
+- it *can* add what candor's table does not know: `filesystem` declaring `["Fs","Net"]` reports both.
+
+This corrects a "curated outranks a declaration" rule that was stated as a total order and was
+under-protective in the widening direction. Measured 2026-08-30: two `.mcp.json` files differing only
+in the server's *name*, both declaring `["Fs","Net"]`, under one `deny Net worker` — the uncurated
+name exited 1 and the **curated one exited 0 with `policy ✓`**, disclosed nowhere. Naming a server
+after a curated one silenced the project's own declaration and turned a red gate green, which is
+exactly the direction the voiding rule above exists to forbid.
 
 ## Tier 2 — the server-published declaration (the proposal)
 

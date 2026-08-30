@@ -109,7 +109,8 @@ measurements).
   fleet origins project to the §6.2 reason class **`unresolved`** through its conservative
   catch-all, which is what a `deny E Unknown[<class>]` rule matches against. A `.mcp.json` server can
   declare its effects via the `candorEffects` convention (see DECLARING.md); declared-not-verified
-  trust, curated table outranks. **The curated MCP table itself is a name-trust bound**: it matches
+  trust, and the curated table and the declaration are UNIONED, not ranked — a declaration can only
+  ADD (it cannot narrow candor's own claim, and `"candorEffects": []` on a curated server is inert). **The curated MCP table itself is a name-trust bound**: it matches
   the *conventional server name* only, so a server *named* `time` classifies `{Clock}` whatever its
   entry actually runs — `.mcp.json` is project-controlled, making a curated row a claim about an
   honestly-named server, not an audit of the binary behind it; verify the entries if you don't
