@@ -4,9 +4,17 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 Q="$("$HERE/find-query.sh")" || exit 1
-# The candor-rust checkout the binary came from (target/debug/candor-query → repo root) — the
-# combined-mode demo uses its sample/ crate + candor-scan, built the same stable way.
-CANDOR_DIR="$(cd "$(dirname "$Q")/../.." && pwd)"
+# The candor-rust CHECKOUT — which is not necessarily where the query BINARY lives. The old form
+# derived it as target/debug/candor-query → repo root, which is only true of a build tree: a
+# cargo-INSTALLED candor-query sits in ~/.cargo/bin, so ../.. is $HOME. That is how the combined-mode
+# demo below skipped on this machine while a perfectly good checkout with sample/ sat at
+# ../candor-rust — and its skip line blamed a missing checkout, naming a cause that was not the one.
+# Prefer the sibling checkout; fall back to the binary-relative guess.
+if [ -d "$HERE/../candor-rust/sample" ]; then
+  CANDOR_DIR="$(cd "$HERE/../candor-rust" && pwd)"
+else
+  CANDOR_DIR="$(cd "$(dirname "$Q")/../.." && pwd)"
+fi
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 
 echo "== scan (fleet → spec §2 report + §2.2 sidecar)"
@@ -54,5 +62,11 @@ if [ -d "$CANDOR_DIR/sample" ] && { [ -x "$SCAN" ] || cargo build -q --manifest-
   "$Q" whatif "$C/r" now_ms Exec "$HERE/fixture/policy"
   echo "   (exit $? — 1 = the orchestrator's deny Exec rule fires from a code-level edit)"
 else
-  echo "   SKIP (no candor-rust checkout with sample/ available)"
+  # Name the leg that actually failed. One message for a two-legged condition is how the old text
+  # came to assert a missing checkout on a machine that had one.
+  if [ ! -d "$CANDOR_DIR/sample" ]; then
+    echo "   SKIP (no candor-rust checkout with sample/ at $CANDOR_DIR)"
+  else
+    echo "   SKIP (found $CANDOR_DIR/sample, but candor-scan is not built and the build failed)"
+  fi
 fi
