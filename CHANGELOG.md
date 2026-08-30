@@ -12,6 +12,119 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- ⚠ **The two `.mcp.json` trust tiers were RANKED, not joined, so a project's own declaration was
+  silently DISCARDED whenever candor happened to curate a server of that name.** DECLARING.md said
+  candor's curated table "outranks a declaration when both exist"; read as a total order that is
+  under-protective in the widening direction. Measured over two `.mcp.json` files differing ONLY in
+  the server's NAME, both declaring `["Fs","Net"]`, one agent granted that server's tool, one
+  `deny Net worker`:
+
+      acme        (uncurated)       ->  AS-EFF-006, exit 1
+      filesystem  (curated as {Fs}) ->  `policy ✓`, exit 0, disclosed NOWHERE
+
+  So naming your server after a curated one silenced your own declaration and turned a red gate
+  green. `guard` inherited it the moment it started delegating to `scan` (the previous entry's fix):
+  same policy, same `.mcp.json`, one commit apart, `deny = [WebFetch, WebSearch, mcp__filesystem]`
+  became `deny = [WebFetch, WebSearch]` with no warning about the dropped declaration. That commit's
+  test covered only the NARROWING direction, so it could not see it.
+
+  **This is not a spec violation and it was still wrong**, which is why the fix is an argument and not
+  an edit. DECLARING.md asserts two paragraphs above the precedence sentence that "a typo must never
+  silently narrow the reported surface"; a *valid* declaration dropped in silence is that same
+  forbidden direction with a better-formed input. Both tiers assert a LOWER BOUND on a server's
+  surface — candor's claim about a conventionally-named server, the project's claim about the server
+  it actually runs — and the sound combination of two lower bounds is their UNION, which is what
+  `scan.mcp_server_effects` now computes, in one place, for the three call sites that each walked
+  their own copy of the ladder (`classify`, `classify_units.mcp_effects`, `guard.server_effects`).
+  The union keeps every case the precedence rule was written for and changes only the one it was never
+  argued for: a narrowing declaration still cannot narrow (`github` declaring `["Fs"]` is still denied
+  by `deny Net`), `"candorEffects": []` on a curated server is still inert, and an UNDECLARED curated
+  server still classifies as exactly its curated entry. A VOIDED declaration on a curated server now
+  also reaches the report as `Unknown` + `mcp-decl-invalid` instead of vanishing behind the curated
+  row — the operator's claim was discarded either way, and discarding it silently is the same defect
+  one branch over. DECLARING.md and AGENTS.md carry the corrected rule.
+
+- **The test harness could DIE MID-RUN and report a smaller green number instead of an error.**
+  `test.py` is one module-level script, so any exception raised while BUILDING a `check()` argument
+  aborts the file. Measured by deleting `policy.scope_matches`' empty-scope guard: the IndexError it
+  prevents killed the run at check 490 of 553 — no FAIL row, no summary, 63 checks that never
+  executed, and nothing in the output distinguishing that from a shorter suite. The guard's own
+  comment claimed it was pinned so a regression "fails a test, not a crash"; it crashed. Two fixes:
+  `called()` evaluates such a call and returns the EXCEPTION, so a crash-guard's removal fails its own
+  row (all 553 now execute, one goes red); and the harness now DECLARES its denominator and reconciles
+  it at exit — the module must reach its end, and `PASS + FAIL + SKIPPED` must equal `DECLARED`, or
+  the run prints `test: ABORTED` / `RECONCILIATION FAILED` and exits 3. Proven by injecting an
+  exception mid-run (`ABORTED — died after 201 of 565 declared checks; 364 never ran`, exit 3) and by
+  silencing one conditional block (`551 passed, 0 failed` followed by `RECONCILIATION FAILED`, exit
+  3). Environment-dependent blocks now call `skip(why, n)` so their absence is accounted, not
+  subtracted. The reconciliation also names the DISK when free space is low: this machine's disk hit
+  zero during the work, and a suite that cannot write a fixture fails in exactly the same shape as one
+  that found a bug.
+
+- **`_linked_gate` and the `--gate-json` rows read their verdict with a bare `json.load(open(...))`,
+  so an engine that never wrote one killed the harness** instead of failing the rows — including in
+  the DETAIL argument of a check, one argument over from the condition it explains. `_rcls`'s own
+  docstring already claimed this property for that helper ("so a mutant that empties the verdict FAILS
+  these checks instead of crashing the run out from under the rest") and the line above it defeated
+  it. With `verdict()` in place, deleting `scan._same_artifact`'s empty-path guard now runs all 565
+  checks and fails 24; before, it died at check 71.
+
+- **A bare `\r` policy compiled to a fully permissive `permissions.deny`, and the test that claimed to
+  pin the guard could not see it.** `"deny Net\r\ndeny Db\r\n"` parses correctly with the WHOLE CRLF
+  normalisation deleted, because the per-line `.strip(" \t\n\v\f\r")` handles a trailing `\r` — so
+  the CRLF row measured nothing. The case the guard's own comment names, a classic-Mac BARE `\r`, had
+  zero coverage: without the normalisation `split("\n")` sees ONE line, `deny Net\rdeny Db` tokenises
+  to `[deny, Net, deny, Db]`, and the file compiles to a single `deny Net` SCOPED TO A PHANTOM AGENT
+  named `deny` — zero errors, zero warnings, and `compile_guard` emits `deny: []` for a policy that
+  denies Net and Exec. **Boundary, stated: this is the LIBRARY surface only.** Every `open()` in the
+  package is default text mode (grepped: no `newline=`, no `"rb"`, no `.decode()`), so universal
+  newlines has already normalised any policy FILE — measured end to end, a bare-CR policy file still
+  gates at exit 1 with the normalisation deleted. The live hole is `parse_policy(text)` /
+  `compile_guard(text, dir)` called with a string, which is how `test.py`, any embedder, and anything
+  reading a policy off a socket or a JSON field reaches it. Rows added for the bare-`\r` parse and its
+  compiled fragment, plus the over-charge control (normalising `\r` must not MINT a rule); the CRLF
+  row is kept and relabelled as the control it actually is.
+
+- **`_same_artifact`'s empty-path row was VACUOUS, and one vacuous row implied a class.** Its two
+  cases were `("", <a real file>)` and `(<a real file>, "")`, and `realpath("")` is the CWD, which is
+  not that file — so both stayed `False` with the guard deleted. The values that discriminate are the
+  ones where the degenerate side resolves ONTO the other: two empty paths, and an empty path against
+  the cwd, both answer True and produce a FALSE `SAME FILE` refusal at exit 2 on a run with no
+  collision. And `None`, not `""`, is the PRODUCTION shape — `_refuse_sink_over_input` is called with
+  `os.environ.get("CANDOR_POLICY")`, unset on almost every real run, and `realpath(None)` raises a
+  TypeError that `resolve`'s `except OSError` does not catch, so deleting the guard crashes
+  `scan --gate-json` outright.
+
+  **The sweep that vacuous row implied** — boundary drawn round the MECHANISM, not round
+  `_same_artifact`: every guard in every module whose job is to catch an absent/empty/None/wrong-type
+  value, 124 of them, each disabled in turn against the full suite. 87 red, 16 aborted, **21 GREEN —
+  no row could tell the guard from its absence.** Seven of the 21 are one pattern: a guard COVERED on
+  the `scan` route and UNCOVERED on the identical `observe` route. Closed here:
+  - **a BLANK LINE in `.candor/config` was an IndexError that killed the scan before the gate ran** —
+    `parts[0]` after splitting an empty line, in BOTH parsers behind that one `open()`;
+  - observe's five missing-flag-value guards (a `--policy` swallowed as None is a gate that silently
+    never ran), its duplicate-`--gate-json` refusal reaching the exit code, and its `--gate-json -`
+    stream refusal for a run that exits before the gate — all five/three pinned on `scan` and none on
+    `observe`;
+  - a non-dict tool `input` in a transcript (an `AttributeError` in the lane whose unfuzzed crash
+    shipped a bug once);
+  - `policy.reason_class_matches`' empty-`classes` arm, whose own docstring calls it "THE FAIL-CLOSED
+    NET" and describes the silent under-report it prevents — unreachable through the only tested route
+    (`--link` substitutes `{"unresolved"}` upstream), so the comment asserting the property is exactly
+    what stopped it being measured.
+
+  Judged dead, not findings: `observe.py`'s non-list `content` guard (iterating a string yields
+  characters and the next line's `isinstance(b, dict)` rejects every one) and `guard.py`'s `.mcp.json`
+  existence fast-path (`read_mcp` re-checks). Reported, not fixed — cosmetic or fail-closed: digest's
+  empty span, guard's residual-advice branch, savings' `.jsonl` filter and default transcript dir,
+  observe's output basename, policy's empty reason-class token.
+
+  Two of the new rows were themselves VACUOUS on their first draft and only falsification found it:
+  five shared a fixture dir whose `.candor/config` pinned a bogus engine, so every arm exited 2 on the
+  pin mismatch; and asserting the exit code plus the diagnostic still could not see the
+  `--transcripts` guard, because `value()` writes its message BEFORE returning None and the run then
+  reaches `no transcripts found` and exits 2 anyway. Both now assert that the run went NO FURTHER.
+
 - ⚠ **`observe` classified MCP servers from a table that knew nothing about `.mcp.json` declarations,
   so the OBSERVED gate passed clean over the exact tool use the DECLARED gate fails on.** The module
   docstring has always said observed effects are "classified by the same table as the static scan";

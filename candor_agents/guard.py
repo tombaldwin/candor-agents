@@ -24,7 +24,7 @@ import sys
 
 from candor_agents import policy as _policy
 from candor_agents.policy import EFFECTS
-from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE, read_mcp
+from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE, mcp_server_effects, read_mcp
 
 # SPEC §1's effect table (⟨0.24⟩ phrasing: "every effect in the table above, excluding `Unknown`") —
 # taken from the shared list rather than re-typed, which is how `Llm` came to be missing from all
@@ -118,11 +118,12 @@ def server_effects(project_dir):
     declaration. `read_mcp` is the authority — this used to be a second, hand-rolled `.mcp.json`
     reader, and it disagreed with scan three ways, all of them under-protective:
 
-      PRECEDENCE   scan reads the curated MCP_TABLE FIRST and a `candorEffects` declaration only as a
-                   fallback ("curated table outranks" — .mcp.json is project-controlled, so a project
-                   cannot narrow candor's own claim about a conventionally-named server). Here the
-                   declaration was read first, so a server named `github` declaring `["Fs"]` was
-                   omitted from a compiled `deny Net` that scan's gate fires on.
+      PRECEDENCE   the two trust tiers are JOINED by `scan.mcp_server_effects`, not ranked. Here the
+                   declaration alone was read, so a server named `github` declaring `["Fs"]` was
+                   omitted from a compiled `deny Net` that scan's gate fires on. (The first repair of
+                   that made guard mirror scan's curated-FIRST ladder — under-protective the other
+                   way: `filesystem` declaring `["Fs","Net"]` dropped out of a compiled `deny Net`,
+                   silently. See `mcp_server_effects` for the measurement and the argument.)
       Llm ⇒ Net    `read_mcp` runs `refine_llm` (SPEC §6.1 ⟨0.24⟩: a model-provider call is an
                    outbound request in every instance, so the engines co-emit `Net`). Without it a
                    server declaring `["Llm"]` was invisible to `deny Net` — again, one the gate fires on.
@@ -131,7 +132,7 @@ def server_effects(project_dir):
                    loudly as `mcp-decl-invalid`. The list-valued typo was already handled here; the
                    wrong-TYPE one was the branch nobody wrote.
 
-    So the classification lives in one place and the trust ladder is scan's, verbatim."""
+    So the classification lives in one place and the join is scan's, verbatim."""
     warnings = []
     if not project_dir:
         return {}, warnings
@@ -142,19 +143,18 @@ def server_effects(project_dir):
     servers, declared_mcp, declared_bad = read_mcp(project_dir)
     mcp_eff = {}
     for name in servers:
-        if name in MCP_TABLE:
-            eff = MCP_TABLE[name]
-        elif name in declared_mcp:
-            eff = declared_mcp[name]
-        elif name in declared_bad:
+        eff, _why = mcp_server_effects(name, declared_mcp, declared_bad)
+        if name in declared_bad:
             warnings.append(f"mcp server {name}: candorEffects has an invalid effect "
                             f"'{declared_bad[name]}' — declaration voided (SPEC §1); the server can't "
-                            f"be matched by a deny rule until fixed.")
-            continue
-        else:
-            continue  # uncurated + undeclared: reads Unknown in scan, and Unknown binds no tool here
+                            f"be matched by a deny rule on the DECLARED effects until fixed.")
+        # `Unknown` marks an unresolved capability, not a tool grant: there is no permissions.deny
+        # entry that removes it, so it binds nothing HERE (compile_guard says so for `deny Unknown`).
+        # It still leaves whatever the curated table knows, which is why this filters rather than
+        # skipping the server the way the old `continue` did.
+        eff = {e for e in eff if e != "Unknown"}
         if eff:
-            mcp_eff[name] = set(eff)
+            mcp_eff[name] = eff
     return mcp_eff, warnings
 
 

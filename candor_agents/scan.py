@@ -642,17 +642,11 @@ def classify(tools, mcp_servers, declared_mcp=None, declared_bad=None):
             if b in FS_KIND:
                 fs.add(FS_KIND[b])
         elif b.startswith("mcp__"):
-            server = b.split("__")[1]
-            if server in MCP_TABLE:
-                effs |= MCP_TABLE[server]
-            elif server in declared_mcp:
-                effs |= declared_mcp[server]  # the project's claim — declared, not verified
-            elif server in declared_bad:
-                effs.add("Unknown")
-                why.add(f"mcp-decl-invalid:{server}:{declared_bad[server]}")
-            else:
-                effs.add("Unknown")
-                why.add(f"mcp-uncurated:{server}")
+            # One join, shared with classify_units and guard — see mcp_server_effects for why the two
+            # trust tiers UNION rather than one outranking the other.
+            e_, w_ = mcp_server_effects(b.split("__")[1], declared_mcp, declared_bad)
+            effs |= e_
+            why |= w_
         elif b in PURE_TOOLS:
             pass
         else:
@@ -832,6 +826,59 @@ def refine_llm(effs):
 
     Additive and monotone: it only ever adds `Net`, so a `deny Net` gate cannot be relaxed by it."""
     return effs | {"Net"} if "Llm" in effs else effs
+
+
+def mcp_server_effects(server, declared_mcp=None, declared_bad=None):
+    """The effect set ONE configured MCP server classifies as, plus its `unknownWhy` reasons.
+
+    THE JOIN OF THE TWO TRUST TIERS, IN ONE PLACE (SPEC §5.1 / DECLARING.md). Three call sites walked
+    the same four-branch `if/elif` ladder — `classify`, `classify_units.mcp_effects` and
+    `guard.server_effects` — and the ladder was wrong the same way in all three.
+
+    IT IS A UNION, NOT A PRECEDENCE, and that is the ⟨0.34⟩ correction. DECLARING.md says candor's
+    curated table "outranks a declaration when both exist"; read as a total order that is
+    UNDER-PROTECTIVE in the widening direction. Measured 2026-08-30 — two `.mcp.json` files differing
+    ONLY in the server's NAME, both declaring `["Fs","Net"]`, same agent, same `deny Net worker`:
+
+        acme        (uncurated)          -> AS-EFF-006, exit 1
+        filesystem  (curated as {Fs})    -> `policy ✓`, exit 0, and no disclosure at all
+
+    So naming your server after a curated one SILENCED YOUR OWN DECLARATION and turned a red gate
+    green — a silent under-report, and exactly the direction DECLARING.md's own "a typo must never
+    silently narrow the reported surface" forbids two paragraphs above the precedence sentence.
+
+    The union keeps every case the precedence rule was WRITTEN for and changes only the one it was
+    never argued for. Both tiers assert a LOWER BOUND on the server's surface, and the sound
+    combination of two lower bounds is the union:
+      - a NARROWING declaration still cannot narrow (`github` curated {Net} + declared `["Fs"]` keeps
+        both, so `deny Net` still fires) — a project-controlled file cannot subtract candor's claim;
+      - `"candorEffects": []` on a curated server is still inert, for that same reason;
+      - a WIDENING declaration is now honoured, because a project adding an effect to a server it
+        actually runs is a claim in the FAIL-CLOSED direction, and "declared, not verified" already
+        governs what that claim is worth.
+    A VOIDED declaration on a curated server now also reaches the report as `Unknown` +
+    `mcp-decl-invalid` instead of vanishing behind the curated entry: the operator's claim was
+    discarded, and discarding it silently is the same defect one branch over.
+    """
+    declared_mcp = declared_mcp or {}
+    declared_bad = declared_bad or {}
+    eff, why = set(), set()
+    if server in MCP_TABLE:
+        eff |= MCP_TABLE[server]
+    if server in declared_mcp:
+        eff |= declared_mcp[server]
+    if server in declared_bad:
+        # The declaration named something outside §1's vocabulary, so we do not know what the project
+        # meant: Unknown, disclosed, ON TOP of whatever the curated table already knows.
+        eff.add("Unknown")
+        why.add(f"mcp-decl-invalid:{server}:{declared_bad[server]}")
+    elif server not in MCP_TABLE and server not in declared_mcp:
+        eff.add("Unknown")
+        why.add(f"mcp-uncurated:{server}")
+    # §6.1 at the join as well as at the read: no MCP_TABLE entry declares `Llm` today, so this is a
+    # no-op on the curated tier — kept so a future curated `Llm` server cannot skip the co-emission
+    # `read_mcp` already applies to the declared tier.
+    return refine_llm(eff), why
 
 
 def read_mcp(root):
@@ -1262,14 +1309,9 @@ def classify_units(agents, commands, skills, crons, ROOT, HOOKS, has_hooks, hook
     def mcp_effects(servers):
         e, w = set(), set()
         for s in servers:
-            if s in MCP_TABLE:
-                e |= MCP_TABLE[s]
-            elif s in declared_mcp:
-                e |= declared_mcp[s]
-            elif s in declared_bad:
-                e.add("Unknown"); w.add(f"mcp-decl-invalid:{s}:{declared_bad[s]}")
-            else:
-                e.add("Unknown"); w.add(f"mcp-uncurated:{s}")
+            e_, w_ = mcp_server_effects(s, declared_mcp, declared_bad)
+            e |= e_
+            w |= w_
         return e, w
 
     direct, fs_detail, why_map = {}, {}, {}

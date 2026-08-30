@@ -8,6 +8,7 @@ that the UNMODIFIED candor-query answers where/callers/whatif over the emitted r
 
 Run: python3 test.py
 """
+import atexit
 import json
 import os
 import re
@@ -21,7 +22,26 @@ import tempfile
 # value rather than to re-edit the literal every release.
 _SPEC = __import__("candor_agents.scan", fromlist=["SPEC"]).SPEC
 HERE = os.path.dirname(os.path.abspath(__file__))
-PASS = FAIL = 0
+PASS = FAIL = SKIPPED = 0
+_REACHED_END = False
+
+# ── THE HARNESS'S OWN DENOMINATOR (a run that DIES is an ERROR, not a smaller green number) ───────
+# This file is one module-level script, so ANY exception raised while BUILDING a `check()` argument
+# aborts the whole run. Measured 2026-08-30: deleting `policy.scope_matches`' empty-scope guard raises
+# an IndexError around line 3040, and the run printed 490 `ok` lines, NO FAIL row and NO SUMMARY AT
+# ALL — 63 declared checks never executed. Anything comparing "did it print a failure?" reads that as
+# a pass with fewer rows; the denominator shrank silently, which is the most dangerous direction a
+# test harness can fail in. (A second, independent instance the same day: deleting `_same_artifact`'s
+# empty-path guard crashes the scan SUBPROCESS, and the harness died on the resulting `json.load`.)
+#
+# So the denominator is DECLARED here, and reconciled at exit — on the normal path AND on an abort:
+#   (1) the module must REACH ITS END (`_REACHED_END`), else the run is named ABORTED and exits 3;
+#   (2) PASS + FAIL + SKIPPED must equal DECLARED, else the run exits 3;
+#   (3) both force a NON-ZERO exit even when nothing had FAILED at the point of death.
+# Bump DECLARED deliberately, in the same commit as the checks you add. Environment-dependent blocks
+# call `skip(why, n)` so their absence is ACCOUNTED rather than subtracted: this machine runs all four
+# (locale, candor-query ×2, non-root); CI runs neither candor-query block and often not the locale one.
+DECLARED = 574
 
 
 def check(name, cond, detail=""):
@@ -32,6 +52,86 @@ def check(name, cond, detail=""):
     else:
         FAIL += 1
         print(f"  FAIL {name}  {detail}")
+
+
+def skip(why, n):
+    """Disclose `n` checks this environment cannot run. COUNTED, so the denominator still adds up —
+    "fewer checks ran" must never be indistinguishable from "the run died"."""
+    global SKIPPED
+    SKIPPED += n
+    print(f"  SKIP {why}  [{n} check(s) not run]")
+
+
+def verdict(path):
+    """Read a `--gate-json` verdict, or a NAMED PLACEHOLDER when the sink holds nothing.
+
+    Same reason as `_linked_gate`: a verdict that was never written is a RESULT the rows below must be
+    able to FAIL on, not a FileNotFoundError that kills the run. Measured 2026-08-30 — deleting
+    `scan._same_artifact`'s empty/absent-path guard crashes the scan subprocess, and a bare
+    `json.load(open(...))` here ended the harness at check 330 of 559, hiding the 229 rows after it
+    (including the ones written for that very guard)."""
+    try:
+        return json.load(open(path))
+    except Exception as e:
+        return {"spec": None, "ok": None, "violations": [], "_unwritten": f"{type(e).__name__}: {e}"}
+
+
+def called(fn, *a, **kw):
+    """Evaluate `fn(*a)` and return its value, or the EXCEPTION it raised.
+
+    For rows that pin a guard against a CRASH. `check(name, f(x) is False)` evaluates `f(x)` while
+    building the argument, so when the guard under test is the thing stopping `f` from raising, its
+    removal KILLS THE HARNESS instead of failing the row — the row cannot express the property its own
+    comment claims. Returning the exception object makes every `is False` / `== …` assertion go FAIL,
+    which is what a regression in a crash-guard is supposed to look like."""
+    try:
+        return fn(*a, **kw)
+    except BaseException as e:      # noqa: BLE001 — converting ANY crash into a FAIL row is the point
+        return e
+
+
+def _free_mb():
+    """Free space on the filesystem this run writes its fixtures to, or None if unreadable."""
+    try:
+        import shutil
+        return shutil.disk_usage(tempfile.gettempdir()).free // (1024 * 1024)
+    except Exception:
+        return None
+
+
+# Every fixture in this file is written to a tempdir, so the ENVIRONMENT can stop this run as surely
+# as a bug can — and it fails in the same shape. Measured 2026-08-30: this machine's disk hit zero
+# mid-sweep, and a suite that cannot write a temp file is indistinguishable from one that fails
+# because the code is wrong, while a command that cannot write its own output dies before executing
+# and returns nothing while looking like it ran. So the reconciliation below names the disk when it is
+# low: an abort must carry its likely CAUSE, not just its count (AGENT-CORPUS-BRIEF §H — when a check
+# CANNOT RUN, that must reach the exit code, and say why).
+_FREE_MB_AT_START = _free_mb()
+if _FREE_MB_AT_START is not None and _FREE_MB_AT_START < 2048:
+    print(f"  NOTE  only {_FREE_MB_AT_START} MB free on {tempfile.gettempdir()} — every fixture here "
+          f"is a tempdir, so a failure below may be the DISK, not the code. Clear space and re-run "
+          f"before believing any red row.")
+
+
+@atexit.register
+def _reconcile():
+    """Declared vs executed. Runs on the normal exit AND on an abort — that is the whole point."""
+    executed = PASS + FAIL
+    free = _free_mb()
+    disk = ("" if free is None or free >= 2048 else
+            f" DISK: only {free} MB free on {tempfile.gettempdir()} (was {_FREE_MB_AT_START} MB at "
+            f"start) — a run that cannot write a fixture dies exactly like a run that found a bug; "
+            f"clear space and re-measure before reading this as a code failure.")
+    if not _REACHED_END:
+        print(f"\ntest: ABORTED — the harness DIED mid-run after {executed} of {DECLARED} declared "
+              f"checks; {DECLARED - executed - SKIPPED} never ran. This is an ERROR, not a smaller "
+              f"green number — read the traceback above, not the row count.{disk}", flush=True)
+        os._exit(3)
+    if executed + SKIPPED != DECLARED:
+        print(f"\ntest: RECONCILIATION FAILED — {executed} executed + {SKIPPED} skipped != {DECLARED} "
+              f"declared. Either a block stopped running (an error) or DECLARED is stale (bump it in "
+              f"the same commit as the checks you added).{disk}", flush=True)
+        os._exit(3)
 
 
 def agent(name, tools, body="", desc="d"):
@@ -460,9 +560,9 @@ if _lprobe.returncode == 0 and _lprobe.stdout.strip() == "['zpad', 'tpad']":
     check("§2 ⟨0.24⟩ control is NON-VACUOUS on THIS PLATFORM: `et_EE.UTF-8` is installed and does "
           "reorder pure ASCII, so the byte-equality above was a real measurement", True)
 else:
-    print("  SKIP §2 locale control is VACUOUS here — `et_EE.UTF-8` is unavailable or does not "
-          f"reorder ASCII ({_lprobe.stdout.strip() or _lprobe.stderr.strip().splitlines()[-1:]}); "
-          "the byte-equality checks above proved nothing on this machine")
+    skip("§2 locale control is VACUOUS here — `et_EE.UTF-8` is unavailable or does not "
+         f"reorder ASCII ({_lprobe.stdout.strip() or _lprobe.stderr.strip().splitlines()[-1:]}); "
+         "the byte-equality checks above proved nothing on this machine", 1)
 
 # ══ SPEC §1/§5.1/§6.1 ⟨0.24⟩ — `Llm` is a §1 effect, and it CO-EMITS `Net` ════════════════════════
 # §5.1: a `candorEffects` manifest names "effect names from §1", and voiding is reserved for a name
@@ -526,7 +626,7 @@ if Q and os.path.exists(Q):
     check("candor-query whatif: gate verdict fires through the fleet graph",
           wi.returncode == 1 and "boss" in wi.stdout, f"rc={wi.returncode} out={wi.stdout[:160]}")
 else:
-    print("  SKIP candor-query integration (find-query.sh could not locate or build it)")
+    skip("candor-query integration (find-query.sh could not locate or build it)", 3)
 
 # ── 10. --link: the Exec-boundary refinement (fleet inherits the linked code report) ─────────────
 d = tempfile.mkdtemp()
@@ -665,7 +765,16 @@ def _linked_gate(tag, code_functions, rule, sidecar=None):
     rr = subprocess.run([sys.executable, "-m", "candor_agents.scan", d, "--out", o, "--fleet", "t",
                          "--link", pre, "--policy", po, "--gate-json", gj],
                         capture_output=True, text=True)
-    return rr.returncode, json.load(open(gj))
+    # A verdict that was never written (the engine crashed, refused, or exited before arming) is a
+    # RESULT, not a reason to kill the harness. `_rcls`'s docstring below already claimed this
+    # property for the whole helper and the `json.load` here defeated it: measured 2026-08-30,
+    # deleting `_same_artifact`'s empty/absent-path guard crashes the scan subprocess, and this line
+    # aborted the run at check 71 of 559 — 488 never ran, including the rows written for that guard.
+    try:
+        verdict = json.load(open(gj))
+    except Exception as e:
+        verdict = {"ok": None, "violations": [], "_unwritten": f"{type(e).__name__}: {e}"}
+    return rr.returncode, verdict
 
 
 def _rcls(verdict):
@@ -2049,7 +2158,7 @@ print()
 # with the gate. Written whenever the flag is given; unwritable → exit 2, never silent.
 _gj = os.path.join(_mkd(), "verdict.json")
 rgv = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", _gj)
-_gv = json.load(open(_gj))
+_gv = verdict(_gj)
 check("scan --gate-json <violating>: verdict {spec:%s, ok:false} agrees with exit 1" % _SPEC,
       rgv.returncode == 1 and _gv["spec"] == _SPEC and _gv["ok"] is False, json.dumps(_gv))
 check("scan --gate-json: each violation carries {rule, fn, effects, detail} (fn = the unit name)",
@@ -2058,17 +2167,17 @@ check("scan --gate-json: each violation carries {rule, fn, effects, detail} (fn 
 _gj2 = os.path.join(_mkd(), "clean.json")
 check("scan --gate-json <clean policy>: ok:true, violations [], exit 0",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc, "--gate-json", _gj2).returncode == 0
-      and json.load(open(_gj2)) == {"spec": _SPEC, "ok": True, "violations": []})
+      and verdict(_gj2) == {"spec": _SPEC, "ok": True, "violations": []})
 _gj3 = os.path.join(_mkd(), "nogate.json")
 check("scan --gate-json with NO gate configured: still writes the clean verdict (ok:true, [])",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--gate-json", _gj3).returncode == 0
-      and json.load(open(_gj3))["ok"] is True)
+      and verdict(_gj3)["ok"] is True)
 # ⟨0.27⟩ §4 `zeroMatch` reaching the MACHINE verdict end to end, through scan's real run_gate (not just
 # the direct evaluate_policy call above) — a typo'd scope over the real fleet, clean otherwise.
 _pzm = os.path.join(_mkd(), "zm.policy"); open(_pzm, "w").write("deny Net orchestratr\ndeny Db\n")
 _gjzm = os.path.join(_mkd(), "zm.json")
 _rzm = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pzm, "--gate-json", _gjzm)
-_vzmj = json.load(open(_gjzm))
+_vzmj = verdict(_gjzm)
 check("cli scan --policy <typo'd scope> --gate-json: exit 0 (nothing violates), but the verdict "
       "carries `zeroMatch` naming the unbound rule — a typo cannot pass as a checked-and-clean rule",
       _rzm.returncode == 0 and _vzmj["ok"] is True and _vzmj.get("zeroMatch") == ["deny Net orchestratr"]
@@ -2089,9 +2198,11 @@ _rdup = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv,
 check("scan --gate-json A --gate-json B (two distinct sinks): exit 2, refused, and the refusal is "
       "written to BOTH named sinks — neither is left holding a stale prior verdict",
       _rdup.returncode == 2
-      and json.load(open(_gjA)).get("refused") is True
-      and json.load(open(_gjB)).get("refused") is True,
-      f"rc={_rdup.returncode} A={open(_gjA).read()!r} B={open(_gjB).read()!r}")
+      and verdict(_gjA).get("refused") is True
+      and verdict(_gjB).get("refused") is True,
+      # The DETAIL argument is evaluated eagerly too, so a bare `open()` here kills the harness on
+      # exactly the failure it exists to explain. Same class as `verdict()` above, one argument over.
+      f"rc={_rdup.returncode} A={verdict(_gjA)} B={verdict(_gjB)}")
 rgs = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", "-")
 try:
     _gvs = json.loads(rgs.stdout)
@@ -2120,7 +2231,7 @@ check("observe --json --gate-json -: refused (two JSON documents can't share std
 _gjo = os.path.join(_mkd(), "ov.json")
 rgo = cli("observe", _otdir, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"),
           "--fleet", "t", "--policy", _pv, "--gate-json", _gjo)
-_gvo = json.load(open(_gjo))
+_gvo = verdict(_gjo)
 check("observe --gate-json <violating>: the OBSERVED gate emits the same verdict shape, exit 1",
       rgo.returncode == 1 and _gvo["ok"] is False
       and any(v["rule"] == "AS-EFF-006" and v["effects"] == ["Net"] for v in _gvo["violations"]),
@@ -2147,8 +2258,48 @@ check("_same_artifact: two DIFFERENT files with identical content are NOT the sa
 check("_same_artifact: the `-` stream sink is never 'the same artifact' as anything, including itself",
       _sc._same_artifact("-", "-") is False and _sc._same_artifact("-", _sap1) is False
       and _sc._same_artifact(_sap1, "-") is False)
-check("_same_artifact: an empty/absent path is never 'the same artifact' as anything",
+# The empty/absent-path guard. THE ROW BELOW USED TO BE VACUOUS and is corrected here (measured
+# 2026-08-30): its two cases were `("", <a real file>)` and `(<a real file>, "")`, and `realpath("")`
+# returns the CWD, which is not that file — so both stayed False with `if not a or not b` deleted and
+# the row could not see the guard at all. The values that DO discriminate are the ones where the
+# degenerate side resolves onto the OTHER side: two empties, and an empty against the cwd. Both then
+# answer True — a FALSE `--gate-json names the SAME FILE as …` refusal (exit 2, nothing written) on a
+# run whose paths do not collide. The `None` case is the PRODUCTION shape: `_refuse_sink_over_input`
+# is called with `os.environ.get("CANDOR_POLICY")`, which is None on almost every real run, and
+# `os.path.realpath(None)` raises TypeError — which `resolve`'s `except OSError` does NOT catch, so
+# deleting this guard crashes `scan --gate-json` outright. Read through `called()` for exactly that
+# reason (see DECLARED at the top of this file): a crash must fail the ROW, not the run.
+check("_same_artifact CONTROL: an empty path against a REAL file is not the same artifact (the safe "
+      "direction — this case passes with or without the guard, which is what makes it a control)",
       _sc._same_artifact("", _sap1) is False and _sc._same_artifact(_sap1, "") is False)
+check("_same_artifact: an empty/absent path is never 'the same artifact' as anything — INCLUDING the "
+      "cases where the degenerate side resolves onto the other one. `realpath(\"\")` is the CWD, so "
+      "without the guard two empty paths, and an empty path against the cwd, both answer True and "
+      "produce a FALSE `SAME FILE` refusal at exit 2 on a run with no collision at all",
+      _sc._same_artifact("", "") is False and _sc._same_artifact("", os.getcwd()) is False
+      and _sc._same_artifact(os.getcwd(), "") is False)
+check("_same_artifact: an ABSENT path is None, not \"\" — `_refuse_sink_over_input` passes "
+      "`os.environ.get('CANDOR_POLICY')` straight in, so None is the value almost every real run "
+      "supplies. `realpath(None)` raises TypeError, which `resolve`'s `except OSError` does not catch: "
+      "without the guard this is not a wrong answer, it is a CRASH in `scan --gate-json`",
+      called(_sc._same_artifact, _sap1, None) is False
+      and called(_sc._same_artifact, None, _sap1) is False
+      and called(_sc._same_artifact, None, None) is False)
+# …and end to end, since a unit-level crash-guard row should not be the only thing standing between a
+# regression here and every `--gate-json` run on the planet. No CANDOR_POLICY, no CANDOR_CONFIG — the
+# ordinary case — must produce a verdict, not a traceback.
+_sae = _mkd(); _saeg = os.path.join(_sae, "v.json")
+_rsae0 = subprocess.run([sys.executable, "-m", "candor_agents.cli", "scan", _cd,
+                         "--out", os.path.join(_sae, "r"), "--gate-json", _saeg],
+                        capture_output=True, text=True,
+                        env={k: v for k, v in {**os.environ, "PYTHONPATH": HERE}.items()
+                             if k not in ("CANDOR_POLICY", "CANDOR_CONFIG")})
+check("cli scan --gate-json with NO $CANDOR_POLICY and NO $CANDOR_CONFIG (the ordinary run): exits 0 "
+      "and writes the verdict. The collision pre-pass compares the sink against those env vars while "
+      "they are None, so this is the path the empty/absent guard actually protects",
+      _rsae0.returncode == 0 and os.path.exists(_saeg)
+      and verdict(_saeg).get("ok") is True,
+      f"rc={_rsae0.returncode} err={_rsae0.stderr[-240:]!r}")
 
 # End to end, the exact scenario the docstring names: `--policy /w/P --gate-json ./P` from cwd `/w` —
 # ONE file named twice under different spellings. Before this test existed, nothing proved the CLI path
@@ -2449,15 +2600,56 @@ check("policy AS-EFF-006: `pure leaf` (deny with no effects) flags leaf for perf
       len(_vp) == 1 and _vp[0]["fn"] == "leaf" and _vp[0]["rule"] == "AS-EFF-006", _vp)
 
 # parse_policy: text-encoding artifacts must not silently drop a rule. Guard-deletion found BOTH
-# unprotected — gutting the BOM-strip OR the CRLF normalisation left the full suite green.
+# unprotected; the BOM row below re-measures RED on deletion, and the CRLF one did NOT — corrected
+# and re-measured 2026-08-30, because the comment here read as coverage for both:
+#
+#   THE SURFACE. Every `open()` in this package is default text mode (grepped: no `newline=`, no
+#   `"rb"`, no `.decode()`), so Python's universal newlines has ALREADY turned \r and \r\n into \n
+#   before `parse_policy`/`parse_denies` ever see a POLICY FILE. Measured end to end: with the
+#   normalisation deleted, a bare-CR policy file still gates (exit 1) and `guard <file>` still
+#   compiles both rules. So the normalisation is load-bearing on the LIBRARY surface only —
+#   `parse_policy(text)` / `compile_guard(text, dir)` called with a string, which is how test.py,
+#   any embedder, and anything reading a policy off a socket or a JSON field reaches it.
+#
+#   WHAT THE OLD ROW MEASURED. `"deny Net\r\ndeny Db\r\n"` stays green with the WHOLE normalisation
+#   deleted, because `.strip(" \t\n\v\f\r")` one line down removes the trailing \r of each line. The
+#   CRLF case cannot discriminate this guard; only a BARE \r can, because \r is then an in-line
+#   separator that `split("\n")` does not split on. The row is kept as the control (it must stay green
+#   either way) and the discriminating rows are below it.
 _bomp = _pol.parse_policy("﻿deny Net\n")
 check("policy: a leading UTF-8 BOM does not blind the FIRST rule (it fell to the non-fatal 'unknown "
       "rule kind' catch-all before this — a single-line `deny Net` policy silently gated nothing)",
       _bomp["deny"] == [{"effects": ["Net"], "scope": "", "unknownClasses": [], "raw": "deny Net"}],
       _bomp)
 _crlfp = _pol.parse_policy("deny Net\r\ndeny Db\r\n")
-check("policy: CRLF-terminated lines parse as two separate rules, not one glued line",
+check("policy CONTROL (does NOT pin the normalisation — the per-line strip already handles it): "
+      "CRLF-terminated lines parse as two separate rules, not one glued line",
       [d["effects"] for d in _crlfp["deny"]] == [["Net"], ["Db"]], _crlfp)
+# The case the guard's own comment names — classic-Mac bare \r — and the one that had ZERO coverage.
+_crp = _pol.parse_policy("deny Net\rdeny Db\r")
+check("policy: BARE-\\r line terminators parse as two separate rules. Without the normalisation "
+      "`split(\"\\n\")` sees ONE line, `deny Net\\rdeny Db` tokenises to [deny, Net, deny, Db], and the "
+      "whole file compiles to a SINGLE `deny Net` SCOPED to a phantom agent named `deny` — with zero "
+      "errors and zero warnings. A two-rule fleet-wide policy silently becomes a rule that binds "
+      "nothing: the under-protective direction, at exit 0",
+      [(d["effects"], d["scope"]) for d in _crp["deny"]] == [(["Net"], ""), (["Db"], "")]
+      and _pol.LAST_POLICY_ERRORS == [], (_crp, _pol.LAST_POLICY_ERRORS))
+check("guard: and that bare-\\r policy compiles the SAME permissions.deny as its \\n twin — the "
+      "measured consequence is `deny = []`, a fully permissive fragment from a policy that denies Net "
+      "and Exec (the exact shape of the `deny\\tNet` defect one whitespace character over)",
+      guard.compile_guard("deny Net\rdeny Exec")["deny"]
+      == guard.compile_guard("deny Net\ndeny Exec")["deny"] != [],
+      guard.compile_guard("deny Net\rdeny Exec")["deny"])
+# THE OVER-CHARGE CONTROL for the normalisation, written first: turning \r into a line break must not
+# MINT rules that were never written. A trailing terminator yields one rule (not a phantom second),
+# and a file of nothing but terminators yields none — the safe values, which must stay green.
+_cr1 = _pol.parse_policy("deny Net\r")
+_cr0 = _pol.parse_policy("\r\n\r\r\n")
+check("policy over-charge control: a TRAILING bare \\r ends the rule and does not mint a second one, "
+      "and a policy of nothing but terminators yields no rules and no errors — normalising \\r to a "
+      "line break must not fabricate a boundary the operator did not write",
+      [(d["effects"], d["scope"]) for d in _cr1["deny"]] == [(["Net"], "")]
+      and _cr0["deny"] == [] and _cr0["allow"] == [] and _cr0["forbid"] == [], (_cr1, _cr0))
 
 # ══ SPEC ⟨0.24⟩ — `pure` is UNAFFECTED by `Unknown` (§4.0's verb table, conformance PART 16) ═══════
 # `pure <scope>` fires iff `S ≠ ∅`, where `S` is the DETERMINED effects — `inferred` MINUS the
@@ -2817,7 +3009,7 @@ if _Q and os.path.exists(_Q):
           _mine_fns == _q_fns and _mine_fns == ["boss", "leaf", "session"],
           f"mine={_mine_fns} candor-query={_q_fns}")
 else:
-    print("  SKIP policy parity (candor-query not located/built)")
+    skip("policy parity (candor-query not located/built)", 2)
 
 print()
 
@@ -2928,7 +3120,7 @@ if os.geteuid() != 0:   # root reads through chmod 000; the config battery above
           _ur.returncode == 0 and "unreadable .claude/scheduled_tasks.json" in _ur.stderr
           and "scheduled tasks UNKNOWN" in _ur.stderr, _ur.stderr[-240:])
 else:
-    print("  SKIP unreadable-config disclosure (running as root — chmod 000 is readable)")
+    skip("unreadable-config disclosure (running as root — chmod 000 is readable)", 2)
 
 # observe: a CURATED MCP server's tool classifies by MCP_TABLE (github → Net) with NO Unknown/why —
 # the observed-side twin of the scan-side curated/uncurated split (an uncurated one reads Unknown).
@@ -2976,12 +3168,17 @@ check("__init__: an unknown attribute raises AttributeError (the lazy hook doesn
 # evaluate_policy only calls scope_matches when `r["scope"]` is truthy (deny/allow), and the forbid
 # parser refuses a rule with an empty `from`/`to` before it can reach here. Direct-call safety only;
 # pinned so a future caller (or a regression here) fails a test, not a crash in someone's embedding.
+# THAT LAST SENTENCE WAS FALSE UNTIL 2026-08-30 (attack K — a claim of correctness suppresses the
+# measurement that would falsify it). Removing the guard raised the IndexError while building the row's
+# ARGUMENT, so it aborted the module: 490 of 553 checks ran, no FAIL row, no summary. `called()` is
+# what makes the sentence true — see the DECLARED reconciliation at the top of this file.
 check("policy scope_matches: a scope with more segments than the name never matches",
       _pol.scope_matches("a.b", "a.b.c.d") is False)
 check("policy scope_matches: an EMPTY scope never matches (and never crashes on `parts[-1]`) — "
       "unreachable from every production call site (both callers guard on scope truthiness first) "
-      "but callable directly, so pinned rather than left to crash a future caller",
-      _pol.scope_matches("a.b", "") is False)
+      "but callable directly, so pinned rather than left to crash a future caller. Read through "
+      "`called()`, so deleting the guard FAILS THIS ROW instead of killing the run",
+      called(_pol.scope_matches, "a.b", "") is False)
 # _path_covered: a reached path that climbs out via `..` is never covered; abs/rel never conflate
 # (both arms mirror rust fs_path_covered / ts pathCovered). The escape case is the one that matters:
 # a NAIVE segment-prefix comparison of UNRESOLVED segments reads "/etc/allowed/../../etc/passwd" as
@@ -3291,11 +3488,80 @@ check("guard CLI: a policy the GATE refuses (a fatal §6.2 error — here `only`
 def _mcpd(entries):
     d = _mkd(); json.dump({"mcpServers": entries}, open(os.path.join(d, ".mcp.json"), "w")); return d
 _gp = _gd.compile_guard("deny Net", _mcpd({"github": {"candorEffects": ["Fs"]}}))
-check("guard: the CURATED MCP_TABLE outranks a `candorEffects` declaration, as it does in scan — a "
-      "server named `github` declaring `[\"Fs\"]` is still denied by `deny Net`. guard read the "
-      "declaration FIRST, so it omitted from the fragment a server the scan gate fires AS-EFF-006 on "
-      "(.mcp.json is project-controlled: a project must not be able to narrow candor's own claim)",
+check("guard NARROWING CONTROL: a `candorEffects` declaration can never SUBTRACT candor's own claim — "
+      "a server named `github` declaring `[\"Fs\"]` is still denied by `deny Net`, in guard and in "
+      "scan. guard read the declaration FIRST and omitted from the fragment a server the scan gate "
+      "fires AS-EFF-006 on (.mcp.json is project-controlled). This row must stay GREEN across the "
+      "curated-first → UNION change below: it is the direction the precedence rule was written for",
       "mcp__github" in _gp["deny"], json.dumps(_gp))
+_gp0 = _gd.compile_guard("deny Net", _mcpd({"github": {"candorEffects": []}}))
+check("guard NARROWING CONTROL 2: `\"candorEffects\": []` declares a PURE server, and on a CURATED "
+      "one it is still inert — `github` cannot be declared pure out of a `deny Net`. The union keeps "
+      "this: ∅ adds nothing to {Net}",
+      "mcp__github" in _gp0["deny"], json.dumps(_gp0))
+# ── THE WIDENING DIRECTION, which the curated-first ladder dropped in silence (⟨0.34⟩) ─────────────
+# `2920419` made guard delegate to scan, and scan's ladder was `if curated / elif declared`. Same
+# policy, same `.mcp.json` (`filesystem` declaring ["Fs","Net"]), nothing else varied:
+#   PRE  deny = [WebFetch, WebSearch, mcp__filesystem]
+#   POST deny = [WebFetch, WebSearch]         exit 0, no warning about the dropped declaration
+# It matched scan, and it matched DECLARING.md's "curated outranks" — and it is still a declaration
+# dropped with no disclosure, which is what DECLARING.md's own second paragraph forbids. The join is
+# now a UNION (scan.mcp_server_effects), so the rule holds in the direction it was argued for and
+# stops firing in the direction it was not.
+_gw = _gd.compile_guard("deny Net", _mcpd({"filesystem": {"candorEffects": ["Fs", "Net"]}}))
+check("guard WIDENING: a curated server whose project DECLARES an effect the curated table lacks is "
+      "denied on the declared effect too — `filesystem` (curated {Fs}) declaring `[\"Fs\",\"Net\"]` is "
+      "in a compiled `deny Net`. Under curated-first it dropped out of the fragment silently, so the "
+      "runtime enforcement was strictly weaker than the policy the operator wrote",
+      "mcp__filesystem" in _gw["deny"], json.dumps(_gw))
+_gv2 = _gd.compile_guard("deny Fs", _mcpd({"filesystem": {"candorEffects": ["Nett"]}}))
+check("guard: a VOIDED declaration on a CURATED server warns AND keeps the curated deny — the void "
+      "used to vanish behind the curated entry with no warning at all (the same silent-drop one "
+      "branch over), while the server must still be denied on what candor itself knows",
+      "mcp__filesystem" in _gv2["deny"]
+      and any("voided" in w and "filesystem" in w for w in _gv2["warnings"]), json.dumps(_gv2))
+# …and the SAME question of the scan gate, where the ladder actually lived. Two `.mcp.json` files that
+# differ ONLY in the server's NAME — both declaring the same thing, one agent granted that server's
+# tool, one `deny Net worker`. Under curated-first: `acme` → AS-EFF-006 exit 1, `filesystem` → `policy
+# ✓` exit 0. Naming your server after a curated one silenced your own declaration and turned a red
+# gate green, with no disclosure anywhere in the report.
+def _declscan(server, decl, rule):
+    """(exit code, the `worker` report entry) for a fleet whose only grant is `server`'s tool."""
+    _d = _mkd(); os.makedirs(os.path.join(_d, ".claude", "agents"))
+    _cfg = {"command": "x"} if decl is None else {"command": "x", "candorEffects": decl}
+    json.dump({"mcpServers": {server: _cfg}}, open(os.path.join(_d, ".mcp.json"), "w"))
+    open(os.path.join(_d, ".claude", "agents", "w.md"), "w").write(agent("worker", f"mcp__{server}__read"))
+    _p = os.path.join(_d, "pol"); open(_p, "w").write(rule + "\n")
+    _r = subprocess.run([sys.executable, "-m", "candor_agents.scan", _d, "--out", os.path.join(_d, "r"),
+                         "--fleet", "t", "--policy", _p], capture_output=True, text=True, cwd=HERE)
+    try:
+        _rep = json.load(open(os.path.join(_d, "r.t.Fleet.json")))
+    except Exception as _e:                      # a report that was never written is a RESULT, not a crash
+        return _r.returncode, {"_unwritten": str(_e)}
+    return _r.returncode, entry(_rep, "worker") or {"_absent": True}
+_dc, _ec = _declscan("filesystem", ["Fs", "Net"], "deny Net worker")   # curated name
+_du, _eu = _declscan("acme", ["Fs", "Net"], "deny Net worker")         # uncurated name, same declaration
+check("scan WIDENING: two `.mcp.json` files differing ONLY in the server's NAME, both declaring "
+      "`[\"Fs\",\"Net\"]`, reach the SAME verdict under `deny Net worker`. Under curated-first the "
+      "uncurated name exited 1 and the CURATED one exited 0 with `policy ✓` — so naming your server "
+      "`filesystem` silenced your own declaration and turned the gate green, disclosed nowhere",
+      _dc == 1 and _du == 1 and _ec.get("inferred") == _eu.get("inferred") == ["Fs", "Net"],
+      (_dc, _ec, _du, _eu))
+# THE OVER-CHARGE CONTROL, and the one that matters most here: unioning the two tiers must not MINT
+# an effect nobody declared. A curated server with NO declaration keeps exactly the curated set.
+_dn, _en = _declscan("filesystem", None, "deny Net worker")
+_df, _ef = _declscan("filesystem", None, "deny Fs worker")
+check("scan over-charge control: an UNDECLARED curated server still classifies as exactly its curated "
+      "entry — `filesystem` with no `candorEffects` is {Fs}: `deny Net worker` exits 0 and `deny Fs "
+      "worker` exits 1. The union must widen only where the project actually claimed something",
+      _dn == 0 and _en.get("inferred") == ["Fs"] and _df == 1, (_dn, _en, _df, _ef))
+_dv, _ev = _declscan("filesystem", ["Nett"], "deny Fs worker")
+check("scan: a VOIDED declaration on a CURATED server is DISCLOSED — `filesystem` declaring "
+      "`[\"Nett\"]` reads {Fs, Unknown} with `mcp-decl-invalid:filesystem:Nett`, and still violates "
+      "`deny Fs`. The void used to vanish behind the curated entry: the operator's claim was "
+      "discarded and the report said nothing, which is the silent-drop defect one branch over",
+      _dv == 1 and _ev.get("inferred") == ["Fs", "Unknown"]
+      and "mcp-decl-invalid:filesystem:Nett" in (_ev.get("unknownWhy") or []), (_dv, _ev))
 _gl = _gd.compile_guard("deny Net", _mcpd({"acme": {"candorEffects": ["Llm"]}}))
 check("guard: a server declaring `[\"Llm\"]` is denied by `deny Net` — SPEC §6.1 ⟨0.24⟩ `refine_llm` "
       "co-emits Net, and read_mcp applies it at the source; guard's own reader took `set(decl)` raw, "
@@ -3439,5 +3705,148 @@ check("config: the §3.4 `engine` PIN survives a BOM too — the SECOND parser o
 print()
 
 
-print(f"test: {PASS} passed, {FAIL} failed")
+# ══ THE DEGENERATE-INPUT GUARD SWEEP (2026-08-30) ═════════════════════════════════════════════════
+# `_same_artifact`'s empty-path row was VACUOUS — its assertion held with the guard deleted, because
+# `realpath("")` is the CWD and the other side was a real file. One vacuous row implies a CLASS, and
+# the boundary must not be drawn round the row that triggered the audit, so the sweep was over the
+# MECHANISM in every module: 124 guards whose whole job is to catch an absent/empty/None/wrong-type
+# value, each disabled in turn (`if <cond>` → `if False`) against the full suite. 87 went red, 16
+# aborted (also red), 21 were GREEN — no row in 565 could tell the guard from its absence.
+#
+# THE SHAPE OF THE 21 IS THE FINDING: seven of them are one pattern — a guard that is COVERED on the
+# `scan` route and UNCOVERED on the identical `observe` route (the family's sibling-route habit, found
+# mechanically rather than by noticing). The rows below close the under-protective and crashing ones;
+# the remainder are reported as cosmetic/fail-closed rather than fixed (digest's empty span, guard's
+# residual-advice branch, savings' `.jsonl` filter and default transcript dir, observe's output
+# basename, policy's empty reason-class token, guard's redundant `.mcp.json` existence fast-path).
+_swd = _mkd(); os.makedirs(os.path.join(_swd, ".claude", "agents")); os.makedirs(os.path.join(_swd, ".candor"))
+open(os.path.join(_swd, ".claude", "agents", "w.md"), "w").write(agent("worker", "WebFetch"))
+open(os.path.join(_swd, "pol"), "w").write("deny Net\n")
+# (1) `.candor/config`: BOTH parsers behind one open() index `parts[0]` after splitting the line, so a
+# BLANK LINE — which every real config file has — was an IndexError that killed the scan before the
+# gate ran. Measured: with load_candor_config's blank-line guard disabled, this exact file raises
+# `IndexError: list index out of range` at `key = parts[0].lower()`. Nothing exercised it.
+open(os.path.join(_swd, ".candor", "config"), "w").write("\n# a comment\n\npolicy pol\n\n\n")
+_rsw = subprocess.run([sys.executable, "-m", "candor_agents.scan", _swd, "--out",
+                       os.path.join(_mkd(), "r"), "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+check("config: BLANK LINES and comments in `.candor/config` are skipped by BOTH of its parsers — the "
+      "gate is configured (exit 1 on this violating fleet) and no traceback. `parts[0]` on an empty "
+      "split is an IndexError, so an ordinary blank line killed the scan before the gate could run",
+      _rsw.returncode == 1 and "Traceback" not in _rsw.stderr,
+      f"rc={_rsw.returncode} err={_rsw.stderr[-200:]!r}")
+open(os.path.join(_swd, ".candor", "config"), "w").write("\n\nengine v9.9.9\n\n")
+_rsw2 = subprocess.run([sys.executable, "-m", "candor_agents.scan", _swd, "--out",
+                        os.path.join(_mkd(), "r"), "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+check("config: and the SECOND parser over the same file (engine_pin_for) skips blank lines too — the "
+      "§3.4 pin mismatch still exits 2. One guard per parser, and neither had a fixture",
+      _rsw2.returncode == 2 and "Traceback" not in _rsw2.stderr,
+      f"rc={_rsw2.returncode} err={_rsw2.stderr[-200:]!r}")
+# (2)–(4) THE SIBLING ROUTE, measured: scan's copies of these three guards are each pinned by a row;
+# observe's are not, and observe is the route that shipped a crash once already.
+#
+# A SEPARATE PROJECT DIR, and that is not tidiness. These rows were first written against `_swd` — the
+# dir the config rows above leave holding `engine v9.9.9` — so EVERY arm exited 2 on the PIN MISMATCH
+# and the `== {2}` assertion passed without touching the guard under test. Falsification caught it
+# (all five stayed green with their own guards disabled); reasoning did not. §4: a comparison is
+# evidence only if the arms differ in exactly the thing under test, and a reused fixture dir is a
+# second variable. The control row below is what makes that visible next time.
+_swo = _mkd(); os.makedirs(os.path.join(_swo, ".claude", "agents"))
+open(os.path.join(_swo, ".claude", "agents", "w.md"), "w").write(agent("worker", "WebFetch"))
+open(os.path.join(_swo, "pol"), "w").write("deny Net\n")
+_swt = os.path.join(_swo, "s"); os.makedirs(_swt)
+open(os.path.join(_swt, "s.jsonl"), "w").write(json.dumps(
+    {"message": {"content": [{"type": "tool_use", "id": "1", "name": "WebFetch",
+                              "input": {"url": "https://x.test"}}]}}) + "\n")
+def _obsw(*a):
+    return subprocess.run([sys.executable, "-m", "candor_agents.observe", _swo, "--transcripts", _swt,
+                           "--fleet", "t", *a], capture_output=True, text=True, cwd=HERE)
+check("observe CONTROL for the five rows below: this fixture dir has NO `.candor/config`, so a clean "
+      "run exits 0. Without it every arm exits 2 on a pin mismatch and the assertions pass while "
+      "measuring nothing — which is what the first draft of these rows did",
+      _obsw("--out", os.path.join(_mkd(), "o")).returncode == 0)
+# The DIAGNOSTIC, not just the exit code. `--transcripts` with its value swallowed also exits 2 —
+# from `no transcripts found`, two nets down — so an exit-code-only assertion passes with the guard
+# deleted and measures nothing (falsification caught that too). The named line is what distinguishes
+# "the flag was refused" from "the run failed later for an unrelated reason".
+_swflags = {f: _obsw("--out", os.path.join(_mkd(), "o"), f) for f in
+            ("--out", "--policy", "--gate-json", "--transcripts", "--fleet")}
+check("observe: EVERY flag whose value is MISSING exits 2, says `<flag> requires a value`, and STOPS "
+      "THERE — " + ", ".join(sorted(_swflags)) + ". scan's five twins each have a row and observe's "
+      "five had none; a `--policy` swallowed as None is a gate that silently never ran, which is the "
+      "one direction this family does not permit. The third clause is load-bearing: `value()` writes "
+      "its diagnostic BEFORE returning None, so with the guard deleted the message still appears and "
+      "the run carries on — `--transcripts` then reaches `no transcripts found` and exits 2 anyway. "
+      "Exit code and message together still could not see the guard; only 'and went no further' can",
+      all(r.returncode == 2 and f"{f} requires a value" in r.stderr
+          and "no transcripts found" not in r.stderr for f, r in _swflags.items()),
+      {f: (r.returncode, r.stderr[-90:]) for f, r in _swflags.items()})
+_swA, _swB = os.path.join(_mkd(), "A.json"), os.path.join(_mkd(), "B.json")
+open(_swA, "w").write('{"ok": true, "stale": "from a previous run"}')
+_rswd = _obsw("--out", os.path.join(_mkd(), "o"), "--policy", os.path.join(_swd, "pol"),
+              "--gate-json", _swA, "--gate-json", _swB)
+check("observe --gate-json A --gate-json B: ⟨0.28⟩ refuses at exit 2 and writes the refusal to BOTH "
+      "sinks, exactly as scan does. `refuse_duplicate_gate_sinks` is SHARED, but observe's `if rc is "
+      "not None: return rc` — the line that makes the shared refusal reach the exit code — was the "
+      "half with no fixture, so A could have been left holding its stale green",
+      _rswd.returncode == 2 and verdict(_swA).get("refused") is True
+      and verdict(_swB).get("refused") is True,
+      f"rc={_rswd.returncode} A={verdict(_swA)} B={verdict(_swB)}")
+# The cause must exit 2 BEFORE the gate runs. `--policy <absent>` does not: `run_gate` writes the
+# stream verdict itself, so it sets STREAM_VERDICT_WRITTEN and this outer net never fires — another
+# arm that passes without touching the guard. An UNKNOWN FLAG exits inside the try with no gate ever
+# reached, which is the only shape that reaches this line.
+_rsws = _obsw("--gate-json", "-", "--bogus")
+check("observe --gate-json - on a run that exits 2 BEFORE the gate could run (here an unknown flag): "
+      "the stream still carries a refusal document. SPEC §3.1 — a FILE sink holds the armed "
+      "placeholder, a STREAM has none, so without this net the consumer gets NOTHING on stderr-only "
+      "causes and is thrown back to scraping stderr. scan's twin was pinned; this one was not",
+      _rsws.returncode == 2 and json.loads(_rsws.stdout or "{}").get("refused") is True,
+      f"rc={_rsws.returncode} out={_rsws.stdout[:120]!r}")
+# (5) observe over adversarially-shaped transcript JSON — the lane whose unfuzzed crash shipped a bug
+# once. A non-dict `input` and a non-list `content` are both structurally valid JSON.
+# JUDGED DEAD, NOT A FINDING: of the two isinstance guards here, only `observe.py:75` (the non-dict
+# `input`) is load-bearing — deleting it raises AttributeError on `inp.get`. `observe.py:118` (the
+# non-list `content`) is REDUNDANT: iterating a string yields characters and the very next line is
+# `isinstance(b, dict)`, which rejects every one, so the loop is empty either way. Deletion-tested,
+# and recorded here rather than papered over with a row that could not fail.
+_swp = _mkd(); _swps = os.path.join(_swp, "s"); os.makedirs(_swps)
+open(os.path.join(_swps, "s.jsonl"), "w").write(
+    json.dumps({"message": {"content": [{"type": "tool_use", "id": "1", "name": "Bash",
+                                         "input": "not-a-dict"}]}}) + "\n"
+    + json.dumps({"message": {"content": "not-a-list"}}) + "\n"
+    + json.dumps({"message": {"content": [{"type": "tool_use", "id": "2", "name": "WebFetch",
+                                           "input": {"url": "https://y.test"}}]}}) + "\n")
+_rswp = subprocess.run([sys.executable, "-m", "candor_agents.observe", _swp, "--transcripts", _swps,
+                        "--out", os.path.join(_swp, "o"), "--fleet", "t"],
+                       capture_output=True, text=True, cwd=HERE)
+_swprep = verdict(os.path.join(_swp, "o.t.Observed.json"))
+check("observe: a non-dict `input` and a non-list `content` are structurally valid JSON and must "
+      "degrade, not crash — the run completes, and the WELL-FORMED event beside them is still "
+      "classified (Net). Both isinstance guards were unfired by any fixture, and this is the lane "
+      "whose unfuzzed crash shipped a bug",
+      _rswp.returncode == 0 and "Traceback" not in _rswp.stderr
+      and any("Net" in (f.get("inferred") or []) for f in _swprep.get("functions", [])),
+      f"rc={_rswp.returncode} err={_rswp.stderr[-160:]!r} rep={str(_swprep)[:200]}")
+# (6) the §6.2 ⟨0.24⟩ FAIL-CLOSED NET, whose own docstring names the under-report it prevents — and
+# which no row could see, because the only production caller (`--link`) substitutes `{"unresolved"}`
+# upstream, so `reason_class_matches` never receives the empty set through the tested route. Attack K:
+# the comment asserting the safety property is exactly what stopped it being measured. Pinned directly.
+check("policy reason_class_matches: an `Unknown` with NO recorded reason contributes `unresolved` — "
+      "`(∅|None, {unresolved})` is True and `(∅, {dispatch})` is False. Read the other way round "
+      "(empty ∩ anything = exclude) an unclassifiable hole is dropped by EVERY filter including one "
+      "naming its own class: a silent under-report wearing a filter",
+      called(_pol.reason_class_matches, None, {"unresolved"}) is True
+      and called(_pol.reason_class_matches, set(), {"unresolved"}) is True
+      and called(_pol.reason_class_matches, set(), {"dispatch"}) is False
+      and called(_pol.reason_class_matches, None, set()) is True)
+check("policy reason_class_matches over-charge control: a CLASSIFIED reason still matches only its "
+      "own filter — the fail-closed net must not turn every filter into `Unknown[*]`",
+      _pol.reason_class_matches({"dispatch"}, {"dispatch"}) is True
+      and _pol.reason_class_matches({"dispatch"}, {"unresolved"}) is False)
+
+print()
+
+_REACHED_END = True
+print(f"test: {PASS} passed, {FAIL} failed"
+      + (f", {SKIPPED} skipped (declared {DECLARED})" if SKIPPED else ""))
 sys.exit(1 if FAIL else 0)
