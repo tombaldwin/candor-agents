@@ -85,6 +85,66 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
   `isinstance(h, int)` and was the one field the earlier bool-as-int hardening missed. Fixed to use the
   same `_is_int()` guard as its siblings. One new regression check, falsified against the pre-fix guard.
 
+- **`observe`: `--json` beside `--gate-json -` printed the FULL report envelope to stdout, THEN
+  discovered the sink conflict and exited 2 — a refusal code with a complete, successfully-parsed
+  report already sitting on the stream.** `scan.py` decides this combination BEFORE producing any
+  output; `observe.py` had no equivalent pre-check and relied solely on `write_gate_json`'s internal
+  guard, which fires too late for observe's code shape (`observe()` prints the `--json` envelope
+  unconditionally, before `run_gate` ever sees the sink). The §3.1 posture that a refusal document has
+  no exempt cause and no exempt sink extends to the report stream itself, not only the verdict sink.
+  Fixed by deciding the conflict in `observe.main()` before target/transcript resolution — nothing is
+  written to stdout on this path now, matching `scan.py`. Found attacking the modules a prior round
+  called "heavily hardened but never actually attacked by deletion" (`bin/AGENT-CORPUS-BRIEF.md`
+  §C, the guard-deletion test). One new regression check, falsified against the pre-fix code.
+
+- **A guard-deletion sweep (delete each guard, confirm the suite goes red — measure, don't reason) of
+  `cli.py`, `observe.py`, `policy.py`, and `scan.py`'s classification/policy core found ten
+  correct-but-UNTESTED guards** — none of them wrong, all of them one refactor away from silently
+  regressing — and gave each regression coverage:
+  - `policy.py`'s `only` permission rule fell through to the ordinary "unknown rule kind" warning
+    (non-fatal) in every existing test — none exercised it at all, so the documented FATAL refusal
+    (§6.2 ⟨0.29⟩: this engine has no from-reaches-to relation to check `only` against) had zero
+    coverage; a dropped `only` would leave the rest of a policy enforced and the run exit 0/1 with the
+    permission clause never checked;
+  - the §4 ⟨0.27⟩ `zeroMatch` disclosure (a typo'd policy SCOPE binds no unit and reads as satisfied)
+    had zero coverage, on both the direct `evaluate_policy` return and the `--gate-json` verdict key;
+  - the ENTIRE `.candor/config` `engine` pin feature (§3.4 ⟨0.27⟩) — `engine_pin_for`,
+    `normalize_pin_version`, `enforce_engine_pin` — had zero coverage despite three separately-commented
+    historical bugs living in it (qualifier-before-arity ordering, the at-most-one leading `v`,
+    ASCII-vs-Unicode digit checking); each of the three, and the match/mismatch comparison itself,
+    could be reverted with the full suite green;
+  - `_path_covered`'s `..`-climb-out refusal had a test, but its fixture never reached the guarded
+    branch (a near-miss poison: the chosen paths already differed before the `..` segment, so removing
+    the real guard changed nothing) — an allowlisted-prefix ESCAPE case (`/etc/allowed` vs
+    `/etc/allowed/../../etc/passwd`) now actually discriminates it;
+  - `scope_matches`'s empty-scope guard (unreachable from either production caller, both of which check
+    scope truthiness first, but a direct-call crash otherwise — pinned for embedders);
+  - `reason_class_matches`'s fail-closed empty-`classes` net (unreachable through this engine's own
+    report generation, since every producer of `Unknown` already seeds a class — but a real gap on the
+    documented `evaluate_policy` embedder surface, where a hand-built function can disagree with that
+    invariant);
+  - a SCOPED `mcp__server__tool` deny was indistinguishable, by any test, from a whole-server
+    `mcp__server` deny — the dangerous direction: conflating them would read a still-reachable server
+    as fully denied, a silent under-report of a live capability;
+  - `live()`'s base-tool-stripped denial check (a whole `Bash` deny must strip a scoped `Bash(git:*)`
+    grant too; reverting the check to an exact-string match, which a specifier can never satisfy, left
+    the scoped grant reading as live);
+  - `refuse_duplicate_gate_sinks`'s two-distinct-sinks refusal (⟨0.28⟩, extensively commented against a
+    real four-engine bug, zero coverage in this engine);
+  - `drift`'s `undeclared_unknown` anomaly, the docstring's own "most security-relevant drift": an
+    agent observed reaching `Unknown` via a tool it never declared, where that call is its ENTIRE
+    observed surface — `extra` alone can't see this, because it strips `Unknown` from both sides before
+    comparing (`obs - dec - {"Unknown"}` is `{}` either way);
+  - a subagent meta sidecar that EXISTS but fails to parse being counted+disclosed as an unreadable
+    file, distinct from the normal (undisclosed) missing-sidecar case observe.py's own comment
+    describes.
+
+  33 new regression checks in `test.py` (486 → 519), every one falsified against a hand-reverted guard
+  first, never reasoned about. `test.py` (519/519), `run.sh`, and `fuzz.py` (80/80 seeds) all stay
+  green. Not attacked this round (bounded scope; left for later): `guard.py` (hardened this release
+  already), `digest.py`/`savings.py`/`log_gate.py`/`stats.py`/`agentsmd.py` (the previous round's
+  scope), and `scan.py`'s YAML-frontmatter parsing and command-head literal extraction.
+
 - **Declare spec `0.34`.** `candor_agents/__init__.py`, `candor_agents/scan.py` and `pyproject.toml`
   move with the family floor. ⟨0.34⟩ adds nothing this engine emits or consumes — its three parts are
   the cross-policy refusal's cause-naming remedy, the `zeroMatch` §3.1 carve-out, and the `--policy`

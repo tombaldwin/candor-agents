@@ -349,6 +349,26 @@ def main(argv=None):
             target = args[i]
             target_set = True
             i += 1
+    # ⟨0.28⟩ `--json` BESIDE `--gate-json -`: a report and a verdict cannot share one stream. This was
+    # refused ONLY inside write_gate_json — AFTER observe() had already written the full §2 report
+    # envelope to stdout (the --json path prints unconditionally, before the gate ever runs), so a
+    # consumer saw exit 2 (a REFUSAL code) with a complete, successfully-parsed report already sitting
+    # on the stream. scan.py decided this BEFORE producing any output; observe.py did not, so the two
+    # routes disagreed about whether a "refused" run may still have printed its envelope (the §3.1
+    # posture — a refusal document has no exempt cause and no exempt sink — extends to the report
+    # stream itself, not just the verdict sink). Decided here, before target/transcript resolution,
+    # so nothing is written to stdout on this path.
+    if gate_json == "-" and as_json:
+        sys.stderr.write("candor-agents: --json and --gate-json - both name STDOUT — refusing (exit 2). "
+                         "`--json` writes the REPORT there and `--gate-json -` the VERDICT, so this "
+                         "would put two JSON documents on one stream and a consumer parsing it gets "
+                         "neither. Send one to a file, or run observe twice.\n")
+        from candor_agents import policy as _policy
+        _policy.STREAM_VERDICT_WRITTEN = True
+        print(json.dumps({"spec": SPEC, "ok": False, "refused": True,
+                          "reason": "--json and --gate-json - both name stdout — a report and a "
+                                    "verdict cannot share one stream"}, indent=1))
+        return 2
     # `.candor/config` (spec §3.4): anchored to the PROJECT target (the fleet whose sessions these
     # are), loaded before observing so a configured-but-unusable config fails up front and a repo
     # migrating its wiring from $CANDOR_POLICY to the checked-in config keeps its OBSERVED gate too.
