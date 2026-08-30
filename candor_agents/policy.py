@@ -138,6 +138,7 @@ def parse_policy(text):
 
         if t[0] == "deny":
             effects, scope = [], ""
+            widened = []  # (token, effect) for each `E[…]` whose destination-class filter was dropped
             classes, star = set(), False  # the `Unknown[…]` reason-class filter; empty ⇒ all classes
             for tok in t[1:]:
                 m = _UNKNOWN_SCOPED.fullmatch(tok)
@@ -178,6 +179,7 @@ def parse_policy(text):
                     # leaves a WIDER rule standing"): keep the EFFECT, drop the filter, and say so.
                     # Widening is safe under monotone denial; narrowing is the silent relaxation.
                     effects.append(me.group(1))
+                    widened.append((tok, me.group(1)))
                     sys.stderr.write(
                         f"candor-agents: policy rule scopes `{me.group(1)}[…]` by destination class, "
                         f"which this engine does not emit — the filter is DROPPED and the rule is "
@@ -192,7 +194,13 @@ def parse_policy(text):
                     scope = tok  # first non-effect token is the scope and ENDS the rule
                     break
             if not effects:
-                warn("deny names no known effect", fatal=True); continue
+                warn("deny names no known effect", fatal=True)
+                # The token the positional walk took as the SCOPE, recorded on the error. A reader that
+                # wants to say WHY the rule named no effect (guard's case-fold lint: `deny net` read
+                # `net` as an agent name) would otherwise have to re-tokenise the raw line — a second
+                # parser, which is the divergence this module exists to be the single source against.
+                errors[-1]["scope"] = scope
+                continue
             if star:
                 classes = set()  # `*` / bare `Unknown` ⇒ empty filter ⇒ matches any Unknown
             elif classes and "unresolved" not in classes:
@@ -208,8 +216,16 @@ def parse_policy(text):
                     f"scan writes itself classifies `unresolved`, so this rule gates no Unknown at all "
                     f"unless it is aimed at a `--link`ed code report's reasons; add `unresolved` (or "
                     f"use `dynamic`): {line}\n")
-            deny.append({"effects": sorted(set(effects)), "scope": scope,
-                         "unknownClasses": sorted(classes), "raw": line})
+            rule = {"effects": sorted(set(effects)), "scope": scope,
+                    "unknownClasses": sorted(classes), "raw": line}
+            # OMITTED WHEN EMPTY, like §4's `zeroMatch` on the verdict document: the common rule keeps a
+            # byte-identical record, so this cannot perturb a consumer comparing the parse structurally
+            # (test.py pins one such dict exactly, and `candor-query parsepolicy` parity normalises on
+            # effects+scope). Present only where the parser actually DROPPED a token, which is the one
+            # case a second reader (guard) has to know about and could otherwise only re-derive.
+            if widened:
+                rule["widened"] = widened
+            deny.append(rule)
         elif t[0] == "pure":
             deny.append({"effects": [], "scope": t[1] if len(t) > 1 else "",
                          "unknownClasses": [], "raw": line})

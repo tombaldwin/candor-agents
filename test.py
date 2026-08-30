@@ -2733,7 +2733,14 @@ check("policy parse §6.2: a destination-class filter on a CONCRETE effect keeps
       "field and pass, and dropping the whole rule exited 0 on a Net-reaching fleet. Both fail OPEN; "
       "widening is the family's policy-side rule and is safe under monotone denial",
       _pp["deny"] == [{"effects": ["Net"], "scope": "api", "unknownClasses": [],
-                       "raw": "deny Net[unknown-host] api"}] and "enforced UNSCOPED" in _w, (_pp, _w))
+                       "raw": "deny Net[unknown-host] api",
+                       # `widened` records the token whose filter the parser DROPPED, so a second
+                       # reader (guard, compiling the same rule into permissions.deny) reads what this
+                       # parser did instead of re-tokenising the line. Present only here — the rule
+                       # dicts asserted above and below stay byte-identical, which is what keeps the
+                       # `candor-query parsepolicy` parity comparison and every embedder unperturbed.
+                       "widened": [("Net[unknown-host]", "Net")]}] and "enforced UNSCOPED" in _w,
+      (_pp, _w))
 _pp, _w = _parse_warn("deny Llm api")
 check("policy parse §1 ⟨0.24⟩: `Llm` is a §1 effect (since ⟨0.13⟩) and parses as one — it was missing "
       "from this engine's vocabulary, so the whole rule was DROPPED and the gate exited 0 (fail-open)",
@@ -3219,6 +3226,215 @@ check("⟨0.29⟩ scan-route units carry NO literal surface — the precondition
       "`incomplete`; if this fails, pass an incomplete map at scan.py's run_gate call (see the comment "
       "there) before shipping the surface",
       not (_latkeys & {"hosts", "cmds", "paths", "tables"}), f"surfaces present: {sorted(_latkeys)}")
+
+print()
+
+# ══ ASK THE AUTHORITY: the modules that were answering a question another module already owns ═══════
+# AGENT-CORPUS-BRIEF §G. The previous round found a UTF-8 BOM defeating three separately hand-rolled
+# line parsers; that was a symptom. This section pins the CAUSE — a second implementation of a fact
+# some other module is the source of truth for — at each remaining site, and each row below was
+# falsified against the pre-fix code first.
+from candor_agents import guard as _gd
+from candor_agents import policy as _pl
+
+# ── guard's deny parser IS policy.parse_policy (it used to be a second one) ────────────────────────
+# The old parser was a faithful positional mirror on the token partition and diverged on everything
+# else. Each row is one measured divergence between the two paths over ONE policy string.
+_gt = _gd.compile_guard("deny\tNet")
+check("guard: a TAB-separated `deny\\tNet` compiles the fleet-wide Net deny — the gate enforces this "
+      "rule (policy.parse_policy splits on ASCII whitespace), and guard's own `startswith('deny ')` "
+      "wanted a literal SPACE, so it skipped the line with NO warning and a single-rule policy "
+      "compiled to an EMPTY, fully permissive fragment (the BOM bug one whitespace character over)",
+      set(_gt["deny"]) == {"WebFetch", "WebSearch"}, json.dumps(_gt))
+_gD = _gd.compile_guard("Deny Net")
+check("guard: a miscased RULE KIND (`Deny Net`) compiles NOTHING, because the gate drops it as an "
+      "unknown rule kind — guard used to case-fold `deny ` and emit a confident Net fragment for a "
+      "policy `scan --policy` exits 0 on, two paths giving opposite answers for one line",
+      _gD["deny"] == [] and _gD["notes"] == [], json.dumps(_gD))
+_gN = _gd.compile_guard("deny Net researcher")
+check("guard: a NON-ASCII space inside a rule (`deny Net<NBSP>researcher`) is FATAL, as it is at the "
+      "gate — §6.2 splits on ASCII whitespace only so the token reads malformed; `str.split()` here "
+      "was Unicode-wide and silently read a scoped deny the engine refuses at exit 2",
+      _gN["deny"] == [] and any("no known effect" in e["why"] for e in _gN["fatal"]), json.dumps(_gN))
+# The GENERAL property, not the three instances: for every policy text, the rules guard compiles are
+# exactly the effect-bearing deny rules policy.parse_policy produced. A future divergence of ANY shape
+# fails here — this is the row the three above are instances of (§9: don't scope the audit to its trigger).
+_par_ok, _par_bad = True, None
+for _t in ("deny Net", "Deny Net", "DENY Net", "deny\tNet", "deny  Net   researcher", "  deny Net",
+           "deny Net researcher", "deny Net\x0bdeny Fs", "deny Net deny Fs", "deny Frobnicate",
+           "pure researcher\ndeny Net", "deny Net foo Db", "deny Net[unknown-host]", "deny Unknown",
+           "deny Net Unknown", "deny Unknown[dispatch] x", "﻿deny Net", "deny Net\r\ndeny Db",
+           "# c\nallow Net x\nforbid a -> b\ndeny Exec\n", "only a -> b\ndeny Net", "deny net"):
+    _mine = sorted((tuple(e), s) for e, s in _gd.parse_denies(_t)[0])
+    _auth = sorted((tuple(r["effects"]), r["scope"] or None)
+                   for r in _pl.parse_policy(_t)["deny"] if r["effects"])
+    if _mine != _auth:
+        _par_ok, _par_bad = False, (_t, _mine, _auth)
+check("guard↔policy parity: over 21 policy texts, the deny rules guard compiles into permissions.deny "
+      "are EXACTLY the effect-bearing deny rules policy.parse_policy produced — one parser, so the "
+      "runtime enforcement can never answer a different question than the gate asks of the same file",
+      _par_ok, repr(_par_bad))
+# A FATAL policy: the gate refuses at exit 2 rather than enforcing a rewritten remainder (§6.2), and
+# guard compiled that remainder and printed "the harness then enforces this deny boundary" — the
+# rewrite reaching runtime. Process-level, because the refusal is main()'s exit code.
+_fpd = _mkd(); _fp = os.path.join(_fpd, "p")
+open(_fp, "w").write("only reviewer -> Exec\ndeny Net\n")
+_rf = subprocess.run([sys.executable, "-m", "candor_agents.cli", "guard", _fp],
+                     capture_output=True, text=True, cwd=HERE)
+check("guard CLI: a policy the GATE refuses (a fatal §6.2 error — here `only`) exits 2 with NOTHING "
+      "on stdout; it used to compile the surviving `deny Net` and exit 0, which is the silently "
+      "REWRITTEN policy §6.2 refuses, arriving in the enforcement layer instead of the gate",
+      _rf.returncode == 2 and _rf.stdout == "" and "cannot be honoured AS WRITTEN" in _rf.stderr,
+      f"rc={_rf.returncode} out={_rf.stdout[:100]!r} err={_rf.stderr[-200:]!r}")
+
+# ── guard's .mcp.json reader IS scan.read_mcp (it used to be a second one), three divergences ──────
+def _mcpd(entries):
+    d = _mkd(); json.dump({"mcpServers": entries}, open(os.path.join(d, ".mcp.json"), "w")); return d
+_gp = _gd.compile_guard("deny Net", _mcpd({"github": {"candorEffects": ["Fs"]}}))
+check("guard: the CURATED MCP_TABLE outranks a `candorEffects` declaration, as it does in scan — a "
+      "server named `github` declaring `[\"Fs\"]` is still denied by `deny Net`. guard read the "
+      "declaration FIRST, so it omitted from the fragment a server the scan gate fires AS-EFF-006 on "
+      "(.mcp.json is project-controlled: a project must not be able to narrow candor's own claim)",
+      "mcp__github" in _gp["deny"], json.dumps(_gp))
+_gl = _gd.compile_guard("deny Net", _mcpd({"acme": {"candorEffects": ["Llm"]}}))
+check("guard: a server declaring `[\"Llm\"]` is denied by `deny Net` — SPEC §6.1 ⟨0.24⟩ `refine_llm` "
+      "co-emits Net, and read_mcp applies it at the source; guard's own reader took `set(decl)` raw, "
+      "so the one server the fleet reaches the network through was left out of the Net enforcement",
+      "mcp__acme" in _gl["deny"], json.dumps(_gl))
+_gs = _gd.compile_guard("deny Net", _mcpd({"acme": {"candorEffects": "Net"}}))
+check("guard: a WRONG-TYPE `candorEffects` (a string, not a list) voids the declaration loudly, as "
+      "scan does (`mcp-decl-invalid`) — guard handled the list-valued typo and fell through `else:` on "
+      "the wrong-type one, silently leaving the server un-denied with no warning at all",
+      "mcp__acme" not in _gs["deny"] and any("voided" in w and "acme" in w for w in _gs["warnings"]),
+      json.dumps(_gs))
+
+# ── observe's classifier IS scan.classify (it used to be a second table walk) ──────────────────────
+# THE CARDINAL-SIN ROW: the OBSERVED gate passed clean over the exact tool use the DECLARED gate fails.
+_od = _mkd(); os.makedirs(os.path.join(_od, ".claude", "agents"))
+json.dump({"mcpServers": {"acme": {"command": "x", "candorEffects": ["Net"]}}},
+          open(os.path.join(_od, ".mcp.json"), "w"))
+open(os.path.join(_od, ".claude", "agents", "w.md"), "w").write(agent("worker", "mcp__acme__query"))
+_ots = os.path.join(_od, "sessions"); os.makedirs(_ots)
+open(os.path.join(_ots, "s.jsonl"), "w").write(json.dumps(
+    {"message": {"content": [{"type": "tool_use", "id": "1", "name": "mcp__acme__query", "input": {}}]}}) + "\n")
+_opol = os.path.join(_od, "pol"); open(_opol, "w").write("deny Net\n")
+def _obs(*a):
+    return subprocess.run([sys.executable, "-m", "candor_agents.observe", _od, "--transcripts", _ots,
+                           "--out", os.path.join(_od, "o"), "--fleet", "t", *a],
+                          capture_output=True, text=True, cwd=HERE)
+_ro = _obs("--policy", _opol)
+check("observe: a `.mcp.json` server DECLARING `candorEffects: [\"Net\"]` (the DECLARING.md convention) "
+      "classifies Net on the OBSERVED side too, so `deny Net` fires on a transcript that used it — "
+      "observe's own table walk knew only MCP_TABLE, so the server read Unknown and the observed gate "
+      "exited 0 `policy ✓` over the exact use the declared gate fails at exit 1 (a silent under-report "
+      "of a first-class gate surface)",
+      _ro.returncode == 1 and "AS-EFF-006" in _ro.stderr, f"rc={_ro.returncode} err={_ro.stderr[-300:]!r}")
+_obs()
+_orep = json.load(open(os.path.join(_od, "o.t.Observed.json")))
+_osess = [f for f in _orep["functions"] if f["fn"] == "session"][0]
+check("observe: a DECLARED server carries no `mcp-uncurated:` disclosure — the report said the project "
+      "had not curated a server the project HAD curated (a false disclosure, the same class as the "
+      "config key reported ignored while being honoured)",
+      "Net" in _osess["inferred"] and "unknownWhy" not in _osess, json.dumps(_osess))
+# The VOIDING tier travels too: an out-of-vocabulary declared effect must read `mcp-decl-invalid`, the
+# reason scan writes, not the `mcp-uncurated` observe wrote for every declaration state alike.
+_ov = _mkd(); json.dump({"mcpServers": {"acme": {"candorEffects": ["Database"]}}},
+                        open(os.path.join(_ov, ".mcp.json"), "w"))
+_ovs = os.path.join(_ov, "s"); os.makedirs(_ovs)
+open(os.path.join(_ovs, "s.jsonl"), "w").write(json.dumps(
+    {"message": {"content": [{"type": "tool_use", "id": "1", "name": "mcp__acme__q", "input": {}}]}}) + "\n")
+subprocess.run([sys.executable, "-m", "candor_agents.observe", _ov, "--transcripts", _ovs,
+                "--out", os.path.join(_ov, "o"), "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+_ovrep = json.load(open(os.path.join(_ov, "o.t.Observed.json")))
+check("observe: an out-of-vocabulary `candorEffects` reads `mcp-decl-invalid:<server>:<effect>` — the "
+      "⟨0.24⟩ reason scan writes, so a typo'd declaration is DISTINGUISHABLE from an absent one on the "
+      "observed side too (it read `mcp-uncurated` for both)",
+      any("mcp-decl-invalid:acme:Database" in (f.get("unknownWhy") or [])
+          for f in _ovrep["functions"]), json.dumps(_ovrep["functions"]))
+# THE OVER-CHARGE CONTROL for that fix: an UNDECLARED, uncurated server must still read Unknown with
+# `mcp-uncurated` — the delegation must not start minting effects for servers nobody classified.
+_ou = _mkd(); json.dump({"mcpServers": {"acme": {"command": "x"}}},
+                        open(os.path.join(_ou, ".mcp.json"), "w"))
+_ous = os.path.join(_ou, "s"); os.makedirs(_ous)
+open(os.path.join(_ous, "s.jsonl"), "w").write(json.dumps(
+    {"message": {"content": [{"type": "tool_use", "id": "1", "name": "mcp__acme__q", "input": {}}]}}) + "\n")
+subprocess.run([sys.executable, "-m", "candor_agents.observe", _ou, "--transcripts", _ous,
+                "--out", os.path.join(_ou, "o"), "--fleet", "t"], capture_output=True, text=True, cwd=HERE)
+_ourep = json.load(open(os.path.join(_ou, "o.t.Observed.json")))
+check("observe over-charge control: an UNDECLARED, uncurated server still reads Unknown with "
+      "`mcp-uncurated:acme` — honouring declarations must not fabricate an effect for a server no "
+      "table and no declaration classified",
+      any(f["inferred"] == ["Unknown"] and "mcp-uncurated:acme" in (f.get("unknownWhy") or [])
+          for f in _ourep["functions"]), json.dumps(_ourep["functions"]))
+# drift: the same gap produced a FALSE `--strict` failure for every project that followed DECLARING.md
+_rd = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", _od,
+                      "--transcripts", _ots, "--strict"], capture_output=True, text=True, cwd=HERE)
+check("drift --strict: using a server the project DECLARED is not an OBSERVED-OUTSIDE-DECLARATION "
+      "anomaly — the declared/observed halves classified it differently, so following DECLARING.md "
+      "was itself enough to fail the drift gate",
+      _rd.returncode == 0 and "OBSERVED-OUTSIDE-DECLARATION" not in _rd.stdout,
+      f"rc={_rd.returncode} out={_rd.stdout[-300:]!r}")
+
+# ── savings' command-position test IS scan.bash_cmds (it used to be a second regex) ────────────────
+from candor_agents.savings import _is_query as _isq2, _is_blast as _isb2
+_forms = {"a newline separator": "cd /repo\ncandor-query callers f 0",
+          "a `sudo` wrapper": "sudo candor-query callers f 0",
+          "a shell keyword (`do`)": "for f in a b; do candor-query callers $f 0; done",
+          "a command substitution": "X=$(candor-query callers f 0)"}
+_missed = [k for k, c in _forms.items() if not _isq2("Bash", {"command": c})]
+check("savings: the four invocation forms the hand-rolled anchor missed all count now — "
+      + ", ".join(_forms) + " — every one an UNDER-count of the MEASURED number this labelled "
+      "estimate is built on, and every one already handled by scan.bash_cmds",
+      not _missed, f"still missed: {_missed}")
+check("savings: those forms are blast-radius queries too (the estimate's basis, not just the count)",
+      all(_isb2("Bash", {"command": c}) for c in _forms.values()))
+# The over-charge control: a MENTION must still not count. bash_cmds is the stricter half here — this
+# is the property the anchor existed for, kept by the module that implements it properly.
+_mentions = ['echo "run candor-query callers x"', "# candor-query callers x",
+             "ls -l /usr/bin/candor-query", "grep candor-query notes.txt",
+             "cat <<'EOF'\ncandor-query callers x\nEOF"]
+check("savings over-charge control: a candor-query MENTION (echo/comment/path arg/grep/heredoc) still "
+      "does NOT count — bash_cmds reads the segment HEAD, so the anti-fabrication property the old "
+      "anchor was reaching for is kept, not traded away for the four forms above",
+      not any(_isq2("Bash", {"command": c}) for c in _mentions),
+      [c for c in _mentions if _isq2("Bash", {"command": c})])
+check("savings: the `npx [-y] candor-ts-query` form still counts — its command HEAD is `npx`, so it is "
+      "the one invocation bash_cmds alone cannot see and keeps a literal matcher",
+      _isq2("Bash", {"command": "npx -y candor-ts-query callers f 0"})
+      and _isq2("Bash", {"command": "cd x\nnpx candor-ts-query show y 0"}))
+
+# ── the BOM sweep's own boundary: `.candor/config` is TWO parsers behind ONE open() ────────────────
+# ⟨0.34⟩ closed a leading UTF-8 BOM in parse_frontmatter, parse_policy and parse_denies. That sweep
+# scoped itself to "hand-rolled line parsers" and `.candor/config` has two of them — the key/value walk
+# in load_candor_config and engine_pin_for over the same text — reached through one read that did not
+# strip. Both A/B pairs below differ in exactly one leading byte and nothing else.
+_cfgd = _mkd(); os.makedirs(os.path.join(_cfgd, ".candor")); os.makedirs(os.path.join(_cfgd, ".claude", "agents"))
+open(os.path.join(_cfgd, ".claude", "agents", "w.md"), "w").write(agent("worker", "WebFetch"))
+open(os.path.join(_cfgd, "fleet.policy"), "w").write("deny Net\n")
+def _cfg_scan(config_bytes):
+    with open(os.path.join(_cfgd, ".candor", "config"), "wb") as fh:
+        fh.write(config_bytes)
+    return subprocess.run([sys.executable, "-m", "candor_agents.scan", _cfgd, "--out",
+                           os.path.join(_cfgd, "r"), "--fleet", "t"],
+                          capture_output=True, text=True, cwd=HERE)
+_cA = _cfg_scan(b"policy fleet.policy\n")
+_cB = _cfg_scan(b"\xef\xbb\xbfpolicy fleet.policy\n")
+check("config: a leading UTF-8 BOM does not silently DISABLE the `.candor/config` gate — the same file "
+      "one BOM apart must reach the same verdict. It read the key as `'﻿policy'`, fell to "
+      "`ignoring unknown config key` and the gate WAS NEVER CONFIGURED: exit 1 became exit 0 over a "
+      "violating fleet, with a disclosure that was itself false (the key is not unknown)",
+      _cA.returncode == 1 and _cB.returncode == 1,
+      f"clean rc={_cA.returncode} bom rc={_cB.returncode} err={_cB.stderr[-200:]!r}")
+check("config: and the BOM'd config no longer reports the family's own `policy` key as UNKNOWN",
+      "unknown config key" not in _cB.stderr, _cB.stderr[-200:])
+_pA = _cfg_scan(b"engine v9.9.9\n")
+_pB = _cfg_scan(b"\xef\xbb\xbfengine v9.9.9\n")
+check("config: the §3.4 `engine` PIN survives a BOM too — the SECOND parser over the same text "
+      "(engine_pin_for, which reads the raw config because the pin is multi-value) skipped the line on "
+      "`parts[0].lower() != 'engine'`, so a mismatched pin that exits 2 exited 0 with no message at "
+      "all. One strip at the read covers both parsers by construction",
+      _pA.returncode == 2 and _pB.returncode == 2,
+      f"clean rc={_pA.returncode} bom rc={_pB.returncode} err={_pB.stderr[-200:]!r}")
 
 print()
 

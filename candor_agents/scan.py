@@ -278,6 +278,24 @@ def load_candor_config(target, lenient=False):
         print(f"candor-agents: config {file} exists but could not be read ({e}) — failing (exit 2), "
               f"a configured gate source must not vanish silently", file=sys.stderr)
         raise (_ConfigUnreadable() if lenient else SystemExit(2))
+    # THE BOM STRIP BELONGS AT THE READ, NOT IN EITHER PARSER — `.candor/config` is read once here and
+    # then parsed TWICE (the key/value walk below for `policy`, and `engine_pin_for` over the same text,
+    # because the pin is multi-value and the single-value `cfg` map cannot hold it). Both were defeated
+    # by a leading BOM and in both directions that matter:
+    #   `policy fleet.policy`   the key read as `'﻿policy'`, fell to `ignoring unknown config key`
+    #                           and the GATE WAS NEVER CONFIGURED — measured: the identical file exits 1
+    #                           on a violating fleet without the BOM and 0 with it. The disclosure that
+    #                           did print is itself false: the key is not unknown, it is `policy`
+    #                           carrying an invisible byte.
+    #   `engine v0.33.1`        `parts[0].lower() != "engine"` skipped the line, so the pin was not
+    #                           enforced at all — no message, and a mismatched pin that exits 2 became
+    #                           an exit 0.
+    # This is the same artifact the ⟨0.34⟩ sweep closed in parse_frontmatter, parse_policy and
+    # parse_denies; that sweep's boundary was "hand-rolled LINE parsers" and `.candor/config` has two of
+    # them behind one `open()`. Stripping once here covers both by construction, so a third parser over
+    # this file cannot reintroduce it.
+    if text.startswith("﻿"):
+        text = text[1:]
     cfg = {}
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()  # `#` begins a comment, inline too (§6.2 lexical)
@@ -999,7 +1017,7 @@ def live(tools, denied_tools, denied_servers):
         return None
     out = []
     for t in tools:
-        b = t.split("(", 1)[0].strip()
+        b = base_tool(t)  # the ONE base-name helper — four sites open-coded this same split
         if b in denied_tools:
             continue
         if b.startswith("mcp__"):
@@ -1038,7 +1056,7 @@ def _heads(raw, body):
         if line.lstrip().startswith("!"):
             heads |= bash_cmds(line.lstrip()[1:])
     for item in raw:
-        if item.split("(", 1)[0].strip() == "Bash" and "(" in item and item.endswith(")"):
+        if base_tool(item) == "Bash" and "(" in item and item.endswith(")"):
             h = _bash_spec_head(item[item.index("(") + 1:-1])
             if h:
                 heads.add(h)
@@ -1068,7 +1086,7 @@ def read_commands_skills(root, unreadable):
                     continue
                 meta, body = parse_frontmatter(text)
                 raw = _raw_tools(meta)
-                commands[f"command:{rel}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
+                commands[f"command:{rel}"] = {"tools": [base_tool(t) for t in raw],
                                               "file": os.path.relpath(os.path.join(dp, f), root),
                                               "heads": _heads(raw, body)}
     sdir = os.path.join(root, ".claude", "skills")
@@ -1082,7 +1100,7 @@ def read_commands_skills(root, unreadable):
                 continue
             meta, body = parse_frontmatter(text)
             raw = _raw_tools(meta)
-            skills[f"skill:{d}"] = {"tools": [t.split("(", 1)[0].strip() for t in raw],
+            skills[f"skill:{d}"] = {"tools": [base_tool(t) for t in raw],
                                     "file": os.path.relpath(sm, root), "heads": _heads(raw, body)}
     return commands, skills
 

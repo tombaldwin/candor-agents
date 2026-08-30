@@ -12,6 +12,96 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- ⚠ **`observe` classified MCP servers from a table that knew nothing about `.mcp.json` declarations,
+  so the OBSERVED gate passed clean over the exact tool use the DECLARED gate fails on.** The module
+  docstring has always said observed effects are "classified by the same table as the static scan";
+  that was true of the TABLES and false of the LADDER. `observe.classify_tool` was a second table walk
+  that knew only `MCP_TABLE`, so the `candorEffects` tier `scan.read_mcp`/`scan.classify` own — the
+  documented DECLARING.md convention, the project's own claim about its own server — did not exist on
+  the observed side. Measured on a fleet whose `.mcp.json` declares `acme: ["Net"]` and whose
+  transcript shows one `mcp__acme__query` use, same policy, same fleet, one command apart:
+  `scan --policy 'deny Net'` → AS-EFF-006, exit 1; `observe --policy 'deny Net'` → `policy ✓`, exit 0.
+  A silent under-report of a first-class gate surface. It came with two more defects in the same
+  gap: a FALSE disclosure (`mcp-uncurated:acme` on a server the project HAD curated — the same class
+  as a config key reported ignored while being honoured), and a false `drift --strict` anomaly, so
+  **following DECLARING.md was by itself enough to fail the drift gate**. `classify_tool` is now an
+  adapter onto `scan.classify`'s one-tool case, which also brings the two tiers a copy could never
+  have grown on its own: ⟨0.24⟩ `mcp-decl-invalid:<server>:<effect>` voiding, and §6.1 `refine_llm`
+  (a declared `Llm` co-emits `Net`).
+
+- ⚠ **`guard`'s deny-parser was a SECOND §6.2 parser, and it disagreed with the gate's on five shapes
+  — one of them silently emitting an empty, fully permissive fragment.** It was a faithful positional
+  mirror on the token partition, which is the part its comments defended, and nothing else was checked.
+  Run both over the same string:
+  - **`deny\tNet` (TAB-separated) compiled to an EMPTY `permissions.deny` with no warning** — the gate
+    enforces the rule (`policy.parse_policy` splits on ASCII whitespace), and guard's own
+    `line.lower().startswith("deny ")` wanted a literal SPACE. This is the ⟨0.34⟩ BOM defect one
+    whitespace character over, in the same under-protective direction.
+  - **`Deny Net` / `DENY Net` compiled a confident fleet-wide Net deny** and printed "the harness then
+    enforces this deny boundary", for a rule the gate drops as an unknown rule kind and exits 0 on.
+  - **A non-ASCII space inside a rule** (`deny Net<NBSP>agent`) read as a scoped deny; §6.2 splits on
+    ASCII whitespace only (deliberately, the cross-engine rule) so the gate refuses it at exit 2.
+  - **`str.splitlines()` splits on `\v`/`\f`/`\x85`/` `** and the gate's line split does not.
+  - **A policy the gate REFUSES was compiled anyway.** `only …`, `deny Frobnicate`,
+    `deny Unknown[nativ]` are fatal §6.2 errors: `run_gate` has exited 2 on them since ⟨0.24⟩ rather
+    than enforce a rewritten remainder. `guard` compiled that remainder and exited 0 — the silently
+    rewritten policy, arriving in the enforcement layer instead of the gate. `guard` now refuses at
+    exit 2 with the same wording and emits nothing.
+  `parse_denies` now delegates to `policy.parse_policy` and reads its case-fold lint off what THAT
+  parser recorded (the scope token it chose; the `Unknown[…]`/`E[…]` tokens it dropped) rather than
+  re-tokenising. `policy.parse_policy` grew the two structural fields that makes possible — a `widened`
+  key on a deny rule whose destination-class filter was dropped, omitted when empty so every other rule
+  dict stays byte-identical, and the scope token on a `deny names no known effect` error. A new
+  **parity row runs guard's compiled rules against the parser's output over 21 policy texts**, so a
+  future divergence of any shape fails, not just the five measured here.
+
+- ⚠ **`guard` also hand-rolled the `.mcp.json` reader `scan.read_mcp` owns, and disagreed three ways,
+  every one under-protective** — a compiled `permissions.deny` silently missing a server the scan gate
+  fires AS-EFF-006 on:
+  - **PRECEDENCE:** scan reads the curated `MCP_TABLE` FIRST and a `candorEffects` declaration only as
+    a fallback (`.mcp.json` is project-controlled, so a project must not be able to narrow candor's own
+    claim about a conventionally-named server). guard read the declaration first, so a server named
+    `github` declaring `["Fs"]` was left out of a compiled `deny Net`.
+  - **`Llm` ⇒ `Net`:** `read_mcp` applies §6.1 ⟨0.24⟩ `refine_llm` at the source. guard took
+    `set(decl)` raw, so a server declaring `["Llm"]` — the one thing on the fleet reaching the network
+    — was invisible to `deny Net`.
+  - **SHAPE:** a wrong-TYPE `candorEffects` (`"Net"`, a string) fell through `else:` and left the
+    server silently un-denied with no warning, while scan voids it loudly as `mcp-decl-invalid`. The
+    list-valued typo was already handled here; the wrong-type branch was the one nobody wrote.
+
+- **`.candor/config` is TWO line parsers behind ONE `open()`, and a leading UTF-8 BOM defeated both —
+  the ⟨0.34⟩ BOM sweep's own boundary, drawn around "hand-rolled line parsers" and missing the file
+  read by two of them.** Same artifact, one file over, and it silently disables gates:
+  - **`policy fleet.policy` read the key as `'﻿policy'`**, fell to `ignoring unknown config key`, and
+    the gate was NEVER CONFIGURED — the identical file exits 1 on a violating fleet without the BOM
+    and 0 with it. The disclosure that did print is itself false: the key is not unknown, it is
+    `policy` carrying an invisible byte.
+  - **`engine v0.33.1` was skipped by `engine_pin_for`'s `parts[0].lower() != "engine"`** with NO
+    message at all, so a mismatched §3.4 pin that exits 2 exited 0.
+  Stripped once at the read, so both parsers are covered by construction and a third over this file
+  cannot reintroduce it.
+
+- **`savings` anchored "is this a candor-query invocation?" on its own regex instead of
+  `scan.bash_cmds`, and under-counted the MEASURED half of a labelled estimate on four real
+  invocation forms**: a newline separator (`^` with no `re.M`), a `sudo` wrapper, a shell keyword
+  (`for …; do candor-query …`), and a command substitution (`X=$(candor-query …)`). All four are
+  already handled by the module that owns "what does this shell string run". `bash_cmds` is also the
+  stricter half where it matters — `echo "candor-query …"`, a `#` comment, a path argument and a
+  heredoc body still do not count — so the anti-fabrication property the anchor was reaching for is
+  kept rather than traded away. The `npx [-y] candor-ts-query` form keeps a literal matcher: its
+  command head is `npx`, the one invocation `bash_cmds` alone cannot see.
+
+- **`scan`: four sites open-coded `base_tool`'s split** (`live()`, both `read_commands_skills`
+  branches, `_heads`). Behaviourally identical today — no test can go red on this and none was added;
+  it is de-duplication so the next change to base-name handling cannot land in three of four places.
+
+  *17 new regression checks for the findings above plus 3 for the config BOM, each falsified against
+  the pre-fix tree in a throwaway worktree (18 of 20 RED; the 2 that stayed green are the two
+  over-charge controls, which is what a control is for). 553/553 checks green, `fuzz.py` (80 seeds)
+  clean, `run.sh` clean, and the suite re-run under `python:3.12-slim` on Linux (545/553 — the 8
+  skipped are the `candor-query` parity block, the `et_EE.UTF-8` locale control, and two chmod-000
+  fixtures that cannot construct their condition as root).*
+
 - **A leading UTF-8 BOM (a real, still-common Windows-editor/export artifact) silently blinded three
   independent hand-rolled parsers, in three different failure shapes, because `read_md`'s and the
   policy readers' plain `utf-8` codec does not strip one.** Found by attacking `scan.py`'s frontmatter
