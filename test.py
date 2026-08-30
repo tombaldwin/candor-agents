@@ -865,6 +865,32 @@ r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", "fixture
 check("drift --strict: a BUILT-IN undeclared agent (general-purpose) is NOT a false anomaly (exit 0)",
       r.returncode == 0)
 
+# undeclared_unknown: an agent DECLARED (so it's not the AG2 case above) but observed reaching Unknown
+# via an uncurated tool it never declared — cli.py's own docstring calls this "the most
+# security-relevant drift" and requires it to COUNT as an anomaly, not print a soft note. `extra`
+# cannot see this case: it strips Unknown from BOTH sides before comparing (`obs - dec - {"Unknown"}`),
+# so a unit whose ENTIRE observed surface is one uncurated Unknown call has `extra == {}` regardless.
+# Zero coverage existed for this before the guard-deletion attack found it: forcing
+# `undeclared_unknown` to `False` left the full 512-check suite green.
+_uo = tempfile.mkdtemp()
+os.makedirs(os.path.join(_uo, ".claude", "agents"))
+open(os.path.join(_uo, ".claude", "agents", "auditor.md"), "w").write(agent("auditor", "Read"))  # Fs only, no Unknown
+_uot = os.path.join(tempfile.mkdtemp(), "t")
+os.makedirs(os.path.join(_uot, "s1", "subagents"))
+open(os.path.join(_uot, "s1.jsonl"), "w").write(_j.dumps(_tu("s1", "Agent", {"subagent_type": "auditor"})) + "\n")
+open(os.path.join(_uot, "s1", "subagents", "agent-w.jsonl"), "w").write(
+    _j.dumps(_tu("r1", "mcp__mystery__op", {})) + "\n")  # the unit's ENTIRE observed surface: one uncurated call
+_j.dump({"agentType": "auditor", "toolUseId": "toolu_s1"},
+        open(os.path.join(_uot, "s1", "subagents", "agent-w.meta.json"), "w"))
+r = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", _uo, "--transcripts", _uot],
+                   capture_output=True, text=True)
+check("drift: a DECLARED agent observed reaching Unknown via a tool it never declared is "
+      "OBSERVED-OUTSIDE-DECLARATION (not the softer 'observed Unknown via … declared' note)",
+      "auditor: OBSERVED-OUTSIDE-DECLARATION Unknown via mcp-uncurated:mystery" in r.stdout, r.stdout)
+r2 = subprocess.run([sys.executable, "-m", "candor_agents.cli", "drift", _uo, "--transcripts", _uot, "--strict"],
+                    capture_output=True, text=True)
+check("drift --strict: an undeclared-Unknown observation fails the build (exit 1)", r2.returncode == 1, r2.stdout)
+
 # AG-DUP (key-collision FABRICATION class, the 2026-06-18 cross-engine sweep): two agent files with the
 # SAME `name:` used to SILENTLY CLOBBER (`agents[name] = …`) — only the survivor's contract reached drift,
 # LAUNDERING the dropped agent's stricter contract (a pure `worker` observed running shell read CLEAN, the
@@ -1211,6 +1237,32 @@ rep, r = build({"gh.md": agent("gh", "mcp__github__create_pr")}, settings={"perm
 check("deny mcp__github removes the github server (the only unit becomes pure → omitted)",
       entry(rep, "gh") is None, json.dumps(rep["functions"]))
 
+# a SCOPED mcp deny (`mcp__server__tool`, denying ONE tool) must NOT be conflated with a whole-server
+# deny — the server's OTHER tools stay reachable, so it is disclosed but NOT subtracted (the same
+# "cliff" posture as a scoped Bash(curl:*) deny above). Guard-deletion found this had ZERO coverage:
+# `len(parts) == 2` vs `else` (3+ parts) is what tells `mcp__server` from `mcp__server__tool` apart —
+# collapsing that check to "always treat as a whole-server deny" left the full suite green, and it is
+# the DANGEROUS direction: a fleet with `mcp__github__create_issue` denied but `mcp__github__list_repos`
+# still live would read as NOT reaching github's Net at all — a silent under-report of a still-live
+# capability, not just an over-cautious one.
+rep, r = build({"gh2.md": agent("gh2", "mcp__github__create_issue, mcp__github__list_repos")},
+               settings={"permissions": {"deny": ["mcp__github__create_issue"]}}, mcp=["github"])
+e2 = entry(rep, "gh2")
+check("a SCOPED mcp__server__tool deny does NOT remove the server — the unit still reaches Net via "
+      "the server's other (undenied) tools",
+      e2 is not None and "Net" in e2["inferred"], json.dumps(e2))
+check("the scoped mcp deny is disclosed as seen-but-not-subtracted, like a scoped Bash deny",
+      "scoped" in r.stderr and "mcp__github__create_issue" in r.stderr, r.stderr)
+
+# the Bash CLIFF, mirrored: a WHOLE `Bash` deny must strip a SCOPED `Bash(git:*)` grant too — the base
+# tool is wholly gone, so every specifier of it is unreachable, not just the bare form. `live()`'s
+# `b in denied_tools` (base-tool-stripped) is what makes this work; guard-deletion found reverting it
+# to an exact-string check (`t in denied_tools`, which a scoped specifier can never match) left the
+# full suite green — the agent would keep reporting Exec for a tool the harness has wholly blocked.
+rep, r = build({"sh2.md": agent("sh2", "Bash(git:*)")}, settings={"permissions": {"deny": ["Bash"]}})
+check("a WHOLE `Bash` deny strips a scoped `Bash(git:*)` grant too (the agent becomes pure → omitted)",
+      entry(rep, "sh2") is None, json.dumps(rep["functions"]))
+
 # denying the Agent tool removes delegation (the edge-maker is gone)
 rep, r = build({"boss.md": agent("boss", "Agent", body="Spawn the `worker`."),
                 "worker.md": agent("worker", "WebFetch")}, settings={"permissions": {"deny": ["Agent"]}})
@@ -1478,6 +1530,22 @@ check("observe: a nested subagent (subagents/x/subagents/y) is observed, not dro
       "digger" in byn and "Exec" in byn["digger"]["inferred"], json.dumps(list(byn)))
 check("observe: a missing meta sidecar is not reported as an unreadable file",
       "unreadable file" not in r_o.stderr, r_o.stderr)
+# The MIRROR case: a meta sidecar that EXISTS but fails to parse IS an unreadable file (distinct from
+# the missing-sidecar case just above) — observe.py's own comment draws this line explicitly
+# ("conflating the two over-reported the best-effort-coverage receipt"), but nothing exercised the
+# EXISTS-but-unparseable half: guard-deletion found `except Exception: bad["files"] += 1` could be
+# gutted to `except Exception: pass` with the full suite still green.
+_otd2 = tempfile.mkdtemp()
+_jl(os.path.join(_otd2, "s.jsonl"), "Read", {"file_path": "/a"})
+_sa2 = os.path.join(_otd2, "sess", "subagents")
+_jl(os.path.join(_sa2, "badmeta.jsonl"), "Bash", {"command": "curl evil"})
+os.makedirs(_sa2, exist_ok=True)
+open(os.path.join(_sa2, "badmeta.meta.json"), "w").write("{not valid json")
+r_o2 = subprocess.run([sys.executable, "-m", "candor_agents.observe", _otd2, "--transcripts", _otd2,
+                       "--out", os.path.join(_otd2, "o"), "--fleet", "t"], capture_output=True, text=True)
+check("observe: a meta sidecar that EXISTS but fails to PARSE is counted+disclosed as an unreadable "
+      "file (never silently treated as 'no sidecar', which is the normal, undisclosed case)",
+      "1 unreadable file(s)" in r_o2.stderr, r_o2.stderr)
 
 # (3) guard: a miscased effect (`deny net`) enforces nothing — it must WARN, not silently no-op.
 g_lc = guard.compile_guard("deny net")
@@ -1829,6 +1897,14 @@ check("cli scan --policy <unhonourable token>: exit 2, never a green `policy ✓
 _pbadc = os.path.join(_mkd(), "badclass.policy"); open(_pbadc, "w").write("deny Unknown[dispatch,nativ] t\n")
 check("cli scan --policy <unrecognised reason-class>: exit 2 — a NARROWED rewrite is the dangerous one",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pbadc).returncode == 2)
+# `only` end to end, over the CLEAN fleet (`deny Db` would pass it) — proves the refusal fires even
+# when no OTHER rule would have caught anything, i.e. it cannot be masked by a coincidental violation.
+_ponly = os.path.join(_mkd(), "only.policy"); open(_ponly, "w").write("deny Db\nonly leaf -> other\n")
+_ronly = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _ponly)
+check("cli scan --policy <only>: exit 2 — a permission rule this engine cannot evaluate is REFUSED, "
+      "never silently dropped while the rest of a clean policy passes",
+      _ronly.returncode == 2 and "cannot evaluate" in _ronly.stderr and "policy ✓" not in _ronly.stderr,
+      f"rc={_ronly.returncode} err={_ronly.stderr[-200:]!r}")
 _rbadj = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pbad, "--gate-json", "-")
 try:
     _bd = json.loads(_rbadj.stdout)
@@ -1948,9 +2024,35 @@ _gj3 = os.path.join(_mkd(), "nogate.json")
 check("scan --gate-json with NO gate configured: still writes the clean verdict (ok:true, [])",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--gate-json", _gj3).returncode == 0
       and json.load(open(_gj3))["ok"] is True)
+# ⟨0.27⟩ §4 `zeroMatch` reaching the MACHINE verdict end to end, through scan's real run_gate (not just
+# the direct evaluate_policy call above) — a typo'd scope over the real fleet, clean otherwise.
+_pzm = os.path.join(_mkd(), "zm.policy"); open(_pzm, "w").write("deny Net orchestratr\ndeny Db\n")
+_gjzm = os.path.join(_mkd(), "zm.json")
+_rzm = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pzm, "--gate-json", _gjzm)
+_vzmj = json.load(open(_gjzm))
+check("cli scan --policy <typo'd scope> --gate-json: exit 0 (nothing violates), but the verdict "
+      "carries `zeroMatch` naming the unbound rule — a typo cannot pass as a checked-and-clean rule",
+      _rzm.returncode == 0 and _vzmj["ok"] is True and _vzmj.get("zeroMatch") == ["deny Net orchestratr"]
+      and "matched NO unit" in _rzm.stderr, (_rzm.returncode, _vzmj, _rzm.stderr[-200:]))
 check("scan --gate-json <unwritable path>: exit 2 — the verdict surface must not vanish silently",
       cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pc,
           "--gate-json", os.path.join(_mkd(), "no-such-dir", "v.json")).returncode == 2)
+# ⟨0.28⟩ TWO DISTINCT `--gate-json` sinks (neither an input) must be REFUSED — a gate publishes ONE
+# verdict, and naming two paths means whichever one a reader is NOT watching silently keeps whatever
+# it held before. Extensively documented in scan.py (three of the four code engines used to write the
+# LAST path and leave the FIRST holding a stale green) and had ZERO coverage here: guard-deletion found
+# `refuse_duplicate_gate_sinks`'s `len(named) < 2` check could be inverted to "always let two through"
+# with the full suite green.
+_gjA = os.path.join(_mkd(), "dupA.json"); _gjB = os.path.join(_mkd(), "dupB.json")
+open(_gjA, "w").write('{"ok": true, "stale": "from a previous run"}')
+_rdup = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv,
+            "--gate-json", _gjA, "--gate-json", _gjB)
+check("scan --gate-json A --gate-json B (two distinct sinks): exit 2, refused, and the refusal is "
+      "written to BOTH named sinks — neither is left holding a stale prior verdict",
+      _rdup.returncode == 2
+      and json.load(open(_gjA)).get("refused") is True
+      and json.load(open(_gjB)).get("refused") is True,
+      f"rc={_rdup.returncode} A={open(_gjA).read()!r} B={open(_gjB).read()!r}")
 rgs = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pv, "--gate-json", "-")
 try:
     _gvs = json.loads(rgs.stdout)
@@ -1960,6 +2062,21 @@ check("scan --gate-json -: the verdict streams to stdout (violation lines stay o
       rgs.returncode == 1 and _gvs and _gvs["ok"] is False and "AS-EFF-006" in rgs.stderr, rgs.stdout[:120])
 check("scan --json --gate-json -: refused (two JSON documents can't share stdout), exit 2",
       cli("scan", _cd, "--json", "--policy", _pc, "--gate-json", "-").returncode == 2)
+# observe must REFUSE the identical combination BEFORE producing any output — not discover the
+# conflict only after its own --json path already wrote the full report envelope to stdout. Guard-
+# deletion found this had ZERO coverage: observe had no pre-check at all (unlike scan), relying solely
+# on write_gate_json's internal guard, which fires too late for observe's code shape (observe() prints
+# --json unconditionally, before run_gate ever sees the sink). Measured before the fix: exit 2 with a
+# complete, successfully-parsed OBSERVED report already on stdout — a refusal that was not refusing.
+_rojc = cli("observe", _otdir, "--transcripts", _otdir, "--json", "--gate-json", "-", "--fleet", "t")
+try:
+    _ojc = json.loads(_rojc.stdout)
+except Exception:
+    _ojc = None
+check("observe --json --gate-json -: refused (two JSON documents can't share stdout), exit 2, and "
+      "stdout carries ONLY the refusal document — never the report envelope it would have printed first",
+      _rojc.returncode == 2 and _ojc is not None and _ojc.get("refused") is True
+      and _ojc.get("ok") is False and "mode" not in _ojc, f"rc={_rojc.returncode} out={_rojc.stdout!r}")
 # observe mirrors the surface
 _gjo = os.path.join(_mkd(), "ov.json")
 rgo = cli("observe", _otdir, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"),
@@ -2037,6 +2154,80 @@ check("config: a DISCOVERED file that exists but cannot be read fails (exit 2) �
 _d, _t = _fleet_with_config("policy\n")  # a bare `policy` line: enabled with the empty value
 check("config: a BARE `policy` line fails loud on the empty path (exit 2), never a silent drop",
       cli("scan", _t, "--out", os.path.join(_mkd(), "r")).returncode == 2)
+
+# ══ SPEC §3.4 ⟨0.27⟩ — the `engine` PIN. Extensively commented (three separate historical bugs are
+# named in scan.py's docstrings: the qualifier-before-arity ordering, the at-most-one leading `v`, the
+# ASCII-vs-Unicode digit check) and had ZERO tests before the guard-deletion attack — every one of those
+# fixes could be reverted and 486/486 stayed green. `enforce_engine_pin` calls `sys.exit` directly
+# rather than returning a code, which is likely why it was never wired into the parse-level tests above.
+_RUN = _sc.RELEASE  # the running build's own version (e.g. "0.33.1"), so the match/mismatch is real
+
+# --- engine_pin_for: qualifier ownership, before arity is ever consulted ---
+check("engine_pin_for: a qualified line for ANOTHER impl is invisible to this one, however it's shaped "
+      "(no version, extra tokens) — 'another impl's line, whatever follows it'",
+      _sc.engine_pin_for("engine swift", "agents") is None
+      and _sc.engine_pin_for("engine swift 1.0.0 extra", "agents") is None)
+check("engine_pin_for: a qualified line for THIS impl with the WRONG arity (no version, or extra "
+      "tokens) is unreadable — the bug this guards: checking arity BEFORE the known-qualifier list "
+      "made `engine swift` (no version) a WILDCARD pin whose 'version' was the literal string 'swift', "
+      "malformed for every OTHER engine reading the same config",
+      _sc.engine_pin_for("engine agents", "agents") == "<unreadable>"
+      and _sc.engine_pin_for("engine agents 1.0.0 extra", "agents") == "<unreadable>")
+check("engine_pin_for: a qualified pin for this impl", _sc.engine_pin_for("engine agents v0.33.1", "agents") == "v0.33.1")
+check("engine_pin_for: an unqualified (wildcard) pin applies to every impl",
+      _sc.engine_pin_for("engine v0.33.1", "agents") == "v0.33.1")
+check("engine_pin_for: qualified beats unqualified when both are present",
+      _sc.engine_pin_for("engine v0.1.0\nengine agents v0.33.1", "agents") == "v0.33.1")
+check("engine_pin_for: TWO disagreeing wildcard lines keep BOTH values (so the result fails to parse "
+      "as a version and surfaces as malformed) rather than one silently winning",
+      _sc.engine_pin_for("engine v0.1.0\nengine v0.2.0", "agents") == "v0.1.0 / v0.2.0")
+check("engine_pin_for: an unreadable UNQUALIFIED line is not hidden by a good qualified one on another "
+      "line — unreadability is a property of the LINE, precedence only decides which VERSION applies "
+      "(qual ?? wild would have returned the good qualified value and hidden the bad wildcard token)",
+      _sc.engine_pin_for("engine agents v0.33.1\nengine garbage", "agents") == "garbage")
+check("engine_pin_for: no `engine` line at all → None (no pin configured)",
+      _sc.engine_pin_for("policy p\n", "agents") is None)
+
+# --- normalize_pin_version: what counts as a version at all ---
+check("normalize_pin_version: `latest` is MALFORMED, not a version that can just never match",
+      _sc.normalize_pin_version("latest") is None)
+check("normalize_pin_version: at most ONE leading `v` is stripped — `vv0.27.0` stays malformed "
+      "(a bare `.lstrip('v')` stripped every leading v and made this a valid pin)",
+      _sc.normalize_pin_version("vv0.27.0") is None and _sc.normalize_pin_version("v0.27.0") == "0.27.0")
+check("normalize_pin_version: a 2-part version is expanded to 3 parts (v0.27 == v0.27.0)",
+      _sc.normalize_pin_version("v0.27") == "0.27.0")
+check("normalize_pin_version: ASCII digits only — a Unicode digit (Arabic-Indic ٣.٣, a superscript "
+      "².0) is NOT a version (str.isdigit() is Unicode-wide and would silently normalize it, turning "
+      "an unreadable pin into an ordinary mismatch)",
+      _sc.normalize_pin_version("٣.٣") is None and _sc.normalize_pin_version("².0") is None)
+
+# --- enforce_engine_pin end to end, through .candor/config (spec §3.4, exit 2 = unevaluable, not 1) ---
+_d, _t = _fleet_with_config(f"engine v{_RUN}\n")
+check(f"config: engine pin MATCHING the running build ({_RUN}) is silent — exit 0, no gate configured",
+      cli("scan", _t, "--out", os.path.join(_mkd(), "r")).returncode == 0)
+_d, _t = _fleet_with_config("engine v99.99.99\n")
+_rmis = cli("scan", _t, "--out", os.path.join(_mkd(), "r"))
+check("config: engine pin MISMATCHING the running build fails exit 2 (unevaluable), never 1 (not a "
+      "policy violation) and never 0 (silently ignored)",
+      _rmis.returncode == 2 and "pins engine" in _rmis.stderr and "v99.99.99" in _rmis.stderr,
+      f"rc={_rmis.returncode} err={_rmis.stderr[-300:]!r}")
+_d, _t = _fleet_with_config("engine latest\n")
+_rbadv = cli("scan", _t, "--out", os.path.join(_mkd(), "r"))
+check("config: a malformed engine pin (`engine latest`) fails exit 2 with the 'not an engine version' "
+      "message, distinct from a version mismatch",
+      _rbadv.returncode == 2 and "not an engine version" in _rbadv.stderr, _rbadv.stderr[-300:])
+_d, _t = _fleet_with_config("engine swift v1.0.0\n")  # a pin for a DIFFERENT engine entirely
+check("config: a pin qualified for a DIFFERENT engine has no effect here — exit 0",
+      cli("scan", _t, "--out", os.path.join(_mkd(), "r")).returncode == 0)
+check("config: observe honours the SAME engine-pin gate (one shared load_candor_config, not a "
+      "second copy) — a mismatch fails observe too",
+      cli("observe", _d, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"),
+          "--fleet", "t").returncode == 0)  # swift-qualified pin: no effect on either route
+_d, _t = _fleet_with_config("engine v99.99.99\n")
+check("config: observe ALSO fails exit 2 on a mismatched engine pin (scan and observe share one "
+      "enforcement, not two copies that could drift)",
+      cli("observe", _d, "--transcripts", _otdir, "--out", os.path.join(_mkd(), "o"),
+          "--fleet", "t").returncode == 2)
 
 print()
 
@@ -2145,6 +2336,20 @@ check("policy render(): the console line is `[rule] detail` from the same record
       _pol.render(_v[0]) == f"[AS-EFF-006] {_v[0]['detail']}" and "forbidden by policy" in _pol.render(_v[0]), _v)
 check("policy AS-EFF-006: a clean policy (`deny Db`) over a Net/Fs fleet yields no violations",
       _gate("deny Db", _f006, {}) == [])
+
+# ⟨0.27⟩ SPEC §4 `zeroMatch` — a rule whose SCOPE binds NO unit is scored as satisfied (never a
+# violation), so it must be DISCLOSED separately — a one-character typo in a scope otherwise turns a
+# gate green with no evidence anything was ever checked. Zero coverage existed for this before the
+# guard-deletion attack found it: LAST_ZERO_MATCH's computation is set-and-forget — gutting it to `[]`
+# unconditionally left the full suite green, because nothing anywhere read the value back.
+_vzm = _gate("deny Exec orchestratr", _f006, {"boss": ["leaf"], "leaf": [], "quiet": []})
+check("policy §4 ⟨0.27⟩: a rule whose scope matches no unit fires NO violation and is named in "
+      "LAST_ZERO_MATCH (evaluated and bound nothing, disclosed rather than silently 'satisfied')",
+      _vzm == [] and _pol.LAST_ZERO_MATCH == ["deny Exec orchestratr"], (_vzm, _pol.LAST_ZERO_MATCH))
+_vzm2 = _gate("deny Net leaf", _f006, {"boss": ["leaf"], "leaf": [], "quiet": []})
+check("policy §4 ⟨0.27⟩: a rule whose scope DOES bind a unit is never listed in LAST_ZERO_MATCH, "
+      "whether or not it fires (a scoped-and-satisfied rule looks nothing like an unbound one)",
+      _pol.LAST_ZERO_MATCH == [], (_vzm2, _pol.LAST_ZERO_MATCH))
 # `pure <scope>` is a deny with NO effects → any DETERMINED effect on the scope is a violation.
 # NOT "any inferred effect", which is what this comment said until spec ⟨0.24⟩ and what the code did:
 # `pure` fires iff `S ≠ ∅` (§4.0's verb table), and `S` is `inferred` MINUS the `Unknown` marker.
@@ -2441,6 +2646,19 @@ check("policy §1 ⟨0.24⟩: guard (the runtime dual) reads the SAME vocabulary
       "of §1's table is how `Llm` came to be missing from all of them at once",
       _guard.VOCAB == set(_pol.EFFECTS))
 
+# `only` (§6.2 ⟨0.29⟩ permission form): this engine has no from-reaches-to relation to evaluate it
+# against (it analyzes a fleet, not a call graph) and MUST REFUSE (fatal), never silently drop it as
+# an unrecognized rule kind — a dropped `only` leaves every OTHER rule enforced and the run exits 0/1
+# on a policy whose permission clause was never checked, the exact silent-drop §3.1's answerability
+# MUST exists to close. Zero coverage existed for this before the guard-deletion attack found it:
+# routing `only` through the ordinary "unknown rule kind" arm (non-fatal) left 486/486 green.
+_pp, _w = _parse_warn("only reviewer -> Exec")
+check("policy parse §6.2 ⟨0.29⟩: `only` is a FATAL policy error (this engine cannot evaluate a "
+      "permission rule), NOT a dropped-with-a-note unknown rule kind",
+      _pp == {"deny": [], "allow": [], "forbid": []}
+      and any(e["fatal"] and e["raw"] == "only reviewer -> Exec" for e in _pol.LAST_POLICY_ERRORS)
+      and "cannot evaluate" in _w and "policy error" in _w, (_pp, _w, _pol.LAST_POLICY_ERRORS))
+
 # --- VERDICT PARITY with the UNMODIFIED candor-query (the property that makes ONE gate code+fleets) ---
 # Parser parity: policy.parse_policy must agree with `candor-query parsepolicy` (the canonical shared
 # parser) on each rule kind — same drops, same scopes, same values. Then VERDICT parity: the violating
@@ -2641,14 +2859,34 @@ check("__init__: an unknown attribute raises AttributeError (the lazy hook doesn
 
 # ── coverage remnants: the contract arms a re-measure still flagged (each verified against the
 # Rust/TS twins where one exists; the rest are behavioral one-liners, not implementation pins) ─────
-# scope_matches: a scope LONGER than the name never matches (the len guard)
+# scope_matches: a scope LONGER than the name never matches (the len guard). Deletion-tested: the
+# `len(parts) > len(segs)` half is PROVABLY REDUNDANT — the walk below it is `range(len(segs) -
+# len(parts) + 1)`, which is already empty whenever parts outnumber segs, so removing that half of the
+# guard changes nothing (judged dead, not a finding). The `not parts` half is NOT redundant — an empty
+# scope reaches `parts[-1]` two lines down and crashes — but no PRODUCTION caller ever passes one:
+# evaluate_policy only calls scope_matches when `r["scope"]` is truthy (deny/allow), and the forbid
+# parser refuses a rule with an empty `from`/`to` before it can reach here. Direct-call safety only;
+# pinned so a future caller (or a regression here) fails a test, not a crash in someone's embedding.
 check("policy scope_matches: a scope with more segments than the name never matches",
       _pol.scope_matches("a.b", "a.b.c.d") is False)
+check("policy scope_matches: an EMPTY scope never matches (and never crashes on `parts[-1]`) — "
+      "unreachable from every production call site (both callers guard on scope truthiness first) "
+      "but callable directly, so pinned rather than left to crash a future caller",
+      _pol.scope_matches("a.b", "") is False)
 # _path_covered: a reached path that climbs out via `..` is never covered; abs/rel never conflate
-# (both arms mirror rust fs_path_covered / ts pathCovered)
+# (both arms mirror rust fs_path_covered / ts pathCovered). The escape case is the one that matters:
+# a NAIVE segment-prefix comparison of UNRESOLVED segments reads "/etc/allowed/../../etc/passwd" as
+# prefixed by "/etc/allowed" (segments 0-1 match literally; the `..`s are never resolved), so an
+# `allow Fs /etc/allowed` would certify a path that actually escapes it. The earlier fixture
+# (".." two segments in from an already-mismatched prefix) never reached that branch — guard-deletion
+# proved it: deleting the real `".." in norm(r)` guard left the suite fully green.
 check("policy _path_covered: a `..` climb-out is never covered; absolute never covers relative",
       _pol._path_covered("/etc/app", "/etc/../x") is False
       and _pol._path_covered("/a", "a/b") is False)
+check("policy _path_covered: a `..` that would ESCAPE an allowed prefix is never covered, even though "
+      "its first segments literally match the allowed path (an allowlist bypass if unresolved `..` "
+      "segments are compared positionally instead of being refused outright)",
+      _pol._path_covered("/etc/allowed", "/etc/allowed/../../etc/passwd") is False)
 # an allow with a scope skips out-of-scope units; an allow whose effect the unit doesn't reach skips
 _fsc = [{"fn": "inscope", "inferred": ["Net"], "hosts": ["evil.test"], "calls": []},
         {"fn": "outscope", "inferred": ["Net"], "hosts": ["evil.test"], "calls": []},
