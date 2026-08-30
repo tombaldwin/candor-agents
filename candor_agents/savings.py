@@ -22,20 +22,39 @@ import re
 import sys
 
 from candor_agents.observe import transcript_dir_for, tool_uses
+from candor_agents.scan import bash_cmds
 
 TOK, CALLS = 17, 50          # benchmark multiples
 QUERY_TOKENS = 24_000        # one candor query, per the benchmark
 
-# candor-query INVOKED at a command position (start of the command or after a shell separator) — not
-# merely mentioned inside an echo/grep/comment/path. Covers `candor-query`, `candor-ts-query`, and
-# `npx [-y] candor-ts-query`.
-_QUERY = re.compile(r"(?:^|[;&|]\s*)(?:npx\s+(?:-y\s+)?)?candor(?:-ts)?-query\b")
+# The command names that ARE a candor query, matched against the heads `scan.bash_cmds` extracts.
+_QUERY_HEADS = {"candor-query", "candor-ts-query"}
+# `npx [-y] candor-ts-query …` — the ONE invocation form whose command head is not the query itself
+# (bash_cmds correctly reports `npx`), so it keeps a literal matcher. Anchored at a command position
+# the same way bash_cmds segments: start of line, or after a `;`/`&`/`|` separator.
+_NPX = re.compile(r"(?:^|[;&|\n]\s*)npx\s+(?:-y\s+)?candor(?:-ts)?-query\b", re.M)
 _BLAST = re.compile(r"candor(?:-ts)?-query\s+(?:callers|where)\b")
 
 
 def _is_query(name, inp):
+    """Did this tool use INVOKE a candor query? The command-position test is `scan.bash_cmds` — the
+    module that owns "what does this shell string run" — not a second regex.
+
+    The regex this replaced anchored on `(?:^|[;&|]\\s*)` with no re.M, and so missed four real
+    invocation forms that bash_cmds gets right, every one of them an UNDER-count of the measured
+    number this report is built on:
+
+        cd /repo\\ncandor-query callers f     a newline separator (`^` is not multiline)
+        sudo candor-query callers f          a transparent command-prefix wrapper
+        for f in …; do candor-query …; done  a shell keyword before the command
+        X=$(candor-query callers f)          a command substitution
+
+    bash_cmds is also the stricter half where it matters: `echo "candor-query callers x"` yields the
+    head `echo`, and a `# candor-query …` comment yields nothing, so a mere MENTION still does not
+    count — the property the anchor was reaching for, from the module that implements it properly."""
     if name == "Bash" and isinstance(inp, dict) and isinstance(inp.get("command"), str):
-        return bool(_QUERY.search(inp["command"]))
+        cmd = inp["command"]
+        return bool(bash_cmds(cmd) & _QUERY_HEADS) or bool(_NPX.search(cmd))
     if isinstance(name, str) and re.search(r"candor.*quer", name, re.I):
         return True  # an MCP candor-query tool, if wired that way
     return False
@@ -43,8 +62,8 @@ def _is_query(name, inp):
 
 def _is_blast(name, inp):
     # callers = reverse reachability (the blast radius); where = "what reaches this effect".
-    return (name == "Bash" and isinstance(inp, dict) and isinstance(inp.get("command"), str)
-            and bool(_QUERY.search(inp["command"])) and bool(_BLAST.search(inp["command"])))
+    return (_is_query(name, inp) and name == "Bash" and isinstance(inp, dict)
+            and isinstance(inp.get("command"), str) and bool(_BLAST.search(inp["command"])))
 
 
 def _count(tdir):

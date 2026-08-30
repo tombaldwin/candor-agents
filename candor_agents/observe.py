@@ -20,8 +20,8 @@ import re
 import sys
 import urllib.parse
 
-from candor_agents.scan import (SPEC, TOOL_EFFECTS, FS_KIND, PURE_TOOLS, MCP_TABLE, VERSION,
-                                bash_cmds, config_policy, propagate)  # one source
+from candor_agents.scan import (SPEC, VERSION, bash_cmds, classify, config_policy, propagate,
+                                read_mcp)  # one source
 
 # The emit bound on a unit's observed `paths` literal surface. A unit past it is TRUNCATED — which
 # must be (a) disclosed on the receipt and (b) fail-closed under an `allow Fs` gate: the dropped
@@ -42,19 +42,31 @@ def transcript_dir_for(path):
     return cand if os.path.isdir(cand) else None
 
 
-def classify_tool(name):
-    """Tool name -> (effects, fs_kinds, why). The same posture as the static scan: unknown -> Unknown."""
-    if name in PURE_TOOLS:
-        return set(), set(), None
-    if name in TOOL_EFFECTS:
-        return set(TOOL_EFFECTS[name]), ({FS_KIND[name]} if name in FS_KIND else set()), None
-    if name.startswith("mcp__"):
-        parts = name.split("__")
-        server = parts[1] if len(parts) > 1 else "?"
-        if server in MCP_TABLE:
-            return set(MCP_TABLE[server]), set(), None
-        return {"Unknown"}, set(), f"mcp-uncurated:{server}"
-    return {"Unknown"}, set(), f"tool-unknown:{name}"
+def classify_tool(name, declared_mcp=None, declared_bad=None):
+    """One observed tool name -> (effects, fs_kinds, why). THE CLASSIFIER IS `scan.classify` — this is
+    an adapter onto its one-tool case, not a second table walk.
+
+    The module docstring has always claimed observed effects are "classified by the same table as the
+    static scan". That was true of the TABLES and false of the LADDER: this function knew only
+    `MCP_TABLE`, so the `.mcp.json` `candorEffects` tier `scan.read_mcp`/`scan.classify` own — the
+    documented DECLARING.md convention, the project's own claim about its server — did not exist here.
+    Measured on a fleet whose `.mcp.json` declares `acme: ["Net"]` and whose transcript shows one
+    `mcp__acme__query` use:
+
+      scan     --policy 'deny Net'   →  AS-EFF-006 on the unit, exit 1
+      observe  --policy 'deny Net'   →  `policy ✓`, exit 0
+
+    The OBSERVED gate — the half that answers "what did the fleet actually DO" — passed clean over the
+    exact use the DECLARED gate fails on, because the server read `Unknown` instead of `Net`. That is
+    a silent under-report of a gate surface, and it came with a FALSE disclosure beside it
+    (`mcp-uncurated:acme` on a server the project HAD curated) plus a false `drift --strict` anomaly:
+    every project that followed DECLARING.md got an OBSERVED-OUTSIDE-DECLARATION for doing so.
+
+    Delegating also inherits the two tiers this copy could never have grown on its own: the ⟨0.24⟩
+    `mcp-decl-invalid:<server>:<effect>` voiding of an out-of-vocabulary declaration, and §6.1's
+    `refine_llm` (a declared `Llm` co-emits `Net`), which `read_mcp` applies at the source."""
+    effs, fs, why = classify([name], None, declared_mcp, declared_bad)
+    return effs, fs, (sorted(why)[0] if why else None)
 
 
 def surfaces_from(name, inp):
@@ -145,9 +157,14 @@ EXAMPLES
 Docs: candor.poly.io   ·   Verify an install: candor doctor"""
 
 
-def observe(tdir, out_prefix, fleet, as_json=False):
+def observe(tdir, out_prefix, fleet, as_json=False, project_dir=None):
     sessions = sorted(f for f in os.listdir(tdir) if f.endswith(".jsonl"))
     bad = {"lines": 0, "files": 0}
+    # The project's `.mcp.json` declaration tier, read by the ONE reader scan uses (see classify_tool).
+    # `project_dir` is the fleet the transcripts belong to; when observe is pointed straight at a
+    # transcript directory there is no manifest and read_mcp returns empty — the pre-declaration
+    # behaviour, unchanged.
+    _srv, declared_mcp, declared_bad = read_mcp(project_dir) if project_dir else ([], {}, {})
 
     # unit name per transcript file: the main session(s) -> "session"; a subagent -> its agentType
     unit_of_file = {}
@@ -188,7 +205,7 @@ def observe(tdir, out_prefix, fleet, as_json=False):
             if tu_id:
                 tooluse_owner[tu_id] = unit
             counts[unit] = counts.get(unit, 0) + 1
-            effs, kinds, w = classify_tool(name)
+            effs, kinds, w = classify_tool(name, declared_mcp, declared_bad)
             direct.setdefault(unit, set()).update(effs)
             fs_kinds.setdefault(unit, set()).update(kinds)
             if w:
@@ -396,7 +413,10 @@ def main(argv=None):
         base = os.path.basename(os.path.abspath(target)).lstrip("-")
         if (not os.path.isdir(target)) or base in ("", "null", "dev"):
             base = os.path.basename(os.path.abspath(tdir)).lstrip("-") or "fleet"
-    report, callgraph, incomplete = observe(tdir, out, base, as_json=as_json)
+    # `target` is the PROJECT (the fleet whose sessions these are) even when --transcripts points the
+    # reader elsewhere — that is where the `.mcp.json` declarations live, and it is what drift passes.
+    report, callgraph, incomplete = observe(tdir, out, base, as_json=as_json,
+                                            project_dir=target if os.path.isdir(target) else None)
 
     # ── the standing §6.2 gate (--policy / $CANDOR_POLICY / config `policy`) over the OBSERVED ────
     # report, via the ONE shared run_gate() — scan and observe must never diverge in wording or

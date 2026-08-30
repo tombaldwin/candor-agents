@@ -20,11 +20,11 @@ guard produces the permissions.deny that removes the capability.
 """
 import json
 import os
-import re
 import sys
 
+from candor_agents import policy as _policy
 from candor_agents.policy import EFFECTS
-from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE
+from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE, read_mcp
 
 # SPEC §1's effect table (⟨0.24⟩ phrasing: "every effect in the table above, excluding `Unknown`") —
 # taken from the shared list rather than re-typed, which is how `Llm` came to be missing from all
@@ -34,28 +34,13 @@ from candor_agents.scan import TOOL_EFFECTS, MCP_TABLE
 VOCAB = set(EFFECTS)
 VOCAB_LOWER = {e.lower(): e for e in VOCAB}  # case-fold map, to catch a miscased `deny net`
 # `Unknown` shares the same miscasing hazard as the 11 named effects but is deliberately absent from
-# VOCAB itself (see _UNKNOWN_TOKEN below), so it needs its own entry in the SAME map rather than a
-# second one — `deny UNKNOWN`/`deny unknown` must warn exactly like `deny net` does, not silently
-# vanish into "scope" with no signal at all (see parse_denies).
+# VOCAB itself (policy.py's own comment: "minus the `Unknown` visibility marker"), so it needs its own
+# entry in the SAME map rather than a second one — `deny UNKNOWN`/`deny unknown` must warn exactly like
+# `deny net` does, not silently vanish into "scope" with no signal at all (see _case_suspect). Effect
+# tokens stay case-SENSITIVE: policy.parse_policy does not fold them, and silently upgrading a miscased
+# token here would make guard's runtime enforcement answer a DIFFERENT question than the gate asks of
+# the identical policy text — the divergence guard exists not to have. It only earns the warning.
 VOCAB_LOWER["unknown"] = "Unknown"
-# `Unknown` (bare, or the §6.2 ⟨0.19⟩ bracketed reason-class form `Unknown[dispatch]`) is a LEGAL deny
-# token in the shared grammar (policy.parse_policy accepts it: "bare `Unknown` ⇒ all classes") but is
-# deliberately absent from EFFECTS/VOCAB (policy.py's own comment: "minus the Unknown visibility
-# marker"). Recognise it as its own token class here — never as a candidate SCOPE — so `deny Unknown`
-# and a compound `deny Net Unknown` parse the same way the engine's own parser does. Case-sensitive,
-# matching policy.py exactly (`tok == "Unknown"`, no fold): a miscased `deny UNKNOWN` is NOT silently
-# upgraded into the real token here either — that would make guard's runtime enforcement answer a
-# DIFFERENT question than policy.py's gate asks of the identical policy text, the exact divergence
-# guard exists to not have. It only earns the VOCAB_LOWER warning above, same as any other effect.
-_UNKNOWN_TOKEN = re.compile(r"Unknown(\[[^\]]*\])?")
-# The §6.2 ⟨0.20⟩ destination-class filter on a CONCRETE effect (`Net[unknown-host]`) — mirrors
-# policy.py's `_EFFECT_SCOPED`. Before this, a bracket-scoped effect token matched neither VOCAB (exact
-# string, brackets included) nor _UNKNOWN_TOKEN, so it fell straight to "this must be the scope" and a
-# bare `deny Net[unknown-host]` (no scope) silently collected ZERO effects and was dropped whole — the
-# identical failure shape the bare-`Unknown` fix above closes, one bracket-shape over, and unlike that
-# one this one wasn't even a typo: it's a legal policy line. `policy.py` keeps the effect and drops the
-# filter (widen, never narrow — the family's rule for a token this layer can't honour); do the same.
-_EFFECT_SCOPED = re.compile(r"([A-Za-z]+)\[([^\]]*)\]")
 
 
 def effect_tools():
@@ -67,99 +52,129 @@ def effect_tools():
     return inv
 
 
+def _case_suspect(tok):
+    """A scope token that case-folds onto an effect name — `deny net`, `deny Net UNKNOWN`. Returns the
+    properly-cased effect, or None. Effect tokens are case-SENSITIVE in the shared grammar, so such a
+    token really IS read as an agent scope; the operator has to be told, not left to think they wrote a
+    rule for a real agent. Strips an optional `[…]` suffix so `UNKNOWN[dispatch]` is caught too."""
+    base = tok[:tok.index("[")] if "[" in tok and tok.endswith("]") else tok
+    return VOCAB_LOWER.get(base.lower())
+
+
 def parse_denies(text):
-    """The `deny <Effect...> [scope]` lines of a CANDOR_POLICY (§6.2). Other rules (allow/pure/forbid/
-    layer) aren't runtime-enforceable this way and are ignored. Returns [(effects, scope_or_None)].
+    """The `deny <Effect...> [scope]` rules of a CANDOR_POLICY (§6.2), for runtime compilation.
+    Returns ([(effects, scope_or_None)], suspects, widened, fatal_errors).
 
-    Parsed POSITIONALLY to mirror the canonical engine parser (candor-classify policy.rs): leading
-    effect tokens are collected, and the FIRST non-effect token is the scope and ENDS the rule — a
-    later effect-looking token (`deny Net foo Db`) is NOT collected. A set-membership partition would
-    diverge here (it would treat the trailing `Db` as a scoped deny the engine never gates), so guard
-    would no longer be the faithful dual of the engine's §6.2 enforcement.
+    THE PARSE IS `policy.parse_policy`'s, NOT A SECOND ONE. This function used to re-tokenise the
+    policy text itself, on the reasoning that it was a faithful positional mirror of the canonical
+    parser — and it was, on the token partition. It was not on anything else, and every divergence
+    fell out the moment the two were run over the same string:
 
-    `Unknown` (bare or `Unknown[<class>]`) is an EFFECT TOKEN here too, not a candidate scope — before
-    this, guard's VOCAB check only knew the 11 EFFECTS (which deliberately excludes `Unknown`), so a
-    `deny Unknown` line's first token failed the effect check, was taken as the SCOPE, and the rule
-    then collected zero effects and was dropped outright (`if effs:` below never emits it) — silent,
-    with no warning and no note, unlike every other unenforceable shape this parser is asked to
-    handle. Worse, a compound `deny Net Unknown` (both effects, no scope — a legal §6.2 line) read
-    `Unknown` as a fictitious agent SCOPE and lost the real `Net` denial along with it.
+      `deny\\tNet`               policy ENFORCES it; guard's `startswith("deny ")` wanted a literal
+                                SPACE, so the line was skipped with NO warning and a single-rule
+                                policy compiled to an EMPTY (fully permissive) fragment — the exact
+                                shape of the BOM bug one whitespace character over, and the same
+                                silent, under-protective direction.
+      `Deny Net` / `DENY Net`   guard compiled a fleet-wide Net deny and printed "the harness then
+                                enforces this"; policy dropped the line as an unknown rule kind and
+                                the gate exited 0 having enforced nothing. Two paths, one policy,
+                                opposite answers.
+      `deny Net<NBSP>agent`     policy splits on ASCII whitespace ONLY (deliberately — the
+                                cross-engine rule) so the rule reads malformed and is REFUSED at
+                                exit 2; `str.split()` here is Unicode-wide and read a scoped deny.
+      `deny Net\\x0bdeny Fs`     `str.splitlines()` splits on \\v/\\f/\\x85/\\u2028 too; policy's line
+                                split does not.
+      a FATAL policy            `only …`, `deny Frobnicate`, `deny Unknown[nativ]` — policy REFUSES
+                                the whole file (exit 2, §6.2: a policy that cannot be honoured AS
+                                WRITTEN is refused, never rewritten). guard compiled the remainder
+                                and exited 0, which is that rewrite, in the enforcement layer.
 
-    A MISCASED `Unknown` (`UNKNOWN`, `unknown`, `UnKnown`) is not corrected into the real token — that
-    would make this engine's runtime enforcement answer a different question than policy.py's gate asks
-    of the same text (see the comment on `_UNKNOWN_TOKEN`). It is read as a scope, exactly as policy.py
-    reads it, and flagged via the same `suspects`/VOCAB_LOWER mechanism the 11 named effects already
-    use — so `deny Net UNKNOWN` warns instead of silently compiling away the fleet-wide `Net` denial.
-
-    Strips a leading UTF-8 BOM first (mirrors `policy.parse_policy`, which is not called from here —
-    guard hand-rolls its own parser and reads its own file with the same plain `utf-8` codec that
-    doesn't strip one). Left in place it glues onto the FIRST line's first token, so `﻿deny Net`
-    fails `line.lower().startswith("deny ")` and that line is silently skipped — no warning at all,
-    unlike every other unenforceable shape this parser discloses. A single-line `deny Net` policy
-    would compile to an EMPTY permissions.deny fragment with no signal that anything was lost."""
-    if text.startswith("﻿"):
-        text = text[1:]
+    So: one parser. `suspects` (the case-fold lint) and `widened` (the ⟨0.20⟩ destination-class filter
+    guard cannot honour) are read off what THAT parser recorded — the scope token it chose, and the
+    tokens it dropped — never re-derived from the raw line, which is how the second parser got in.
+    `fatal` is `policy.LAST_POLICY_ERRORS`' fatal entries, so guard can refuse exactly where the gate
+    does instead of enforcing a policy the gate will not."""
+    parsed = _policy.parse_policy(text)
+    errors = list(_policy.LAST_POLICY_ERRORS)
     out, suspects, widened = [], [], []
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line.lower().startswith("deny "):
+    for r in parsed["deny"]:
+        if not r["effects"]:
+            continue  # `pure <scope>` — a purity assertion, not a runtime-denyable capability
+        out.append((list(r["effects"]), r["scope"] or None))
+        widened.extend(r.get("widened") or [])
+        if r["scope"] and (proper := _case_suspect(r["scope"])):
+            suspects.append((r["scope"], proper))
+    for e in errors:
+        # A rule DROPPED for naming no effect never reaches `parsed`, so its scope token — the whole
+        # content of `deny net` — is only visible here. policy records it for exactly this reader.
+        if e.get("why") == "deny names no known effect" and e.get("scope"):
+            if proper := _case_suspect(e["scope"]):
+                suspects.append((e["scope"], proper))
+    return out, suspects, widened, [e for e in errors if e.get("fatal")]
+
+
+def server_effects(project_dir):
+    """Configured MCP server -> the effect set SCAN would classify it as, plus a warning per voided
+    declaration. `read_mcp` is the authority — this used to be a second, hand-rolled `.mcp.json`
+    reader, and it disagreed with scan three ways, all of them under-protective:
+
+      PRECEDENCE   scan reads the curated MCP_TABLE FIRST and a `candorEffects` declaration only as a
+                   fallback ("curated table outranks" — .mcp.json is project-controlled, so a project
+                   cannot narrow candor's own claim about a conventionally-named server). Here the
+                   declaration was read first, so a server named `github` declaring `["Fs"]` was
+                   omitted from a compiled `deny Net` that scan's gate fires on.
+      Llm ⇒ Net    `read_mcp` runs `refine_llm` (SPEC §6.1 ⟨0.24⟩: a model-provider call is an
+                   outbound request in every instance, so the engines co-emit `Net`). Without it a
+                   server declaring `["Llm"]` was invisible to `deny Net` — again, one the gate fires on.
+      SHAPE        a non-list `candorEffects` ("Net", a string) fell to `else: MCP_TABLE.get(...)`
+                   and the server was silently un-denied with no warning at all, while scan VOIDS it
+                   loudly as `mcp-decl-invalid`. The list-valued typo was already handled here; the
+                   wrong-TYPE one was the branch nobody wrote.
+
+    So the classification lives in one place and the trust ladder is scan's, verbatim."""
+    warnings = []
+    if not project_dir:
+        return {}, warnings
+    if not os.path.exists(os.path.join(project_dir, ".mcp.json")):
+        return {}, warnings
+    # read_mcp already prints its own `unreadable .mcp.json` line to stderr; mirror it as a guard
+    # warning too, since a server deny that cannot be compiled is an under-protective fragment.
+    servers, declared_mcp, declared_bad = read_mcp(project_dir)
+    mcp_eff = {}
+    for name in servers:
+        if name in MCP_TABLE:
+            eff = MCP_TABLE[name]
+        elif name in declared_mcp:
+            eff = declared_mcp[name]
+        elif name in declared_bad:
+            warnings.append(f"mcp server {name}: candorEffects has an invalid effect "
+                            f"'{declared_bad[name]}' — declaration voided (SPEC §1); the server can't "
+                            f"be matched by a deny rule until fixed.")
             continue
-        effs, scope = [], None
-        for t in line.split()[1:]:
-            m = _EFFECT_SCOPED.fullmatch(t)
-            if t in VOCAB:
-                effs.append(t)
-            elif _UNKNOWN_TOKEN.fullmatch(t):
-                effs.append("Unknown")
-            elif m and m.group(1) in VOCAB:
-                effs.append(m.group(1))
-                widened.append((t, m.group(1)))
-            else:
-                scope = t  # first non-effect token is the scope and ends the rule
-                # Effect tokens are case-SENSITIVE but `deny ` isn't: a miscased `deny net` (or `deny
-                # UNKNOWN`) would otherwise read as a scope and enforce nothing, silently. Flag the
-                # look-alike — strip an optional `[…]` suffix first so `UNKNOWN[dispatch]` is caught too.
-                base = t[:t.index("[")] if "[" in t and t.endswith("]") else t
-                if base.lower() in VOCAB_LOWER:
-                    suspects.append((t, VOCAB_LOWER[base.lower()]))
-                break
-        if effs:
-            out.append((effs, scope))
-    return out, suspects, widened
+        else:
+            continue  # uncurated + undeclared: reads Unknown in scan, and Unknown binds no tool here
+        if eff:
+            mcp_eff[name] = set(eff)
+    return mcp_eff, warnings
 
 
 def compile_guard(policy_text, project_dir=None):
-    """A fleet deny-policy -> {deny:[tool…], warnings:[…], notes:[…]}. `deny` is the permissions.deny
-    the harness enforces; warnings flag the Exec cliff; notes flag scoped denies it can't enforce."""
+    """A fleet deny-policy -> {deny:[tool…], warnings:[…], notes:[…], fatal:[…]}. `deny` is the
+    permissions.deny the harness enforces; warnings flag the Exec cliff; notes flag scoped denies it
+    can't enforce; `fatal` is the §6.2 policy errors that make the gate REFUSE (see main)."""
     inv = effect_tools()
-    mcp_eff = {}  # configured server -> its classified effect set (for mcp__server denies)
-    warnings = []
-    if project_dir:
-        mp = os.path.join(project_dir, ".mcp.json")
-        if os.path.exists(mp):
-            try:
-                for name, cfg in (json.load(open(mp)).get("mcpServers") or {}).items():
-                    decl = cfg.get("candorEffects") if isinstance(cfg, dict) else None
-                    if isinstance(decl, list):
-                        # Validate like scan (SPEC §5.1): an invalid effect VOIDS the declaration loudly
-                        # — otherwise a typo'd candorEffects (`["Database"]`) silently leaves the server
-                        # un-denied (under-protect), inconsistent with scan, which voids it.
-                        bad = [e for e in decl if e not in VOCAB]
-                        if bad:
-                            warnings.append(f"mcp server {name}: candorEffects has an invalid effect '{bad[0]}' — "
-                                            f"declaration voided (SPEC §1); the server can't be matched by a deny rule until fixed.")
-                            continue
-                        eff = set(decl)
-                    else:
-                        eff = MCP_TABLE.get(name, set())
-                    if eff:
-                        mcp_eff[name] = eff
-            except Exception as e:
-                # An unreadable/malformed .mcp.json means the server denies CANNOT be compiled — staying
-                # silent would emit an under-protective permissions.deny with no disclosure (a deny rule
-                # against an mcp server would simply be missing). Warn, mirroring scan.py's reader.
-                warnings.append(f".mcp.json unreadable ({e}) — mcp server denies omitted; verify manually")
-    rules, suspects, widened = parse_denies(policy_text)
+    mcp_eff, warnings = server_effects(project_dir)
+    if project_dir and os.path.exists(os.path.join(project_dir, ".mcp.json")) and not mcp_eff:
+        # read_mcp degrades-and-discloses on an unreadable/malformed file (it prints to stderr and
+        # returns nothing), so an empty result over a file that EXISTS may mean "couldn't read it".
+        # Only add the caveat when the file genuinely yielded no server, never in place of read_mcp's
+        # own diagnostic — a duplicated reader is what this function stopped having.
+        try:
+            with open(os.path.join(project_dir, ".mcp.json"), encoding="utf-8") as fh:
+                json.load(fh)
+        except Exception as e:
+            warnings.append(f".mcp.json unreadable ({e}) — mcp server denies omitted; verify manually")
+    rules, suspects, widened, fatal = parse_denies(policy_text)
     for tok, proper in suspects:
         warnings.append(f"`deny {tok}`: effects are case-sensitive — `{tok}` was read as a scope name, not "
                         f"the effect `{proper}`; use `deny {proper}` to enforce it fleet-wide.")
@@ -214,7 +229,7 @@ def compile_guard(policy_text, project_dir=None):
                             if denied_mcp else "an MCP server reaching it (deny its `mcp__server`)")
             warnings.append(f"deny {e}: no built-in tool produces {e}; this guard binds it only insofar as "
                             f"you also close {' and '.join(residual)}.")
-    return {"deny": sorted(deny), "warnings": warnings, "notes": notes}
+    return {"deny": sorted(deny), "warnings": warnings, "notes": notes, "fatal": fatal}
 
 
 def main(args):
@@ -241,6 +256,20 @@ def main(args):
         print(f"candor-agents guard: cannot read policy {pol} ({e})", file=sys.stderr)
         return 2
     g = compile_guard(text, proj)
+    if g["fatal"]:
+        # §6.2: A POLICY THAT CANNOT BE HONOURED AS WRITTEN IS REFUSED, NOT REWRITTEN. `policy.run_gate`
+        # has exited 2 on this set since ⟨0.24⟩; guard did not, because it never asked the parser — it
+        # compiled the surviving remainder and printed "the harness then enforces this deny boundary",
+        # so `only reviewer -> Exec` beside a `deny Net` produced a confident fragment for a policy the
+        # CI gate refuses outright. Emitting enforcement for a REWRITTEN policy is that rewrite reaching
+        # runtime. Same posture, same exit code, same wording as the gate.
+        print("candor-agents guard: refusing to compile a policy that cannot be honoured AS WRITTEN "
+              "(exit 2, nothing emitted): "
+              + "; ".join(f"{e['why']}: {e['raw']}" for e in g["fatal"]), file=sys.stderr)
+        print("candor-agents guard: `candor-agents scan --policy` refuses this same policy at exit 2 — "
+              "fix it there first; a fragment compiled from the remainder would enforce a boundary "
+              "your gate is not checking.", file=sys.stderr)
+        return 2
     for w in g["warnings"]:
         print(f"candor-agents guard: {w}", file=sys.stderr)
     for n in g["notes"]:
