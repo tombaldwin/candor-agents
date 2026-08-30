@@ -89,7 +89,16 @@ def parse_denies(text):
     would make this engine's runtime enforcement answer a different question than policy.py's gate asks
     of the same text (see the comment on `_UNKNOWN_TOKEN`). It is read as a scope, exactly as policy.py
     reads it, and flagged via the same `suspects`/VOCAB_LOWER mechanism the 11 named effects already
-    use — so `deny Net UNKNOWN` warns instead of silently compiling away the fleet-wide `Net` denial."""
+    use — so `deny Net UNKNOWN` warns instead of silently compiling away the fleet-wide `Net` denial.
+
+    Strips a leading UTF-8 BOM first (mirrors `policy.parse_policy`, which is not called from here —
+    guard hand-rolls its own parser and reads its own file with the same plain `utf-8` codec that
+    doesn't strip one). Left in place it glues onto the FIRST line's first token, so `﻿deny Net`
+    fails `line.lower().startswith("deny ")` and that line is silently skipped — no warning at all,
+    unlike every other unenforceable shape this parser discloses. A single-line `deny Net` policy
+    would compile to an EMPTY permissions.deny fragment with no signal that anything was lost."""
+    if text.startswith("﻿"):
+        text = text[1:]
     out, suspects, widened = [], [], []
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()

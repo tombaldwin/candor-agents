@@ -12,6 +12,49 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **A leading UTF-8 BOM (a real, still-common Windows-editor/export artifact) silently blinded three
+  independent hand-rolled parsers, in three different failure shapes, because `read_md`'s and the
+  policy readers' plain `utf-8` codec does not strip one.** Found by attacking `scan.py`'s frontmatter
+  matcher directly (`\A---\n…` never matches `﻿---\n…`) and then asking where else the same
+  encoding artifact reaches a line-oriented parser (§ AGENT-CORPUS-BRIEF section G: two modules
+  computing a related fact independently, sharing an unhandled input shape).
+  - **`scan`: a BOM'd command or skill file's `allowed-tools` silently vanished, reading as a fully
+    PURE unit.** `parse_frontmatter` returning `{}` on a match failure is indistinguishable from "no
+    frontmatter at all" — for an AGENT that's the safer over-approximating direction (absent `tools:`
+    reads ambient, and `read_agents` already has its own disclosed skip for this shape), but for a
+    COMMAND or SKILL an absent `allowed-tools` reads PURE (the opposite convention). A real
+    `allowed-tools: Bash(psql:*)` command was OMITTED from the report entirely — no unit, no Exec, no
+    disclosure. Fixed by stripping a leading BOM in `parse_frontmatter` itself, before the `---` match.
+  - **`guard`: a BOM'd single-rule policy compiled to an EMPTY (fully permissive)
+    `permissions.deny` fragment, with no warning at all.** `parse_denies`'s own
+    `line.lower().startswith("deny ")` check failed on `﻿deny Net`, and unlike every other
+    unenforceable shape this parser recognises, an unrecognised line is skipped in total silence.
+  - **`policy` (the in-process §6.2 gate `scan`/`observe` share): a BOM'd policy's FIRST rule was
+    dropped as a non-fatal "unknown rule kind", so a single-line `deny Net` policy gated nothing and
+    the run exited 0 `policy ✓` over a fleet that should have failed.** This is the more severe of the
+    three: it defeats the enforced gate itself, not just a disclosure surface.
+  Fixed at the same site as the CRLF normalisation each parser already carried (`parse_policy`) or by
+  adding the missing strip where none existed (`parse_frontmatter`, `guard.parse_denies` — guard reads
+  its own file and does not call `policy.parse_policy`, so it needed its own fix). Six new regression
+  checks in `test.py`, each falsified against the pre-fix parsers first. `policy.py`'s pre-existing
+  CRLF normalisation had the identical gap — present and correct, but with zero coverage until now
+  (found by the same guard-deletion sweep, not a new bug).
+
+- **Three guard-deletion findings from the sweep this brief specifically named, all previously
+  correct-but-untested code, not new bugs:**
+  - **`_same_artifact` (SPEC §3.3.1 ⟨0.27⟩) — the entire "two path spellings, one file" collision
+    guard had ZERO test coverage.** Gutting it to an unconditional `return False` left all 519
+    pre-existing checks green: nothing exercised `--policy /w/P --gate-json ./P`-shaped collisions
+    (identical file, different spelling) at all, at either the unit level or through the CLI. Seven
+    new checks cover identity, a `.`-segment respelling resolving via `realpath` (the case a naive
+    string compare misses — the exact scenario the docstring names), two genuinely different files
+    correctly NOT colliding, the `"-"` stream-sink exemption, and two end-to-end CLI reproductions
+    (via `--policy` and via `$CANDOR_POLICY`) proving the file is never overwritten by the refusal.
+  - **`_bash_spec_head`'s basename-stripping of a path-qualified `Bash(...)` specifier
+    (`Bash(/usr/bin/curl:*)` → `curl`) was untested** — every existing head-refinement fixture used a
+    bare command word, so the `.rsplit("/", 1)[-1]` step could be deleted with the full suite green.
+    One new check.
+
 - **`guard`: `deny Unknown` (bare or `Unknown[<class>]`) is no longer silently dropped.** Adversarial
   review of the enforcement surface: `guard`'s own hand-rolled positional deny-parser only recognised
   the 11 named EFFECTS, so a `deny Unknown` policy line's first token failed that check, was read as a

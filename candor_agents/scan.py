@@ -554,7 +554,20 @@ def read_md(path, unreadable):
 
 
 def parse_frontmatter(text):
-    """The agent-file YAML frontmatter subset that matters: name/description/tools (string or list)."""
+    """The agent-file YAML frontmatter subset that matters: name/description/tools (string or list).
+
+    Strips a leading UTF-8 BOM first: a real, still-common artifact of Windows editors/export tools,
+    and Python's plain `utf-8` codec (what `read_md` uses) does NOT strip it — it stays as a literal
+    `\\ufeff` glued to the file's first byte. Without stripping, `\\A---\\n` never matches (the file
+    reads as starting with `\\ufeff---`, not `---`), so the WHOLE frontmatter block is missed and this
+    returns `{}, text` — indistinguishable from "no frontmatter at all". For an AGENT that reads as
+    ambient (the safe-ish over-approximating direction, and `read_agents` also has its own `not meta`
+    skip-and-warn for exactly this shape). For a COMMAND or SKILL it is the dangerous direction: an
+    absent `allowed-tools` there means PURE (§ read_commands_skills), so a real `Bash(psql:*)` grant
+    silently vanishes into a fully-pure, undisclosed unit — found by feeding a BOM'd command file
+    through the real pipeline, not by inspection."""
+    if text.startswith("﻿"):
+        text = text[1:]
     m = re.match(r"\A---\n(.*?)\n---\n?(.*)\Z", text, re.S)
     if not m:
         return {}, text

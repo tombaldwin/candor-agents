@@ -310,6 +310,28 @@ with tempfile.TemporaryDirectory() as _qd:
     check("a quoted command `allowed-tools: \"Bash(curl:*)\"` keeps Exec+Net + the curl head",
           _qc and set(_qc["inferred"]) == {"Exec", "Net"} and "curl" in _qc.get("cmds", []), f"got {_qc}")
 
+# a leading UTF-8 BOM (a real Windows-editor/export artifact; `read_md`'s plain `utf-8` codec does not
+# strip it) must not blind the frontmatter matcher entirely. Direct unit check first:
+check("parse_frontmatter: a leading BOM does not blind the `---` matcher",
+      parse_frontmatter("﻿---\ntools: Read\n---\nx") == ({"tools": "Read"}, "x"))
+# end-to-end, on the DANGEROUS side: a command's `allowed-tools` is its ONLY source of capability
+# (absent = PURE, the opposite convention from an agent's absent `tools:`), so a BOM that blinds the
+# matcher must not silently read a real `Bash(psql:*)` grant as a prompt-only pure command — before the
+# fix `command:migrate` was OMITTED from the report entirely, a silent under-report of real Exec reach.
+with tempfile.TemporaryDirectory() as _bd:
+    os.makedirs(os.path.join(_bd, ".claude", "commands"))
+    with open(os.path.join(_bd, ".claude", "commands", "migrate.md"), "wb") as _bf:
+        _bf.write("﻿---\nallowed-tools: Bash(psql:*)\n---\nRun a migration.\n".encode("utf-8"))
+    _bo = os.path.join(_bd, "r")
+    subprocess.run([sys.executable, "-m", "candor_agents.scan", _bd, "--out", _bo, "--fleet", "t"],
+                   capture_output=True, text=True, check=True)
+    _brep = json.load(open(f"{_bo}.t.Fleet.json"))
+    _bc = entry(_brep, "command:migrate")
+    check("a BOM'd command file's `allowed-tools: Bash(psql:*)` still classifies as Db+Exec (not "
+          "silently pure — the command must not vanish from the report)",
+          _bc is not None and set(_bc["inferred"]) == {"Db", "Exec"} and "psql" in _bc.get("cmds", []),
+          f"got {[f['fn'] for f in _brep['functions']]}")
+
 # an unheard-of builtin tool is Unknown, never silently pure
 rep, _ = scan({"x.md": agent("x", "FrobnicateDisk")})
 ex = entry(rep, "x")
@@ -1381,6 +1403,16 @@ e = entry(rep, "command:u")
 check("an unknown head keeps the bare Exec cliff (no fabricated effect)",
       e is not None and e["inferred"] == ["Exec"], json.dumps(e))
 
+# `_bash_spec_head` basenames a path-qualified specifier (`Bash(/usr/bin/curl:*)` -> `curl`) before
+# looking it up — untested (guard-deletion: dropping the `.rsplit("/", 1)[-1]` basename step left the
+# full suite green, because every OTHER head test here uses a bare command word).
+rep, r = build(commands={"p.md": "---\nallowed-tools: Bash(/usr/bin/curl:*)\n---\nFetch.\n"})
+e = entry(rep, "command:p")
+check("a PATH-qualified Bash specifier (`Bash(/usr/bin/curl:*)`) still basenames to the known `curl` "
+      "head (Exec + Net), not an unrecognised literal path",
+      e is not None and set(e["inferred"]) == {"Exec", "Net"} and e.get("cmds") == ["curl"],
+      json.dumps(e))
+
 # a hook command's head refines the hooks unit too
 rep, r = build({"a.md": agent("a", "Read")},
                settings={"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "curl https://x"}]}]}})
@@ -1608,6 +1640,13 @@ check("guard: `deny Net[unknown-host]` (destination-class filter) widens to a fl
 g_dcs = guard.compile_guard("deny Net[unknown-host] researcher")
 check("guard: `deny Net[unknown-host] researcher` widens the effect AND keeps the real scope",
       not g_dcs["deny"] and any("researcher" in n for n in g_dcs["notes"]), json.dumps(g_dcs))
+# (9) a leading UTF-8 BOM (guard reads its policy file with the plain `utf-8` codec, which does not
+# strip one) must not silently skip the FIRST `deny` line — before the fix `parse_denies`'s own
+# `line.lower().startswith("deny ")` check failed on `﻿deny Net` with NO warning at all, compiling an
+# empty (fully permissive) permissions.deny fragment from a single-line `deny Net` policy.
+g_bom = guard.compile_guard("﻿deny Net")
+check("guard: a BOM'd `deny Net` (single rule) still compiles the fleet-wide Net deny, not an empty "
+      "fragment", set(g_bom["deny"]) == {"WebFetch", "WebSearch"}, json.dumps(g_bom))
 
 # ── guard as a PROCESS surface (`candor-agents guard …` — cli.py dispatch + guard.main) ──────────
 # The compile_guard logic above is unit-covered; this is the user-facing CLI contract (exit codes,
@@ -2087,6 +2126,58 @@ check("observe --gate-json <violating>: the OBSERVED gate emits the same verdict
       and any(v["rule"] == "AS-EFF-006" and v["effects"] == ["Net"] for v in _gvo["violations"]),
       json.dumps(_gvo))
 
+# ══ `_same_artifact` (SPEC §3.3.1 ⟨0.27⟩): the "two path SPELLINGS, one file" guard ═════════════════
+# Guard-deletion found this ENTIRE mechanism had zero coverage — `_same_artifact` gutted to an
+# unconditional `return False` left all 519 pre-existing checks green (it's consulted only inside the
+# collision-refusal paths, none of which any test exercised). Unit-level first: identity, a REAL
+# different-spelling collision (the `.` segment `realpath` exists to resolve — a naive string compare
+# would miss it), two genuinely distinct files, and the `"-"` exemption (§3.3.1: the stdout STREAM
+# sink must never be treated as "the same artifact" as anything, itself included — otherwise
+# `--gate-json - --policy -` style inputs could false-positive on two unrelated intentions that both
+# happen to spell as the literal dash).
+_saa = _mkd(); _sap1 = os.path.join(_saa, "P"); open(_sap1, "w").write("deny Net\n")
+_sap2 = os.path.join(_saa, ".", "P")                      # a redundant `.` segment — same file, different string
+_sap3 = os.path.join(_saa, "Q"); open(_sap3, "w").write("deny Net\n")   # same BYTES, different FILE
+check("_same_artifact: identical path is the same artifact",
+      _sc._same_artifact(_sap1, _sap1) is True)
+check("_same_artifact: a `.`-segment respelling of the SAME file resolves via realpath, not string equality",
+      _sc._same_artifact(_sap1, _sap2) is True)
+check("_same_artifact: two DIFFERENT files with identical content are NOT the same artifact",
+      _sc._same_artifact(_sap1, _sap3) is False)
+check("_same_artifact: the `-` stream sink is never 'the same artifact' as anything, including itself",
+      _sc._same_artifact("-", "-") is False and _sc._same_artifact("-", _sap1) is False
+      and _sc._same_artifact(_sap1, "-") is False)
+check("_same_artifact: an empty/absent path is never 'the same artifact' as anything",
+      _sc._same_artifact("", _sap1) is False and _sc._same_artifact(_sap1, "") is False)
+
+# End to end, the exact scenario the docstring names: `--policy /w/P --gate-json ./P` from cwd `/w` —
+# ONE file named twice under different spellings. Before this test existed, nothing proved the CLI path
+# (`_prescan_sink_and_inputs` → `_refuse_sink_over_input` → `_same_artifact`) actually wires up; only
+# the (untested) function existed. Must refuse (exit 2) WITHOUT ever writing to P — the verdict is
+# armed before the policy is read, so a naive implementation overwrites the policy and gates on the
+# wreckage.
+_sap1_before = open(_sap1).read()
+_rsa = subprocess.run([sys.executable, "-m", "candor_agents.cli", "scan", _cd,
+                       "--out", os.path.join(_mkd(), "r"), "--policy", _sap1, "--gate-json", "./P"],
+                      capture_output=True, text=True, cwd=_saa,
+                      env={**os.environ, "PYTHONPATH": HERE})
+check("cli scan --policy /w/P --gate-json ./P (same file, different spelling): refused, exit 2, "
+      "'SAME FILE' named on stderr",
+      _rsa.returncode == 2 and "SAME FILE" in _rsa.stderr, f"rc={_rsa.returncode} err={_rsa.stderr[-240:]!r}")
+check("cli scan --policy /w/P --gate-json ./P: P itself is UNTOUCHED (never overwritten with a verdict)",
+      open(_sap1).read() == _sap1_before, open(_sap1).read())
+# the same collision through $CANDOR_POLICY rather than the --policy flag (a distinct code path in
+# scan.py's pre-gate loop, over the SAME `_same_artifact` call)
+_sap1_before2 = open(_sap1).read()
+_rsae = subprocess.run([sys.executable, "-m", "candor_agents.cli", "scan", _cd,
+                        "--out", os.path.join(_mkd(), "r"), "--gate-json", "./P"],
+                       capture_output=True, text=True, cwd=_saa,
+                       env={**os.environ, "CANDOR_POLICY": _sap1, "PYTHONPATH": HERE})
+check("cli scan $CANDOR_POLICY=/w/P --gate-json ./P (same file via env, different spelling): refused, "
+      "exit 2, P untouched",
+      _rsae.returncode == 2 and "SAME FILE" in _rsae.stderr and open(_sap1).read() == _sap1_before2,
+      f"rc={_rsae.returncode} err={_rsae.stderr[-240:]!r}")
+
 # .candor/config (spec §3.4): target-anchored discovery (NEVER the CWD), $CANDOR_CONFIG override,
 # fail-closed on a configured-but-unusable file, unknown keys warn, family-but-unimplemented keys
 # warn loudly, the `policy` key gates with flag/env precedence, relative values resolve against the
@@ -2356,6 +2447,17 @@ check("policy §4 ⟨0.27⟩: a rule whose scope DOES bind a unit is never liste
 _vp = _gate("pure leaf", _f006, {})
 check("policy AS-EFF-006: `pure leaf` (deny with no effects) flags leaf for performing Net",
       len(_vp) == 1 and _vp[0]["fn"] == "leaf" and _vp[0]["rule"] == "AS-EFF-006", _vp)
+
+# parse_policy: text-encoding artifacts must not silently drop a rule. Guard-deletion found BOTH
+# unprotected — gutting the BOM-strip OR the CRLF normalisation left the full suite green.
+_bomp = _pol.parse_policy("﻿deny Net\n")
+check("policy: a leading UTF-8 BOM does not blind the FIRST rule (it fell to the non-fatal 'unknown "
+      "rule kind' catch-all before this — a single-line `deny Net` policy silently gated nothing)",
+      _bomp["deny"] == [{"effects": ["Net"], "scope": "", "unknownClasses": [], "raw": "deny Net"}],
+      _bomp)
+_crlfp = _pol.parse_policy("deny Net\r\ndeny Db\r\n")
+check("policy: CRLF-terminated lines parse as two separate rules, not one glued line",
+      [d["effects"] for d in _crlfp["deny"]] == [["Net"], ["Db"]], _crlfp)
 
 # ══ SPEC ⟨0.24⟩ — `pure` is UNAFFECTED by `Unknown` (§4.0's verb table, conformance PART 16) ═══════
 # `pure <scope>` fires iff `S ≠ ∅`, where `S` is the DETERMINED effects — `inferred` MINUS the

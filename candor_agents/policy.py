@@ -114,6 +114,14 @@ def parse_policy(text):
     LAST_POLICY_ERRORS = []
     errors = LAST_POLICY_ERRORS
     deny, allow, forbid = [], [], []
+    # Strip a leading UTF-8 BOM: a real, still-common artifact (Windows editors/export tools), and the
+    # file-read call sites (`run_gate` here, `guard.main`) use the plain `utf-8` codec, which does NOT
+    # strip it. Left in place it glues onto the FIRST LINE's first token (`﻿deny Net` no longer
+    # starts with `deny `), so that line falls to the `unknown rule kind` catch-all below — NON-FATAL,
+    # so the run proceeds on the REMAINDER of the policy and can exit 0 over a violation the dropped
+    # rule would have caught. A single-line `deny Net` policy loses its only rule this way, silently.
+    if text.startswith("﻿"):
+        text = text[1:]
     # Normalise CRLF/CR to LF first: a bare-\r (classic-Mac) file would otherwise collapse to one line
     # (\r is also an in-line separator), gluing every later rule into the first and dropping it.
     for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
