@@ -12,6 +12,11 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⚠ Declares spec `0.35` in the report envelope** (`d785c60`, the only source change since 0.34.0). No
+  classifier, drift or gate logic changed in this release; the ⟨0.35⟩ clause it declares (SPEC §4 — a
+  non-empty candidate set is not a complete one) is pinned by candor-spec PART 87 on the four code engines.
+  Regenerate baselines across it only because the `spec` field moves.
+
 ## [0.34.0] — 2026-08-31
 
 - **UPGRADING FROM 0.33.1 — re-baselining is not review.** ⟨0.34⟩ is NON-ADDITIVE and this wave
