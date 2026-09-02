@@ -90,7 +90,8 @@ measurements).
 - **The Bash cliff**: `Bash` classifies as `Exec`, but a shell can do anything — treat any
   Bash-holding agent as having the capability floor, not a tight bound. Two refinements (spec §4
   ⟨0.7⟩): (1) when a **literal sub-command head** is known — a `Bash(curl:*)` specifier or a `!`curl``
-  line — its effect is added (`curl`→`Net`, `candor*`→`Fs`/`Env`, the latter guaranteed by the
+  line — its effect is added (`curl`→`Net`, a known model-provider CLI/host (`openai`, `anthropic`,
+  `curl api.openai.com`)→`Llm`+`Net`, `candor*`→`Fs`/`Env`, the latter guaranteed by the
   analyzer self-boundary); `Exec` stays (a subprocess still spawned) and an unknown head keeps the
   bare cliff. (2) Combined mode (`scan --link <code-report-prefix>`) edges Bash-holding agents into
   the linked code report's entry points to inherit their *measured* effects — but a command whose
