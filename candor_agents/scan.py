@@ -23,7 +23,7 @@ import sys
 from candor_agents import policy as _policy
 
 SPEC = "0.35"
-VERSION = "agents-0.34.0"
+VERSION = "agents-0.35.0"
 # ⟨0.27⟩ The clean RELEASE semver, derived from VERSION rather than restated — the §3.4 `engine` pin is
 # written by a human as `v0.27.0`, and VERSION carries the engine-qualified build id (`agents-0.27.0`)
 # that the report envelope wants. Comparing the pin against the build id read every correct pin as a
