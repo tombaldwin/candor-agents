@@ -5,7 +5,8 @@ fleet itself: agents are the units, delegation is the call graph, tool grants ar
 leaves. It answers what the fleet MAY do, what it actually DID, and the drift between the two. The
 language-agnostic consumption contract is
 [candor-spec/AGENTS.md](https://github.com/tombaldwin/candor-spec/blob/main/AGENTS.md); this file
-is the fleet-specific surface.
+is the fleet-specific surface. Effects: `Net`, `Llm` (a call to a model provider — refines `Net`),
+`Fs`, `Db`, `Exec`, `Env`, `Clock`, `Ipc`, `Log`, `Rand`, `Clipboard`.
 
 > **The fleet is rarely the only thing worth scanning — start at the umbrella:**
 > [candor/AGENTS.md](https://github.com/tombaldwin/candor/blob/main/AGENTS.md). `candor` is one
