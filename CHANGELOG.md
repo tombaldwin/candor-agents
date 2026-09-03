@@ -14,6 +14,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## [0.35.0] — 2026-09-03
 
+- The embedded `AGENTS.md` contract is regenerated from the doc so the two cannot drift — the drift
+  gate caught the R155 doc edit landing without its regeneration (SOUNDNESS R155).
 - **⚠ Declares spec `0.35` in the report envelope** (`d785c60`, the only source change since 0.34.0). No
   classifier, drift or gate logic changed in this release; the ⟨0.35⟩ clause it declares (SPEC §4 — a
   non-empty candidate set is not a complete one) is pinned by candor-spec PART 87 on the four code engines.
