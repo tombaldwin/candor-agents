@@ -12,6 +12,12 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⟨0.36⟩ floor declared.** No engine change in this release — the `SPEC_VERSION` constant is the
+  change. A release review established that leaving this repo out of the cut would fail
+  `release-preflight` check [1] (which reads all seven declarations unconditionally), `spec-bump.sh
+  --check`, and `candor doctor` for every user running this engine alongside another; SPEC §1 also
+  requires the reference engine to declare a new rung first.
+
 ## [0.35.0] — 2026-09-03
 
 - The embedded `AGENTS.md` contract is regenerated from the doc so the two cannot drift — the drift
