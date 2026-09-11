@@ -12,6 +12,14 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.36.1] — 2026-09-11
+
+- **No change to the agent-fleet engine in this cut.** This repo's analysis, its declared-vs-observed
+  drift report and its CLI are unchanged from 0.36.0; the version moves so the family line stays
+  coherent and `candor update` fetches one consistent set. The analysis changes in 0.36.1 are in
+  candor-rust and candor-swift, and the spec floor is unchanged at 0.36.
+
+
 ## [0.36.0] — 2026-09-09
 
 - **⟨0.36⟩ floor declared.** No engine change in this release — the `SPEC_VERSION` constant is the
