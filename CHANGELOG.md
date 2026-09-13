@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.37.0] — 2026-09-13
+
 - **Spec floor 0.36 → 0.37** (the STAT-LOCATOR rung). No behaviour change in this engine: ⟨0.37⟩ binds
   where a call's LOCATOR may be read from, and the fleet engine reports declared-vs-observed drift rather
   than resolving path locators, so it declares the floor without owing the clause an implementation.
