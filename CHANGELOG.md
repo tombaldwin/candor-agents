@@ -12,6 +12,14 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.38.0] — 2026-09-14
+
+- **Family build bump only — no changes recorded in this repo for this release.**
+  `## Unreleased` was empty when 0.38.0 was cut, so `release-stage.sh` wrote this entry rather than
+  leaving the version without notes of its own: an absent section used to make `release.sh`
+  republish the PREVIOUS version's notes under the new tag.
+
+
 ## [0.37.0] — 2026-09-13
 
 - **Spec floor 0.36 → 0.37** (the STAT-LOCATOR rung). No behaviour change in this engine: ⟨0.37⟩ binds
