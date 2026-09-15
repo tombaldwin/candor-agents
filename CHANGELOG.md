@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- No engine change; released to keep the family line aligned at 0.38.2.
+
 ## [0.38.0] — 2026-09-14
 
 - **Family build bump only — no changes recorded in this repo for this release.**
