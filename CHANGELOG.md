@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.38.3] — 2026-09-16
+
 - No engine change; released to keep the family line aligned at 0.38.3.
 
 ## [0.38.2] — 2026-09-15
