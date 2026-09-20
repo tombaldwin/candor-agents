@@ -12,6 +12,21 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.39.0] — 2026-09-20
+
+- **The declared spec moves to 0.39 with the family; nothing else in this engine changed.** Three
+  files carry the declaration (`pyproject.toml`, `candor_agents/__init__.py`, `candor_agents/scan.py`)
+  and `release-stage.sh` moved all three.
+- **What ⟨0.39⟩ asks of a producer is not expressible here, and that is why the declaration is
+  honest rather than aspirational.** The rung requires a producer to name a dispatched member
+  (`dispatchesOn`) and to key a foreign implementor's `interfaceUnion` entry under the abstraction's
+  owning package. Neither field appears anywhere in `candor_agents` — this engine reports DECLARED vs
+  OBSERVED drift across an agent fleet, a domain with no chained dispatch over code abstractions to
+  carry. A domain engine rides the ladder on its own schedule (SPEC §Versioning policy) and its
+  declaration never speaks for the code-engine floor, nor the floor for it.
+- The `macro:` half of ⟨0.39⟩ is likewise inapplicable: this engine emits no `unknownWhy` kinds.
+
+
 ## [0.38.3] — 2026-09-16
 
 - No engine change; released to keep the family line aligned at 0.38.3.
