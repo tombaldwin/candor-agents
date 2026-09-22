@@ -12,6 +12,14 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.39.2] — 2026-09-22
+
+- **Family build bump only — no changes recorded in this repo for this release.**
+  `## Unreleased` was empty when 0.39.2 was cut, so `release-stage.sh` wrote this entry rather than
+  leaving the version without notes of its own: an absent section used to make `release.sh`
+  republish the PREVIOUS version's notes under the new tag.
+
+
 ## [0.39.0] — 2026-09-20
 
 - **The declared spec moves to 0.39 with the family; nothing else in this engine changed.** Three
