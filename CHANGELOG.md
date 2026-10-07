@@ -12,6 +12,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **The declared spec moves to 0.40 with the family; nothing else in this engine changed.** Three files
+  carry the declaration (`pyproject.toml`, `candor_agents/__init__.py`, `candor_agents/scan.py`).
+  ⟨0.40⟩'s three halves ask nothing of this engine: it has no type surface; it implements no baseline
+  guard (a `baseline` config key already warns that its gate is NOT active here, so the new-function rule
+  has nothing to change); and a fleet has no bind/listen calls to classify. Cut with the family so the
+  front door's pins move as one line rather than as four per-engine overrides.
+
 ## [0.39.2] — 2026-09-22
 
 - **Family build bump only — no changes recorded in this repo for this release.**
