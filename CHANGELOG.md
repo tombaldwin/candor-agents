@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.40.0] — 2026-10-07
+
 - **The declared spec moves to 0.40 with the family; nothing else in this engine changed.** Three files
   carry the declaration (`pyproject.toml`, `candor_agents/__init__.py`, `candor_agents/scan.py`).
   ⟨0.40⟩'s three halves ask nothing of this engine: it has no type surface; it implements no baseline
