@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.40.1] — 2026-10-08
+
 - **⚠ A `forbid` that binds NO unit is now disclosed as a zero-match (SOUNDNESS R1030).** Only scoped
   `deny`/`allow` were enrolled, so `forbid orchestratr -> mailr` (both layers typo'd) bound nothing, exited
   0 and said nothing. It now prints the "matched NO unit" line and rides the verdict's `zeroMatch`. Counted
