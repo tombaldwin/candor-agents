@@ -41,7 +41,7 @@ _REACHED_END = False
 # Bump DECLARED deliberately, in the same commit as the checks you add. Environment-dependent blocks
 # call `skip(why, n)` so their absence is ACCOUNTED rather than subtracted: this machine runs all four
 # (locale, candor-query ×2, non-root); CI runs neither candor-query block and often not the locale one.
-DECLARED = 574
+DECLARED = 581
 
 
 def check(name, cond, detail=""):
@@ -2592,6 +2592,50 @@ _vzm2 = _gate("deny Net leaf", _f006, {"boss": ["leaf"], "leaf": [], "quiet": []
 check("policy §4 ⟨0.27⟩: a rule whose scope DOES bind a unit is never listed in LAST_ZERO_MATCH, "
       "whether or not it fires (a scoped-and-satisfied rule looks nothing like an unbound one)",
       _pol.LAST_ZERO_MATCH == [], (_vzm2, _pol.LAST_ZERO_MATCH))
+# SOUNDNESS R952 — a SCOPED `allow` whose scope binds no unit was scored as satisfied in silence (only
+# scoped `deny` was enrolled). Same scope-match test as the allow check; SCOPELESS `allow` stays exempt.
+_far = [{"fn": "boss", "inferred": ["Net"], "hosts": ["evil.example"], "calls": []},
+        {"fn": "quiet", "inferred": ["Fs"], "calls": []}]
+_cgar = {"boss": [], "quiet": []}
+_va5 = _gate("allow Net in zzz.nomatch h", _far, _cgar)
+check("policy R952 (c5): a scoped `allow` that binds NO unit fires nothing and is named in LAST_ZERO_MATCH",
+      _va5 == [] and _pol.LAST_ZERO_MATCH == ["allow Net in zzz.nomatch h"], (_va5, _pol.LAST_ZERO_MATCH))
+_va6 = _gate("allow Net in boss zzz.example", _far, _cgar)
+check("policy R952 (c6): a scoped `allow` that BINDS gates (AS-EFF-008) and is NOT listed zero-match",
+      len(_va6) == 1 and _va6[0]["rule"] == "AS-EFF-008" and _pol.LAST_ZERO_MATCH == [], (_va6, _pol.LAST_ZERO_MATCH))
+_va7 = _gate("allow Net zzz.example", _far, _cgar)
+check("policy R952 (c7): a SCOPELESS `allow` gates and is exempt from zero-match (binds every unit)",
+      len(_va7) == 1 and _va7[0]["rule"] == "AS-EFF-008" and _pol.LAST_ZERO_MATCH == [], (_va7, _pol.LAST_ZERO_MATCH))
+# end to end through the real CLI over the shipped fixture fleet (the conformance cells' agents arm)
+_pa5 = os.path.join(_mkd(), "a5.policy"); open(_pa5, "w").write("allow Net in zzz.nomatch h\n")
+_ja5 = os.path.join(_mkd(), "a5.json")
+_ra5 = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pa5, "--gate-json", _ja5)
+_va5j = verdict(_ja5)
+check("cli R952 (c5): scoped-allow-binds-nothing exits 0, ok:true, `zeroMatch` carries the raw rule + 'matched NO unit' line",
+      _ra5.returncode == 0 and _va5j["ok"] is True and _va5j.get("zeroMatch") == ["allow Net in zzz.nomatch h"]
+      and "matched NO unit" in _ra5.stderr, (_ra5.returncode, _va5j, _ra5.stderr[-200:]))
+_pa6 = os.path.join(_mkd(), "a6.policy"); open(_pa6, "w").write("allow Net in leaf zzz.example\n")
+_ja6 = os.path.join(_mkd(), "a6.json")
+_ra6 = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pa6, "--gate-json", _ja6)
+_va6j = verdict(_ja6)
+check("cli R952 (c6): bound scoped allow (leaf, unreached host) exits 1 with NO zeroMatch",
+      _ra6.returncode == 1 and "zeroMatch" not in _va6j and "matched NO" not in _ra6.stderr, (_ra6.returncode, _va6j, _ra6.stderr[-200:]))
+_pa7 = os.path.join(_mkd(), "a7.policy"); open(_pa7, "w").write("allow Net zzz.example\n")
+_ja7 = os.path.join(_mkd(), "a7.json")
+_ra7 = cli("scan", _cd, "--out", os.path.join(_mkd(), "r"), "--policy", _pa7, "--gate-json", _ja7)
+_va7j = verdict(_ja7)
+check("cli R952 (c7): scopeless allow exits 1 with NO zeroMatch",
+      _ra7.returncode == 1 and "zeroMatch" not in _va7j and "matched NO" not in _ra7.stderr, (_ra7.returncode, _va7j, _ra7.stderr[-200:]))
+# R952 follow-up question: does `forbid` gate on the shipped fixture fleet? Yes — orchestrator -> coder ->
+# mailer is a real path; `researcher` is a LEAF (no outgoing edges), so `forbid researcher -> mailer`
+# exiting 0 is the correct verdict, not a dead gate. Pinned both ways so the distinction cannot rot.
+_fxd = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture")
+def _forbid_rc(rule):
+    _pf = os.path.join(_mkd(), "f.policy"); open(_pf, "w").write(rule + "\n")
+    return cli("scan", _fxd, "--out", os.path.join(_mkd(), "r"), "--policy", _pf).returncode
+check("cli forbid on the fixture fleet: `forbid orchestrator -> mailer` (transitive via coder) exits 1; "
+      "`forbid researcher -> mailer` (researcher is a leaf) exits 0",
+      _forbid_rc("forbid orchestrator -> mailer") == 1 and _forbid_rc("forbid researcher -> mailer") == 0)
 # `pure <scope>` is a deny with NO effects → any DETERMINED effect on the scope is a violation.
 # NOT "any inferred effect", which is what this comment said until spec ⟨0.24⟩ and what the code did:
 # `pure` fires iff `S ≠ ∅` (§4.0's verb table), and `S` is `inferred` MINUS the `Unknown` marker.
