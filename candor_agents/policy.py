@@ -422,6 +422,16 @@ def evaluate_policy(pol, functions, callgraph, incomplete=None, reason_seed=None
         for r in zm_rules:
             if r.get("scope") and scope_matches(f["fn"], r["scope"]):
                 scope_hits[r["raw"]] = scope_hits.get(r["raw"], 0) + 1
+    # R1030: a `forbid` enrolls too, and — as in all four code engines and SPEC §4's `only` clause
+    # ("unlike `forbid`, which counts a match on either endpoint") — it is zero-match only when NEITHER
+    # endpoint binds a unit. Counted over the units the gate iterates: the effectful `functions` PLUS
+    # every callgraph key (the sidecar holds the pure units too, and `forbid` walks that graph).
+    for r in pol["forbid"]:
+        scope_hits.setdefault(r["raw"], 0)
+    for r in pol["forbid"]:
+        for n in set(callgraph) | {f["fn"] for f in functions}:
+            if scope_matches(n, r["from"]) or scope_matches(n, r["to"]):
+                scope_hits[r["raw"]] += 1
     # ⟨0.27⟩ code-point sorted + deduplicated (Python str sort IS code-point order; the dict keys are
     # unique by construction) — the SPEC §4 `zeroMatch` collation. Stashed module-wide so `run_gate` can
     # put the SAME list on the verdict document without changing `evaluate_policy`'s return shape, which
