@@ -12,6 +12,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⚠ A scoped `allow` that binds NO unit is now disclosed as a zero-match (SOUNDNESS R952).** Only scoped
+  `deny` rules were enrolled in the §4 zero-match disclosure, so `allow Net in orchestratr h` (a typo'd
+  agent) bound nothing and certified nothing in silence. It now prints the same "matched NO unit" line and
+  its raw text rides the verdict document's `zeroMatch`, using the same scope-match test the allow check
+  uses. A SCOPELESS `allow` stays exempt (it binds every unit); exit codes are unchanged. Declared XFAIL
+  `c5:agents:R952` in conformance PART 36 retires with this.
+
 ## [0.40.0] — 2026-10-07
 
 - **The declared spec moves to 0.40 with the family; nothing else in this engine changed.** Three files

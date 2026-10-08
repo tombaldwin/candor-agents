@@ -413,9 +413,13 @@ def evaluate_policy(pol, functions, callgraph, incomplete=None, reason_seed=None
     #
     # Four engines gained this at ⟨0.24⟩ and this one did not, while declaring the same spec —
     # conformance PART 32 runs four engines, so nothing caught it.
-    scope_hits = {r["raw"]: 0 for r in pol["deny"] if r.get("scope")}
+    # R952: a SCOPED `allow` enrolls too, by the SAME scope-match test the allow check below uses. It
+    # was exempt, so `allow Net in orchestratr h` bound nothing and certified nothing in silence. A
+    # SCOPELESS `allow` binds every unit by construction and stays exempt.
+    zm_rules = list(pol["deny"]) + list(pol["allow"])
+    scope_hits = {r["raw"]: 0 for r in zm_rules if r.get("scope")}
     for f in functions:
-        for r in pol["deny"]:
+        for r in zm_rules:
             if r.get("scope") and scope_matches(f["fn"], r["scope"]):
                 scope_hits[r["raw"]] = scope_hits.get(r["raw"], 0) + 1
     # ⟨0.27⟩ code-point sorted + deduplicated (Python str sort IS code-point order; the dict keys are
