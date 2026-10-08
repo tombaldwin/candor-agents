@@ -41,7 +41,7 @@ _REACHED_END = False
 # Bump DECLARED deliberately, in the same commit as the checks you add. Environment-dependent blocks
 # call `skip(why, n)` so their absence is ACCOUNTED rather than subtracted: this machine runs all four
 # (locale, candor-query ×2, non-root); CI runs neither candor-query block and often not the locale one.
-DECLARED = 581
+DECLARED = 588
 
 
 def check(name, cond, detail=""):
@@ -2636,6 +2636,40 @@ def _forbid_rc(rule):
 check("cli forbid on the fixture fleet: `forbid orchestrator -> mailer` (transitive via coder) exits 1; "
       "`forbid researcher -> mailer` (researcher is a leaf) exits 0",
       _forbid_rc("forbid orchestrator -> mailer") == 1 and _forbid_rc("forbid researcher -> mailer") == 0)
+# SOUNDNESS R1030 — a `forbid` whose endpoints bind NO unit was scored as satisfied in silence (only scoped
+# `deny`/`allow` were enrolled). Per SPEC §4 and all four code engines a forbid is zero-match only when
+# NEITHER endpoint binds (a forbid's subject is the pair; `to` may legitimately name an absent layer).
+_fzm = [{"fn": "boss", "inferred": ["Net"], "calls": ["leaf"]}]
+_fcg = {"boss": ["leaf"], "leaf": []}
+_vf1 = _gate("forbid zzz -> yyy", _fzm, _fcg)
+check("policy R1030 (a): `forbid` with NEITHER endpoint bound fires nothing and is named in LAST_ZERO_MATCH",
+      _vf1 == [] and _pol.LAST_ZERO_MATCH == ["forbid zzz -> yyy"], (_vf1, _pol.LAST_ZERO_MATCH))
+_vf2 = _gate("forbid boss -> leaf", _fzm, _fcg)
+check("policy R1030 (b): a `forbid` that BINDS and fires (AS-EFF-009) is NOT listed zero-match",
+      len(_vf2) == 1 and _vf2[0]["rule"] == "AS-EFF-009" and _pol.LAST_ZERO_MATCH == [], (_vf2, _pol.LAST_ZERO_MATCH))
+_vf3 = _gate("forbid leaf -> boss", _fzm, _fcg)
+check("policy R1030 (c): a `forbid` that binds both endpoints but has no path is satisfied, NOT zero-match "
+      "(a leaf `from` is legitimate); a pure callgraph-only unit counts as bound",
+      _vf3 == [] and _pol.LAST_ZERO_MATCH == [], (_vf3, _pol.LAST_ZERO_MATCH))
+_vf4 = _gate("forbid boss -> zzz", _fzm, _fcg)
+check("policy R1030 (d): one endpoint bound (`to` names an absent layer) is NOT zero-match — either-endpoint, "
+      "as SPEC §4 and java/rust/ts/swift count",
+      _vf4 == [] and _pol.LAST_ZERO_MATCH == [], (_vf4, _pol.LAST_ZERO_MATCH))
+def _forbid_cli(rule):
+    _pf = os.path.join(_mkd(), "fz.policy"); open(_pf, "w").write(rule + "\n")
+    _jf = os.path.join(_mkd(), "fz.json")
+    _rf = cli("scan", _fxd, "--out", os.path.join(_mkd(), "r"), "--policy", _pf, "--gate-json", _jf)
+    return _rf, verdict(_jf)
+_rfz, _vfz = _forbid_cli("forbid orchestratr -> mailr")
+check("cli R1030 (e): a typo'd forbid exits 0, ok:true, `zeroMatch` carries the raw rule + 'matched NO unit' line",
+      _rfz.returncode == 0 and _vfz["ok"] is True and _vfz.get("zeroMatch") == ["forbid orchestratr -> mailr"]
+      and "matched NO unit" in _rfz.stderr, (_rfz.returncode, _vfz, _rfz.stderr[-200:]))
+_rfb, _vfb = _forbid_cli("forbid orchestrator -> mailer")
+check("cli R1030 (f): the binding control `forbid orchestrator -> mailer` still exits 1 with NO zeroMatch",
+      _rfb.returncode == 1 and "zeroMatch" not in _vfb and "matched NO" not in _rfb.stderr, (_rfb.returncode, _vfb))
+_rfl, _vfl = _forbid_cli("forbid researcher -> mailer")
+check("cli R1030 (g): leaf `forbid researcher -> mailer` exits 0 legitimately and is NOT zero-match",
+      _rfl.returncode == 0 and "zeroMatch" not in _vfl and "matched NO" not in _rfl.stderr, (_rfl.returncode, _vfl))
 # `pure <scope>` is a deny with NO effects → any DETERMINED effect on the scope is a violation.
 # NOT "any inferred effect", which is what this comment said until spec ⟨0.24⟩ and what the code did:
 # `pure` fires iff `S ≠ ∅` (§4.0's verb table), and `S` is `inferred` MINUS the `Unknown` marker.

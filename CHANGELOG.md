@@ -12,6 +12,13 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **⚠ A `forbid` that binds NO unit is now disclosed as a zero-match (SOUNDNESS R1030).** Only scoped
+  `deny`/`allow` were enrolled, so `forbid orchestratr -> mailr` (both layers typo'd) bound nothing, exited
+  0 and said nothing. It now prints the "matched NO unit" line and rides the verdict's `zeroMatch`. Counted
+  as the four code engines and SPEC §4 count a `forbid`: a match on EITHER endpoint, over the effectful
+  units plus every callgraph key, so a rule is zero-match only when neither side binds (a typo on one side
+  alone, or a leaf `from`, is not disclosed — `forbid researcher -> mailer` stays quiet). Exit codes are
+  unchanged.
 - **⚠ A scoped `allow` that binds NO unit is now disclosed as a zero-match (SOUNDNESS R952).** Only scoped
   `deny` rules were enrolled in the §4 zero-match disclosure, so `allow Net in orchestratr h` (a typo'd
   agent) bound nothing and certified nothing in silence. It now prints the same "matched NO unit" line and
