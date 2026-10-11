@@ -12,6 +12,14 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.40.6] — 2026-10-11
+
+- **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.5.**
+  The source is identical to the v0.40.5 tag (`2da53fa`); candor-rust, candor-swift and candor-spec
+  carry the 0.40.6 changes. Cutting this repo too keeps `ENGINE_PIN` a single value (0.40.6) instead
+  of a 0.40.5 per-engine override in the umbrella.
+
+
 ## [0.40.5] — 2026-10-11
 
 - **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.4.**
