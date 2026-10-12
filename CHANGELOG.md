@@ -12,6 +12,16 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.40.7] — 2026-10-12
+
+- **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.6.** The
+  source is identical to the v0.40.6 tag (`6d12ed0`). candor-rust carries the scan-only drop-glue and
+  comparison fixes (R198, R200/R1121, R201, R209, R323, R1111, R1120, R1122–R1125, R1127, R1129, R1134 and
+  R1128's derive route), and candor-spec carries the register only (`SPEC.md` is unchanged since 0.40.6).
+  Cutting this repo too keeps `ENGINE_PIN` a single value (0.40.7) instead of a 0.40.6 per-engine override
+  in the umbrella.
+
+
 ## [0.40.6] — 2026-10-11
 
 - **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.5.**
