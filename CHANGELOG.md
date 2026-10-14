@@ -12,6 +12,20 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.40.10] — 2026-10-14
+
+- **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.9.** The source is
+  identical to the v0.40.9 tag (`c523b4f`). candor-rust carries candor-scan fixes that close silent under-reports (a
+  dependency's operator impl on a primitive; in-crate generics that run a std-trait method, iterate or compare their
+  argument; `.await` on a crate-local future; `impl Tr for dep::X` beside a local `X`; R1164, R1167–R1169), a
+  disclosure for a local std-trait impl handed to a chained dependency (R1165), and deep-engine drops inside std and
+  generic bodies (R1117). candor-java models the JDK's collection operations for `equals`/`hashCode` re-entry and
+  removes the false `List.add` charge (R1166). candor-swift discloses a user `Equatable`/`Comparable`/`Hashable`
+  witness handed to a chained package (R974 (a)). candor-spec carries the register only (`SPEC.md` and
+  `conformance/` are unchanged since 0.40.9). Cutting this repo too keeps `ENGINE_PIN` a single value (0.40.10)
+  instead of a 0.40.9 per-engine override in the umbrella.
+
+
 ## [0.40.9] — 2026-10-13
 
 - **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.8.** The
