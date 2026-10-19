@@ -12,6 +12,17 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.40.13] — 2026-10-19
+
+- **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.12.** The source is
+  identical to the v0.40.12 tag (`d99d0e8`); only `VERSION` and `pyproject.toml` move.
+  The family fixes in this cut: candor-rust closes silent under-reports in candor-scan where a trait in scope beats
+  the inherent method a call resolved to (R1202, R1206), on local and reference receivers and overriding blanket impls
+  (R1207–R1209), and three `cargo candor` baseline holes that let `guard` pass a real regression (R1213–R1215);
+  candor-java decides `equals`/`hashCode`/`toString`/`compareTo` on an `Object` from its producers, so effectful
+  overrides past the twelve-override bound, string concatenation and `Map.entry(...).hashCode()` are charged (R1201,
+  R1203–R1205, R1217).
+
 ## [0.40.12] — 2026-10-16
 
 - **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.11.** The source is
