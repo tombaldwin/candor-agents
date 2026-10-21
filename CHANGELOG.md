@@ -12,6 +12,11 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.40.14] — 2026-10-21
+
+- **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.13.** The source is
+  unchanged; the version moves so `candor update` resolves every engine at 0.40.14.
+
 ## [0.40.13] — 2026-10-19
 
 - **Version-only cut to keep the family on one build line — no change to candor-agents since 0.40.12.** The source is
