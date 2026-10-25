@@ -12,6 +12,9 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+- **0.40.17 family patch.** No change to candor-agents' own analysis; the version moves with the family
+  release line (the four code engines' call-target round 1).
+
 ## [0.40.16] — 2026-10-24
 
 - **0.40.16 family patch: no change to candor-agents.** Version aligned with the family line.
