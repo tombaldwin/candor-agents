@@ -19,7 +19,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04 (2026-10), whose setup-python has no 3.9 — the floor below.
+    runs-on: ubuntu-24.04
     # A deadline. With no `timeout-minutes` GitHub's 6-hour default applies, so a stuck runner
     # blocks the release gate (release-preflight [10] reads CI green on HEAD) while looking
     # exactly like a slow job — measured twice on 2026-08-19, at 3h45m and 54m. Gated by
