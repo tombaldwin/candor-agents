@@ -12,6 +12,11 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.42.0] — 2026-11-12
+
+- Declares spec ⟨0.42⟩ (the family floor moved; `candor-agents` has no ⟨0.42⟩ surface of its own — co-path units,
+  result-moving switches and `dependencySources` are code-engine clauses). No behaviour change in this repo.
+
 ## [0.41.3] — 2026-11-06
 
 - **No change to candor-agents.** The version moves with the 0.41.3 family patch.
