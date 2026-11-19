@@ -12,6 +12,8 @@ major.minor tracks the spec it declares — `0.15.x` declares spec `0.15`.
 
 ## Unreleased
 
+## [0.43.0] — 2026-11-19
+
 - **Declares spec ⟨0.43⟩.** No behaviour change; the version strings move with the family floor.
 
 ## [0.42.0] — 2026-11-12
